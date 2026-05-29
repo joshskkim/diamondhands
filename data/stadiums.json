@@ -159,7 +159,7 @@
   },
   {
     "_note": "A's playing at Sutter Health Park (Sacramento) through at least 2027 while Las Vegas stadium is built.",
-    "team_abbrev": "OAK",
+    "team_abbrev": "ATH",
     "stadium_name": "Sutter Health Park",
     "city": "Sacramento, CA",
     "latitude": 38.582006,
@@ -328,7 +328,7 @@
     "park_factor_hr_rhb": 0.950
   },
   {
-    "team_abbrev": "ARI",
+    "team_abbrev": "AZ",
     "stadium_name": "Chase Field",
     "city": "Phoenix, AZ",
     "latitude": 33.445251,

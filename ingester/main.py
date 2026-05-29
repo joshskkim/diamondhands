@@ -19,16 +19,14 @@ import sys
 from pathlib import Path
 
 from ingester.commands.load_static import cmd_load_static
+from ingester.commands.backfill_stats import cmd_backfill_stats
+from ingester.commands.refresh_skills import cmd_refresh_skills
+from ingester.commands.smoke import cmd_smoke_skills
 
 
 # ---------------------------------------------------------------------------
 # Subcommand stubs
 # ---------------------------------------------------------------------------
-
-def cmd_backfill_stats(args: argparse.Namespace) -> None:
-    """Pull historical game-level stats via pybaseball and upsert player_game_stats."""
-    print("[backfill-stats] stub — not yet implemented")
-
 
 def cmd_daily_slate(args: argparse.Namespace) -> None:
     """Fetch today's scheduled games + probable pitchers from the MLB Stats API."""
@@ -38,11 +36,6 @@ def cmd_daily_slate(args: argparse.Namespace) -> None:
 def cmd_refresh_weather(args: argparse.Namespace) -> None:
     """Fetch weather for each stadium hosting a game today and store on games row."""
     print("[refresh-weather] stub — not yet implemented")
-
-
-def cmd_refresh_skills(args: argparse.Namespace) -> None:
-    """Recompute batter_skill and pitcher_skill from player_game_stats."""
-    print("[refresh-skills] stub — not yet implemented")
 
 
 def cmd_project(args: argparse.Namespace) -> None:
@@ -91,12 +84,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(Path(__file__).parent.parent / "data"),
         help="Directory containing stadiums.json (default: ../data)",
     )
-    sub.add_parser("backfill-stats",  help="Pull historical game logs via pybaseball")
+
+    p_backfill = sub.add_parser("backfill-stats", help="Pull historical game logs via pybaseball")
+    p_backfill.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
+
     sub.add_parser("daily-slate",     help="Fetch today's games + probable pitchers")
     sub.add_parser("refresh-weather", help="Attach weather to today's games")
-    sub.add_parser("refresh-skills",  help="Recompute batter/pitcher skill aggregates")
-    sub.add_parser("project",         help="Compute projections for today's slate")
-    sub.add_parser("smoke",           help="End-to-end sanity check")
+
+    p_skills = sub.add_parser("refresh-skills", help="Recompute batter/pitcher skill aggregates")
+    p_skills.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
+
+    sub.add_parser("project",      help="Compute projections for today's slate")
+    sub.add_parser("smoke",        help="DB connectivity sanity check")
+    sub.add_parser("smoke-skills", help="Print top batters/pitchers from skill tables")
 
     return parser
 
@@ -109,6 +109,7 @@ COMMANDS = {
     "refresh-skills":  cmd_refresh_skills,
     "project":         cmd_project,
     "smoke":           cmd_smoke,
+    "smoke-skills":    cmd_smoke_skills,
 }
 
 
