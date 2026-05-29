@@ -510,20 +510,303 @@ def run_projections(
     return summary
 
 
+# ---------------------------------------------------------------------------
+# Backtest projection mode (project --as-of YYYY-MM-DD)
+# Reads from *_snapshots tables; writes to backtest_projections.
+# Kept intentionally separate from the prod codepath above.
+# ---------------------------------------------------------------------------
+
+def _load_batter_skill_snapshot(
+    conn: psycopg.Connection,
+    player_id: int,
+    as_of_date: date,
+) -> BatterSkillInput | None:
+    """Read the most recent batter_skill_snapshot with as_of_date <= as_of_date."""
+    row = conn.execute(
+        """
+        SELECT xwoba, xwoba_l30, k_rate, k_rate_l30, iso, iso_l30, pa_l30
+        FROM batter_skill_snapshots
+        WHERE player_id = %s AND as_of_date <= %s
+        ORDER BY as_of_date DESC
+        LIMIT 1
+        """,
+        (player_id, as_of_date),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    xwoba = float(row[0])
+    k_rate = float(row[2]) if row[2] is not None else 0.0
+    iso = float(row[4]) if row[4] is not None else 0.0
+    return BatterSkillInput(
+        xwoba=xwoba,
+        xwoba_l30=float(row[1]) if row[1] is not None else xwoba,
+        k_rate=k_rate,
+        k_rate_l30=float(row[3]) if row[3] is not None else k_rate,
+        iso=iso,
+        iso_l30=float(row[5]) if row[5] is not None else iso,
+        pa_l30=int(row[6] or 0),
+    )
+
+
+def _load_pitcher_splits_snapshot(
+    conn: psycopg.Connection,
+    pitcher_id: int,
+    season: int,
+    as_of_date: date,
+) -> list[PitcherHandSplit]:
+    """Read pitcher splits from the most recent snapshot with as_of_date <= as_of_date."""
+    rows = conn.execute(
+        """
+        SELECT vs_handedness, batters_faced, hits_per_pa, hr_per_pa, k_rate
+        FROM pitcher_skill_snapshots
+        WHERE player_id = %s
+          AND season = %s
+          AND as_of_date = (
+              SELECT MAX(as_of_date)
+              FROM pitcher_skill_snapshots
+              WHERE player_id = %s AND season = %s AND as_of_date <= %s
+          )
+        """,
+        (pitcher_id, season, pitcher_id, season, as_of_date),
+    ).fetchall()
+    splits: list[PitcherHandSplit] = []
+    for r in rows:
+        if r[2] is None or r[3] is None or r[4] is None:
+            continue
+        splits.append(
+            PitcherHandSplit(
+                vs_handedness=str(r[0]),
+                batters_faced=int(r[1]),
+                hits_per_pa=float(r[2]),
+                hr_per_pa=float(r[3]),
+                k_rate=float(r[4]),
+            )
+        )
+    return splits
+
+
+def _upsert_backtest_projection(
+    conn: psycopg.Connection,
+    backtest_run_id: int,
+    game_id: int,
+    player_id: int,
+    as_of_date: date,
+    proj,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO backtest_projections (
+            backtest_run_id, game_id, player_id, as_of_date,
+            expected_pa,
+            p_hit_1plus, p_hit_2plus, p_hr, p_k_1plus,
+            expected_hits, expected_total_bases
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (backtest_run_id, game_id, player_id) DO UPDATE SET
+            as_of_date           = EXCLUDED.as_of_date,
+            expected_pa          = EXCLUDED.expected_pa,
+            p_hit_1plus          = EXCLUDED.p_hit_1plus,
+            p_hit_2plus          = EXCLUDED.p_hit_2plus,
+            p_hr                 = EXCLUDED.p_hr,
+            p_k_1plus            = EXCLUDED.p_k_1plus,
+            expected_hits        = EXCLUDED.expected_hits,
+            expected_total_bases = EXCLUDED.expected_total_bases
+        """,
+        (
+            backtest_run_id,
+            game_id,
+            player_id,
+            as_of_date,
+            round(proj.expected_pa, 2),
+            proj.probabilities.p_hit_1plus,
+            proj.probabilities.p_hit_2plus,
+            proj.probabilities.p_hr,
+            proj.probabilities.p_k_1plus,
+            round(proj.expected_hits, 3),
+            round(proj.expected_total_bases, 3),
+        ),
+    )
+
+
+def _game_ready_backtest(game: SlateGame) -> str | None:
+    """Backtest skip check: only gate on missing probable pitchers, not weather."""
+    if game.home_probable_pitcher_id is None or game.away_probable_pitcher_id is None:
+        return "missing probable pitcher"
+    return None
+
+
+def _project_team_side_backtest(
+    conn: psycopg.Connection,
+    *,
+    game: SlateGame,
+    team_id: int,
+    opposing_pitcher_id: int,
+    is_home: bool,
+    season: int,
+    park: ParkFactors,
+    as_of_date: date,
+    backtest_run_id: int,
+    summary: ProjectSummary,
+) -> float | None:
+    """Project one team side using snapshot skill tables; return expected_team_runs or None."""
+    hitters = _likely_hitters(conn, team_id, summary.game_date)
+    if len(hitters) < LINEUP_STARTERS:
+        log.warning(
+            "game %s team %s: only %d hitters with L30 PA (need %d)",
+            game.game_id, team_id, len(hitters), LINEUP_STARTERS,
+        )
+        return None
+
+    pitcher_throws = _load_pitcher_throws(conn, opposing_pitcher_id)
+    splits = _load_pitcher_splits_snapshot(conn, opposing_pitcher_id, season, as_of_date)
+
+    is_retractable_open = False
+    starter_xwobas: list[float] = []
+    weather_hits: list[float] = []
+
+    for hitter in hitters:
+        skill = _load_batter_skill_snapshot(conn, hitter.player_id, as_of_date)
+        if skill is None:
+            log.warning(
+                "game %s: skip batter %s — no batter_skill snapshot as of %s",
+                game.game_id, hitter.player_id, as_of_date,
+            )
+            continue
+
+        pitcher_split, _quality = resolve_pitcher_skill(splits, hitter.bats, pitcher_throws)
+        park_adj = compute_park_adjustments(park, hitter.bats, pitcher_throws)
+        pitcher_adj = compute_pitcher_adjustments(pitcher_split)
+        # Use historical weather if available; default to neutral if missing.
+        adj_weather_hit, adj_weather_hr = compute_weather_adjustments(
+            temperature_f=game.temperature_f or 70.0,
+            wind_speed_mph=game.wind_speed_mph or 0.0,
+            wind_from_degrees=game.wind_from_degrees or 0.0,
+            cf_bearing_degrees=game.cf_bearing_degrees,
+            bats=hitter.bats,
+            pitcher_throws=pitcher_throws,
+            is_dome=game.is_dome,
+            is_retractable_open=is_retractable_open,
+        )
+
+        proj = project_batter(skill, pitcher_adj, park_adj, adj_weather_hit, adj_weather_hr)
+        _upsert_backtest_projection(
+            conn, backtest_run_id, game.game_id, hitter.player_id, as_of_date, proj
+        )
+        summary.batter_rows += 1
+
+        if len(starter_xwobas) < LINEUP_STARTERS:
+            starter_xwobas.append(proj.xwoba_blend)
+            weather_hits.append(adj_weather_hit)
+
+    if len(starter_xwobas) < LINEUP_STARTERS:
+        log.warning(
+            "game %s team %s: only %d batters projected (need %d for team runs)",
+            game.game_id, team_id, len(starter_xwobas), LINEUP_STARTERS,
+        )
+        return None
+
+    adj_weather_hit_avg = sum(weather_hits) / len(weather_hits)
+    return expected_team_runs(starter_xwobas, park.park_factor_hits, adj_weather_hit_avg)
+
+
+def _project_game_backtest(
+    conn: psycopg.Connection,
+    game: SlateGame,
+    season: int,
+    as_of_date: date,
+    backtest_run_id: int,
+    summary: ProjectSummary,
+) -> bool:
+    reason = _game_ready_backtest(game)
+    if reason:
+        summary.skip_reasons.append(f"game {game.game_id}: {reason}")
+        return False
+
+    park = ParkFactors(
+        park_factor_hits=game.park_factor_hits,
+        park_factor_hr_lhb=game.park_factor_hr_lhb,
+        park_factor_hr_rhb=game.park_factor_hr_rhb,
+    )
+
+    home_runs = _project_team_side_backtest(
+        conn, game=game, team_id=game.home_team_id,
+        opposing_pitcher_id=game.away_probable_pitcher_id,
+        is_home=True, season=season, park=park,
+        as_of_date=as_of_date, backtest_run_id=backtest_run_id, summary=summary,
+    )
+    away_runs = _project_team_side_backtest(
+        conn, game=game, team_id=game.away_team_id,
+        opposing_pitcher_id=game.home_probable_pitcher_id,
+        is_home=False, season=season, park=park,
+        as_of_date=as_of_date, backtest_run_id=backtest_run_id, summary=summary,
+    )
+    if home_runs is None or away_runs is None:
+        summary.skip_reasons.append(f"game {game.game_id}: incomplete team projection")
+        return False
+
+    return True
+
+
+def run_backtest_projections(
+    conn: psycopg.Connection,
+    game_date: date,
+    as_of_date: date,
+) -> ProjectSummary:
+    """
+    Project a historical game_date using skill snapshots as of as_of_date.
+    Writes to backtest_projections; never touches batter_projections.
+    """
+    summary = ProjectSummary(game_date=game_date)
+    season = infer_season(game_date)
+    games = _load_slate_games(conn, game_date)
+    summary.games_seen = len(games)
+
+    # Derive run ID from the as_of date (e.g. 20250715 for 2025-07-15).
+    backtest_run_id = int(as_of_date.strftime("%Y%m%d"))
+
+    if not games:
+        log.info("no games on slate for %s", game_date)
+        return summary
+
+    for game in games:
+        if _project_game_backtest(conn, game, season, as_of_date, backtest_run_id, summary):
+            summary.games_projected += 1
+        else:
+            summary.games_skipped += 1
+
+    return summary
+
+
 def cmd_project(args: argparse.Namespace) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     game_date = args.date if args.date is not None else eastern_today()
-    print(f"[project] Computing projections for {game_date}…")
+    as_of_date: date | None = getattr(args, "as_of", None)
 
-    conn = get_connection()
-    try:
-        summary = run_projections(conn, game_date)
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    if as_of_date is not None:
+        print(
+            f"[project] Backtest mode: game_date={game_date}, as_of={as_of_date} "
+            f"(writes to backtest_projections)"
+        )
+        conn = get_connection()
+        try:
+            summary = run_backtest_projections(conn, game_date, as_of_date)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    else:
+        print(f"[project] Computing projections for {game_date}…")
+        conn = get_connection()
+        try:
+            summary = run_projections(conn, game_date)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     print(
         f"[project] Slate: {summary.games_seen} game(s) — "

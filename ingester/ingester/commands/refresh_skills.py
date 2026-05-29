@@ -1,9 +1,14 @@
-"""refresh-skills: Aggregate player_game_stats into batter_skill and pitcher_skill."""
+"""refresh-skills: Aggregate player_game_stats into batter_skill and pitcher_skill.
+
+Public functions compute_batter_skill_rows and compute_pitcher_skill_rows are
+imported by refresh-skill-snapshots for point-in-time snapshot generation.
+"""
 from __future__ import annotations
 
 import argparse
 from datetime import date, timedelta
 
+import pandas as pd
 import psycopg
 
 from ingester.db import eastern_today, get_connection
@@ -25,23 +30,13 @@ from ingester.statcast import (
 MIN_BF_PITCHER = 50    # minimum BF vs a handedness for pitcher_skill
 
 
-def _rolling_l30_window(season: int) -> tuple[date, date]:
-    """Last 30 calendar days ending today (clamped to the season schedule)."""
-    start, end = season_boundaries(season)
-    as_of = min(eastern_today(), end)
-    as_of = max(as_of, start)
-    l30_end = as_of
-    l30_start = max(start, as_of - timedelta(days=30))
-    return l30_start, l30_end
-
-
 def _resolve_l30_fields(
     l30_row: tuple | None,
     *,
     season_xwoba: float | None,
     season_k_rate: float | None,
     season_iso: float | None,
-) -> tuple[int | None, float | None, float | None, float | None, float | None]:
+) -> tuple[int | None, float | None, float | None, float | None]:
     """
     Return (pa_l30, xwoba_l30, k_rate_l30, iso_l30) for batter_skill.
 
@@ -70,21 +65,30 @@ def _resolve_l30_fields(
 
 
 # ---------------------------------------------------------------------------
-# Batter skill
+# Shared batter skill computation
 # ---------------------------------------------------------------------------
 
-def _aggregate_batter_skill(conn: psycopg.Connection, season: int) -> int:
+def compute_batter_skill_rows(
+    conn: psycopg.Connection,
+    season: int,
+    cutoff_date: date,
+) -> list[dict]:
     """
-    Read player_game_stats, compute season + L30 aggregates, upsert batter_skill.
+    Compute batter skill rows using only game_date < cutoff_date (exclusive).
 
-    Season: players with any PA in the season window. Below MIN_PA_BATTER_SEASON PA,
-    season rate stats are set to league averages (still projected for callups).
+    For the live daily refresh, pass cutoff_date = eastern_today() + 1 day
+    (so today's games are included).  For a weekly Monday snapshot, pass
+    cutoff_date = that Monday (so games on Monday itself are excluded).
 
-    L30: rolling 30 days ending today (not season end). Requires L30_MIN_PA to store
-    L30 columns; otherwise they are NULL.
+    Returns a list of dicts ready for upsert into batter_skill or
+    batter_skill_snapshots.
     """
     start, end = season_boundaries(season)
-    l30_start, l30_end = _rolling_l30_window(season)
+    as_of = min(cutoff_date - timedelta(days=1), end)
+    as_of = max(as_of, start)
+
+    l30_start = max(start, as_of - timedelta(days=30))
+    l30_end = as_of
 
     season_rows = conn.execute(
         """
@@ -105,7 +109,7 @@ def _aggregate_batter_skill(conn: psycopg.Connection, season: int) -> int:
         GROUP BY player_id
         HAVING SUM(plate_appearances) >= 1
         """,
-        (start, end),
+        (start, as_of),
     ).fetchall()
 
     l30_rows = conn.execute(
@@ -126,42 +130,118 @@ def _aggregate_batter_skill(conn: psycopg.Connection, season: int) -> int:
 
     l30_by_pid: dict[int, tuple] = {r[0]: r for r in l30_rows}
 
-    rows_written = 0
+    rows: list[dict] = []
+    for r in season_rows:
+        pid, pa, ab, hits, hr, tb, k, bb, xwoba, woba = r
+        ab = int(ab or 0)
+        hits = int(hits or 0)
+        hr = int(hr or 0)
+        tb = int(tb or 0)
+        k = int(k or 0)
+        bb = int(bb or 0)
+        pa = int(pa or 0)
+
+        use_league = pa < MIN_PA_BATTER_SEASON
+        if use_league:
+            xwoba_f = LEAGUE_XWOBA
+            woba_f = LEAGUE_XWOBA
+            k_rate = round(LEAGUE_K_PER_PA, 4)
+            bb_rate = round(0.085, 4)
+            iso = round(LEAGUE_ISO, 4)
+            babip = None
+        else:
+            xwoba_f = float(xwoba) if xwoba is not None else LEAGUE_XWOBA
+            woba_f = float(woba) if woba is not None else LEAGUE_XWOBA
+            k_rate = round(k / pa, 4) if pa > 0 else None
+            bb_rate = round(bb / pa, 4) if pa > 0 else None
+            iso = round((tb - hits) / ab, 4) if ab > 0 else round(LEAGUE_ISO, 4)
+            babip_d = ab - k - hr
+            babip = round((hits - hr) / babip_d, 4) if babip_d > 0 else None
+
+        pa_l30, xwoba_l30, k_rate_l30, iso_l30 = _resolve_l30_fields(
+            l30_by_pid.get(pid),
+            season_xwoba=xwoba_f,
+            season_k_rate=k_rate,
+            season_iso=iso,
+        )
+
+        rows.append({
+            "player_id": pid,
+            "season": season,
+            "plate_appearances": pa,
+            "xwoba": xwoba_f,
+            "woba": woba_f,
+            "k_rate": k_rate,
+            "bb_rate": bb_rate,
+            "iso": iso,
+            "babip": babip,
+            "barrel_rate": None,
+            "hard_hit_rate": None,
+            "xwoba_l30": xwoba_l30,
+            "k_rate_l30": k_rate_l30,
+            "iso_l30": iso_l30,
+            "pa_l30": pa_l30,
+        })
+
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Shared pitcher skill computation
+# ---------------------------------------------------------------------------
+
+def load_all_statcast_pa(season: int) -> list[pd.DataFrame]:
+    """Pull all season Statcast terminal-PA DataFrames from the disk cache."""
+    pa_chunks: list[pd.DataFrame] = []
+    for chunk_df in pull_statcast_chunks(season):
+        pa_chunks.append(_terminal_pa(chunk_df))
+    return pa_chunks
+
+
+def compute_pitcher_skill_rows(
+    season: int,
+    all_pa: list[pd.DataFrame],
+    cutoff_date: date | None = None,
+) -> list[dict]:
+    """
+    Compute pitcher_skill rows from pre-loaded Statcast PA DataFrames.
+
+    When cutoff_date is given, only PAs with game_date < cutoff_date are used
+    (point-in-time semantics).  When None, all provided data is used.
+
+    Returns a list of dicts (one per pitcher×hand) ready for upsert, each
+    containing a 'season' key.
+    """
+    if cutoff_date is not None:
+        filtered: list[pd.DataFrame] = []
+        for pa in all_pa:
+            if pa.empty:
+                continue
+            mask = pd.to_datetime(pa["game_date"]).dt.date < cutoff_date
+            sub = pa[mask]
+            if not sub.empty:
+                filtered.append(sub)
+    else:
+        filtered = [pa for pa in all_pa if not pa.empty]
+
+    ph_rows = agg_pitcher_vs_handedness(filtered)
+    ph_rows = [r for r in ph_rows if r["batters_faced"] >= MIN_BF_PITCHER]
+    for r in ph_rows:
+        r["season"] = season
+    return ph_rows
+
+
+# ---------------------------------------------------------------------------
+# Live batter_skill upsert (refresh-skills writes to the non-snapshot table)
+# ---------------------------------------------------------------------------
+
+def _aggregate_batter_skill(conn: psycopg.Connection, season: int) -> int:
+    """Recompute batter_skill from player_game_stats as of today."""
+    cutoff = eastern_today() + timedelta(days=1)  # include today's games
+    rows = compute_batter_skill_rows(conn, season, cutoff)
+
     with conn.cursor() as cur:
-        for r in season_rows:
-            pid, pa, ab, hits, hr, tb, k, bb, xwoba, woba = r
-            ab = int(ab or 0)
-            hits = int(hits or 0)
-            hr = int(hr or 0)
-            tb = int(tb or 0)
-            k = int(k or 0)
-            bb = int(bb or 0)
-            pa = int(pa or 0)
-
-            use_league = pa < MIN_PA_BATTER_SEASON
-            if use_league:
-                xwoba_f = LEAGUE_XWOBA
-                woba_f = LEAGUE_XWOBA
-                k_rate = round(LEAGUE_K_PER_PA, 4)
-                bb_rate = round(0.085, 4)  # ~league BB%
-                iso = round(LEAGUE_ISO, 4)
-                babip = None
-            else:
-                xwoba_f = float(xwoba) if xwoba is not None else LEAGUE_XWOBA
-                woba_f = float(woba) if woba is not None else LEAGUE_XWOBA
-                k_rate = round(k / pa, 4) if pa > 0 else None
-                bb_rate = round(bb / pa, 4) if pa > 0 else None
-                iso = round((tb - hits) / ab, 4) if ab > 0 else round(LEAGUE_ISO, 4)
-                babip_d = ab - k - hr
-                babip = round((hits - hr) / babip_d, 4) if babip_d > 0 else None
-
-            pa_l30, xwoba_l30, k_rate_l30, iso_l30 = _resolve_l30_fields(
-                l30_by_pid.get(pid),
-                season_xwoba=xwoba_f,
-                season_k_rate=k_rate,
-                season_iso=iso,
-            )
-
+        for row in rows:
             cur.execute(
                 """
                 INSERT INTO batter_skill (
@@ -171,9 +251,10 @@ def _aggregate_batter_skill(conn: psycopg.Connection, season: int) -> int:
                     updated_at
                 )
                 VALUES (
-                    %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s,
+                    %(player_id)s, %(season)s, %(plate_appearances)s,
+                    %(xwoba)s, %(woba)s, %(k_rate)s, %(bb_rate)s,
+                    %(iso)s, %(babip)s,
+                    %(xwoba_l30)s, %(k_rate_l30)s, %(iso_l30)s, %(pa_l30)s,
                     NOW()
                 )
                 ON CONFLICT (player_id) DO UPDATE
@@ -191,48 +272,23 @@ def _aggregate_batter_skill(conn: psycopg.Connection, season: int) -> int:
                         pa_l30            = EXCLUDED.pa_l30,
                         updated_at        = NOW()
                 """,
-                (
-                    pid,
-                    season,
-                    pa,
-                    xwoba_f,
-                    woba_f,
-                    k_rate,
-                    bb_rate,
-                    iso,
-                    babip,
-                    xwoba_l30,
-                    k_rate_l30,
-                    iso_l30,
-                    pa_l30,
-                ),
+                row,
             )
-            rows_written += 1
 
-    return rows_written
+    return len(rows)
 
 
 # ---------------------------------------------------------------------------
-# Pitcher skill (re-reads cached Statcast for handedness splits)
+# Live pitcher_skill upsert
 # ---------------------------------------------------------------------------
 
 def _aggregate_pitcher_skill(conn: psycopg.Connection, season: int) -> int:
-    """
-    Re-aggregate pitcher_skill from pybaseball's disk cache (fast after backfill).
-    Returns number of rows written.
-    """
+    """Re-aggregate pitcher_skill from pybaseball's disk cache (fast after backfill)."""
     print("  [pitcher] Reading Statcast cache for handedness splits…")
-    pa_chunks = []
-    for chunk_df in pull_statcast_chunks(season):
-        pa_chunks.append(_terminal_pa(chunk_df))
-
-    ph_rows = agg_pitcher_vs_handedness(pa_chunks)
-    ph_rows = [r for r in ph_rows if r["batters_faced"] >= MIN_BF_PITCHER]
+    all_pa = load_all_statcast_pa(season)
+    ph_rows = compute_pitcher_skill_rows(season, all_pa)
     if not ph_rows:
         return 0
-
-    for r in ph_rows:
-        r["season"] = season
 
     CHUNK = 500
     with conn.cursor() as cur:
@@ -274,9 +330,12 @@ def cmd_refresh_skills(args: argparse.Namespace) -> None:
 
     require_valid_season(season, cmd="refresh-skills")
 
-    l30_start, l30_end = _rolling_l30_window(season)
+    cutoff = eastern_today() + timedelta(days=1)
+    start, end = season_boundaries(season)
+    as_of = min(cutoff - timedelta(days=1), end)
+    l30_start = max(start, as_of - timedelta(days=30))
     print(
-        f"[refresh-skills] L30 window: {l30_start} → {l30_end} "
+        f"[refresh-skills] L30 window: {l30_start} → {as_of} "
         f"(NULL L30 if pa_l30 < {L30_MIN_PA})"
     )
 

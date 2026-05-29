@@ -25,6 +25,7 @@ from ingester.commands.backfill_stats import cmd_backfill_stats
 from ingester.commands.daily_slate import cmd_daily_slate
 from ingester.commands.refresh_weather import cmd_refresh_weather
 from ingester.commands.refresh_skills import cmd_refresh_skills
+from ingester.commands.skill_snapshots import cmd_refresh_skill_snapshots
 from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
 from ingester.projection.runner import cmd_project, cmd_smoke_project
 
@@ -89,6 +90,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_skills = sub.add_parser("refresh-skills", help="Recompute batter/pitcher skill aggregates")
     p_skills.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
 
+    p_snapshots = sub.add_parser(
+        "refresh-skill-snapshots",
+        help="Compute point-in-time skill snapshots for backtesting",
+    )
+    p_snapshots.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
+    p_snapshots.add_argument(
+        "--start", metavar="YYYY-MM-DD", type=_date_arg, required=True,
+        help="First date in snapshot range",
+    )
+    p_snapshots.add_argument(
+        "--end", metavar="YYYY-MM-DD", type=_date_arg, required=True,
+        help="Last date in snapshot range",
+    )
+    p_snapshots.add_argument(
+        "--interval", choices=["weekly"], default="weekly",
+        help="Snapshot frequency (default: weekly = every Monday)",
+    )
+
     p_project      = sub.add_parser("project",      help="Compute projections for today's slate")
     sub.add_parser("smoke",        help="DB connectivity sanity check")
     sub.add_parser("smoke-skills", help="Print top batters/pitchers from skill tables")
@@ -106,20 +125,31 @@ def build_parser() -> argparse.ArgumentParser:
             help="Date to process (default: today in US/Eastern)",
         )
 
+    # Backtest flag: project --as-of uses snapshot tables and writes to backtest_projections.
+    p_project.add_argument(
+        "--as-of",
+        metavar="YYYY-MM-DD",
+        type=_date_arg,
+        default=None,
+        dest="as_of",
+        help="Use skill snapshots as of this date (backtest mode)",
+    )
+
     return parser
 
 
 COMMANDS = {
-    "load-static":     cmd_load_static,
-    "backfill-stats":  cmd_backfill_stats,
-    "daily-slate":     cmd_daily_slate,
-    "refresh-weather": cmd_refresh_weather,
-    "refresh-skills":  cmd_refresh_skills,
-    "project":         cmd_project,
-    "smoke":           cmd_smoke,
-    "smoke-skills":    cmd_smoke_skills,
-    "smoke-slate":     cmd_smoke_slate,
-    "smoke-project":   cmd_smoke_project,
+    "load-static":              cmd_load_static,
+    "backfill-stats":           cmd_backfill_stats,
+    "daily-slate":              cmd_daily_slate,
+    "refresh-weather":          cmd_refresh_weather,
+    "refresh-skills":           cmd_refresh_skills,
+    "refresh-skill-snapshots":  cmd_refresh_skill_snapshots,
+    "project":                  cmd_project,
+    "smoke":                    cmd_smoke,
+    "smoke-skills":             cmd_smoke_skills,
+    "smoke-slate":              cmd_smoke_slate,
+    "smoke-project":            cmd_smoke_project,
 }
 
 
