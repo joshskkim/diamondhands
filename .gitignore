@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.local
+target/
+.venv/
+__pycache__/
+.pybaseball_cache/
+*.iml
+.idea/
