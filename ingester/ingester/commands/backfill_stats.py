@@ -2,19 +2,18 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
 import psycopg
 import requests
 
 from ingester.db import get_connection, build_team_abbrev_map
 from ingester.statcast import (
-    SEASON_BOUNDARIES,
     _terminal_pa,
     agg_batter_game_stats,
     agg_pitcher_game_stats,
     agg_pitcher_vs_handedness,
     pull_statcast_chunks,
+    require_valid_season,
 )
 
 MLB_PEOPLE_URL = "https://statsapi.mlb.com/api/v1/sports/1/players"
@@ -175,11 +174,7 @@ def _upsert_pitcher_skill(
 def cmd_backfill_stats(args: argparse.Namespace) -> None:
     season: int = getattr(args, "season", 2025)
 
-    if season not in SEASON_BOUNDARIES:
-        sys.exit(
-            f"[backfill-stats] Season {season} not in SEASON_BOUNDARIES. "
-            f"Supported: {sorted(SEASON_BOUNDARIES)}"
-        )
+    require_valid_season(season, cmd="backfill-stats")
 
     conn = get_connection()
 

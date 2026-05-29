@@ -7,12 +7,12 @@ The ingester `project` command fills `batter_projections` and `game_projections`
 For each game with a stadium, both probable pitchers, and weather (outdoor or dome sentinel):
 
 1. **Lineup proxy** — Top 13 non-pitchers per team by PA in the last 30 days (`player_game_stats`). Not a confirmed lineup.
-2. **Skill blend** — Per batter: `weight_l30 = min(pa_l30 / 100, 1)`; blend season and L30 for xwOBA, K%, and ISO.
-3. **Base rates (per PA)** — Hit ∝ xwOBA vs league; HR ∝ ISO vs league; K = blended K%.
-4. **Pitcher adjustment** — Opposing `pitcher_skill` vs batter hand (switch: bat opposite pitcher’s throws). If &lt;50 BF vs that hand, use BF-weighted overall. Multiplier = pitcher rate / league rate (hit, HR, K separately).
+2. **Skill blend** — `weight_l30 = min(pa_l30 / 150, 0.6)` (L30 never &gt;60% of blend). NULL `pa_l30` → season only. `refresh-skills` L30 window is last 30 days ending today; `pa_l30 &lt; 30` → L30 columns NULL.
+3. **Base rates (per PA)** — Hit ∝ xwOBA vs league; **HR ∝ ISO vs league** (not xwOBA); K = blended K%.
+4. **Pitcher adjustment** — Rate / league rate, clamped (hit 0.75–1.30, HR 0.60–1.50, K 0.70–1.40).
 5. **Park adjustment** — `park_factor_hits`; HR factor LHB/RHB by effective batter hand.
 6. **Weather adjustment** — Dome + non-retractable: 1.0. Else temperature (HR and slight hit) and pull-direction wind component for HR. See `weather_adj.py`.
-7. **Adjusted rates** — Multiply factors; clamp to [0.001, 0.999]. K ignores park/weather at v1.
+7. **Adjusted rates** — Multiply factors; hard clamp hit [0.10, 0.45], HR [0.001, 0.10], K [0.05, 0.45]. K ignores park/weather at v1.
 8. **Expected PA** — Flat 4.0 per starter (lineup order unknown).
 9. **Probabilities** — Independent Bernoulli: P(≥1 hit/HR/K); P(≥2 hits) via binomial CDF. Rounded to 4 decimals.
 10. **Expected counts** — `expected_hits`, `expected_total_bases` (avg bases per hit ≈ `1 + iso_blend × 3`, clamped).

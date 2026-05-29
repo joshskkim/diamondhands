@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from scipy.stats import binom
 
 from ingester.projection.constants import (
+    ADJUSTED_HIT_PER_PA_CLAMP,
+    ADJUSTED_HR_PER_PA_CLAMP,
+    ADJUSTED_K_PER_PA_CLAMP,
     AVG_BASES_PER_HIT_CLAMP,
     AVG_BASES_PER_HIT_ISO_MULT,
     EXPECTED_PA_PER_STARTER,
@@ -15,9 +18,9 @@ from ingester.projection.constants import (
     LEAGUE_ISO,
     LEAGUE_RUNS_PER_GAME_BASE,
     LEAGUE_XWOBA,
+    PA_L30_BLEND_CAP,
     PA_L30_FULL_WEIGHT,
     PROB_DECIMAL_PLACES,
-    RATE_CLAMP,
     TEAM_RUNS_XWOBA_EXPONENT,
 )
 from ingester.projection.park_adj import ParkAdjustments
@@ -84,25 +87,34 @@ class BatterProjection:
 
 
 def l30_blend_weight(pa_l30: int) -> float:
-    return min(pa_l30 / PA_L30_FULL_WEIGHT, 1.0)
+    """L30 capped at 60% of blend; needs pa_l30 > 0 (NULL L30 → season-only)."""
+    if pa_l30 <= 0:
+        return 0.0
+    return min(pa_l30 / PA_L30_FULL_WEIGHT, PA_L30_BLEND_CAP)
 
 
-def blend_metric(season: float, l30: float, pa_l30: int) -> float:
+def blend_metric(season: float, l30: float | None, pa_l30: int) -> float:
     w_l30 = l30_blend_weight(pa_l30)
+    if w_l30 <= 0 or l30 is None:
+        return season
     return l30 * w_l30 + season * (1.0 - w_l30)
 
 
 def blend_batter_skills(skill: BatterSkillInput) -> SkillBlends:
     w_l30 = l30_blend_weight(skill.pa_l30)
+    l30_xwoba = skill.xwoba_l30 if skill.pa_l30 > 0 else None
+    l30_k = skill.k_rate_l30 if skill.pa_l30 > 0 else None
+    l30_iso = skill.iso_l30 if skill.pa_l30 > 0 else None
     return SkillBlends(
-        xwoba=blend_metric(skill.xwoba, skill.xwoba_l30, skill.pa_l30),
-        k_rate=blend_metric(skill.k_rate, skill.k_rate_l30, skill.pa_l30),
-        iso=blend_metric(skill.iso, skill.iso_l30, skill.pa_l30),
+        xwoba=blend_metric(skill.xwoba, l30_xwoba, skill.pa_l30),
+        k_rate=blend_metric(skill.k_rate, l30_k, skill.pa_l30),
+        iso=blend_metric(skill.iso, l30_iso, skill.pa_l30),
         weight_l30=w_l30,
     )
 
 
 def base_rates_from_blend(blends: SkillBlends) -> BaseRates:
+    """Hit rate from xwOBA; HR rate from ISO (power), not overall offensive value."""
     hit_scale = blends.xwoba / LEAGUE_XWOBA if LEAGUE_XWOBA > 0 else 1.0
     iso_scale = blends.iso / LEAGUE_ISO if LEAGUE_ISO > 0 else 1.0
     return BaseRates(
@@ -112,8 +124,8 @@ def base_rates_from_blend(blends: SkillBlends) -> BaseRates:
     )
 
 
-def clamp_rate(rate: float) -> float:
-    return max(RATE_CLAMP[0], min(RATE_CLAMP[1], rate))
+def _clamp(rate: float, low: float, high: float) -> float:
+    return max(low, min(high, rate))
 
 
 def adjusted_rates_from_factors(
@@ -124,13 +136,18 @@ def adjusted_rates_from_factors(
     adj_weather_hr: float,
 ) -> AdjustedRates:
     return AdjustedRates(
-        hit_per_pa=clamp_rate(
-            base.hit_per_pa * pitcher.hit * park.hit * adj_weather_hit
+        hit_per_pa=_clamp(
+            base.hit_per_pa * pitcher.hit * park.hit * adj_weather_hit,
+            *ADJUSTED_HIT_PER_PA_CLAMP,
         ),
-        hr_per_pa=clamp_rate(
-            base.hr_per_pa * pitcher.hr * park.hr * adj_weather_hr
+        hr_per_pa=_clamp(
+            base.hr_per_pa * pitcher.hr * park.hr * adj_weather_hr,
+            *ADJUSTED_HR_PER_PA_CLAMP,
         ),
-        k_per_pa=clamp_rate(base.k_per_pa * pitcher.k),
+        k_per_pa=_clamp(
+            base.k_per_pa * pitcher.k,
+            *ADJUSTED_K_PER_PA_CLAMP,
+        ),
     )
 
 

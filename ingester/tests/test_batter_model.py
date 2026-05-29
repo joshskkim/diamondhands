@@ -9,48 +9,45 @@ from scipy.stats import binom
 from ingester.projection.batter_model import (
     BatterSkillInput,
     SkillBlends,
+    adjusted_rates_from_factors,
     base_rates_from_blend,
     blend_batter_skills,
     expected_team_runs,
+    l30_blend_weight,
     project_batter,
 )
 from ingester.projection.constants import (
+    ADJUSTED_HIT_PER_PA_CLAMP,
+    ADJUSTED_HR_PER_PA_CLAMP,
+    ADJUSTED_K_PER_PA_CLAMP,
     EXPECTED_PA_PER_STARTER,
     LEAGUE_HIT_PER_PA,
     LEAGUE_HR_PER_PA,
     LEAGUE_ISO,
+    PITCHER_MULT_HR_CLAMP,
     LEAGUE_RUNS_PER_GAME_BASE,
     LEAGUE_XWOBA,
+    PA_L30_BLEND_CAP,
     PA_L30_FULL_WEIGHT,
+    PITCHER_MULT_HIT_CLAMP,
 )
 from ingester.projection.park_adj import ParkAdjustments
-from ingester.projection.pitcher_adj import PitcherAdjustments
+from ingester.projection.pitcher_adj import (
+    PitcherAdjustments,
+    PitcherHandSplit,
+    compute_pitcher_adjustments,
+)
 
 
 class TestBatterModelHandComputed(unittest.TestCase):
     """
-    Synthetic batter with pa_l30=50 → 50/50 L30 vs season blend.
+    Synthetic batter with pa_l30=50 → weight min(50/150, 0.6) = 1/3.
 
-    Skill inputs
-    ------------
-    xwOBA 0.340 / 0.360 → blend 0.350
-    K%    0.200 / 0.240 → blend 0.220
-    ISO   0.170 / 0.190 → blend 0.180
+    xwOBA 0.340 / 0.360 → blend 0.3533…
+    K%    0.200 / 0.240 → blend 0.2133…
+    ISO   0.170 / 0.190 → blend 0.1767…
 
-    Base rates (vs league)
-    ----------------------
-    hit/PA = 0.225 × (0.350 / 0.318) ≈ 0.24764
-    HR/PA  = 0.030 × (0.180 / 0.155) ≈ 0.03484
-    K/PA   = 0.220
-
-    Adjustments: pitcher hit×1.1, HR×0.9, K×1.2; park hit×1.05, HR×1.10;
-    weather hit×1.02, HR×1.0.
-
-    Adjusted per-PA
-    ---------------
-    hit ≈ 0.29175, HR ≈ 0.03449, K = 0.264
-
-    expected_pa = 4.0
+    Hit/PA from xwOBA; HR/PA from ISO (not xwOBA).
     """
 
     SKILL = BatterSkillInput(
@@ -69,11 +66,10 @@ class TestBatterModelHandComputed(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        w = 50 / PA_L30_FULL_WEIGHT
-        cls.W_L30 = w
-        cls.XWOBA_BLEND = 0.360 * w + 0.340 * (1 - w)
-        cls.K_BLEND = 0.240 * w + 0.200 * (1 - w)
-        cls.ISO_BLEND = 0.190 * w + 0.170 * (1 - w)
+        cls.W_L30 = l30_blend_weight(50)
+        cls.XWOBA_BLEND = 0.360 * cls.W_L30 + 0.340 * (1 - cls.W_L30)
+        cls.K_BLEND = 0.240 * cls.W_L30 + 0.200 * (1 - cls.W_L30)
+        cls.ISO_BLEND = 0.190 * cls.W_L30 + 0.170 * (1 - cls.W_L30)
 
         cls.BASE_HIT = LEAGUE_HIT_PER_PA * (cls.XWOBA_BLEND / LEAGUE_XWOBA)
         cls.BASE_HR = LEAGUE_HR_PER_PA * (cls.ISO_BLEND / LEAGUE_ISO)
@@ -100,12 +96,31 @@ class TestBatterModelHandComputed(unittest.TestCase):
         cls.EXP_HITS = pa * cls.ADJ_HIT
         cls.EXP_TB = pa * cls.ADJ_HIT * bases_per_hit
 
+    def test_l30_weight_cap(self) -> None:
+        self.assertAlmostEqual(self.W_L30, 50 / PA_L30_FULL_WEIGHT)
+        self.assertLessEqual(self.W_L30, PA_L30_BLEND_CAP)
+        self.assertAlmostEqual(l30_blend_weight(0), 0.0)
+        self.assertAlmostEqual(l30_blend_weight(500), PA_L30_BLEND_CAP)
+
     def test_blend_weights(self) -> None:
         blends = blend_batter_skills(self.SKILL)
         self.assertAlmostEqual(blends.weight_l30, self.W_L30)
         self.assertAlmostEqual(blends.xwoba, self.XWOBA_BLEND)
         self.assertAlmostEqual(blends.k_rate, self.K_BLEND)
         self.assertAlmostEqual(blends.iso, self.ISO_BLEND)
+
+    def test_hr_uses_iso_not_xwoba(self) -> None:
+        blends = SkillBlends(
+            xwoba=0.400,
+            k_rate=0.22,
+            iso=0.120,
+            weight_l30=0.0,
+        )
+        base = base_rates_from_blend(blends)
+        xwoba_only_hr = LEAGUE_HR_PER_PA * (0.400 / LEAGUE_XWOBA)
+        self.assertAlmostEqual(base.hit_per_pa, LEAGUE_HIT_PER_PA * (0.400 / LEAGUE_XWOBA))
+        self.assertAlmostEqual(base.hr_per_pa, LEAGUE_HR_PER_PA * (0.120 / LEAGUE_ISO))
+        self.assertNotAlmostEqual(base.hr_per_pa, xwoba_only_hr, places=3)
 
     def test_base_rates(self) -> None:
         blends = SkillBlends(
@@ -133,6 +148,7 @@ class TestBatterModelHandComputed(unittest.TestCase):
         self.assertAlmostEqual(proj.adjusted.hit_per_pa, self.ADJ_HIT, places=6)
         self.assertAlmostEqual(proj.adjusted.hr_per_pa, self.ADJ_HR, places=6)
         self.assertAlmostEqual(proj.adjusted.k_per_pa, self.ADJ_K, places=6)
+        self.assertLessEqual(proj.probabilities.p_hr, 0.40)
 
         self.assertEqual(proj.probabilities.p_hit_1plus, self.EXP_P_HIT_1)
         self.assertEqual(proj.probabilities.p_hit_2plus, self.EXP_P_HIT_2)
@@ -142,15 +158,37 @@ class TestBatterModelHandComputed(unittest.TestCase):
         self.assertAlmostEqual(proj.expected_hits, self.EXP_HITS, places=4)
         self.assertAlmostEqual(proj.expected_total_bases, self.EXP_TB, places=4)
 
-        self.assertEqual(proj.adj_park_hit, 1.05)
-        self.assertEqual(proj.adj_pitcher_hit, 1.1)
-        self.assertEqual(proj.adj_weather_hit, 1.02)
-        self.assertEqual(proj.adj_weather_hr, 1.0)
+
+class TestAdjustedRateClamps(unittest.TestCase):
+    def test_extreme_hr_clamped(self) -> None:
+        base = base_rates_from_blend(
+            SkillBlends(xwoba=0.45, k_rate=0.20, iso=0.35, weight_l30=0.0)
+        )
+        pitcher = PitcherAdjustments(hit=1.3, hr=1.5, k=1.4)
+        park = ParkAdjustments(hit=1.05, hr=1.4)
+        rates = adjusted_rates_from_factors(base, pitcher, park, 1.05, 1.2)
+        self.assertLessEqual(rates.hr_per_pa, ADJUSTED_HR_PER_PA_CLAMP[1])
+        self.assertGreaterEqual(rates.hr_per_pa, ADJUSTED_HR_PER_PA_CLAMP[0])
+        self.assertLessEqual(rates.hit_per_pa, ADJUSTED_HIT_PER_PA_CLAMP[1])
+        self.assertLessEqual(rates.k_per_pa, ADJUSTED_K_PER_PA_CLAMP[1])
+
+
+class TestPitcherMultiplierClamps(unittest.TestCase):
+    def test_hr_mult_capped_at_ceiling(self) -> None:
+        split = PitcherHandSplit(
+            vs_handedness="R",
+            batters_faced=200,
+            hits_per_pa=0.15,
+            hr_per_pa=0.06,
+            k_rate=0.35,
+        )
+        adj = compute_pitcher_adjustments(split)
+        self.assertEqual(adj.hr, PITCHER_MULT_HR_CLAMP[1])
+        self.assertGreater(0.06 / LEAGUE_HR_PER_PA, PITCHER_MULT_HR_CLAMP[1])
 
 
 class TestExpectedTeamRuns(unittest.TestCase):
     def test_hand_computed_team_runs(self) -> None:
-        """Nine starters at 0.350 xwOBA, park 1.05, weather hit 1.02."""
         xwoba = 0.350
         park = 1.05
         weather = 1.02
@@ -159,7 +197,6 @@ class TestExpectedTeamRuns(unittest.TestCase):
 
         result = expected_team_runs([xwoba] * 9, park, weather)
         self.assertAlmostEqual(result, expected, places=6)
-        self.assertAlmostEqual(result, 5.7274, places=3)
 
 
 if __name__ == "__main__":

@@ -20,8 +20,15 @@ LEAGUE_ISO: float = 0.155
 # Batter skill blending (L30 vs season)
 # ---------------------------------------------------------------------------
 
-# Full L30 weight once batter has this many PA in the rolling window.
-PA_L30_FULL_WEIGHT: int = 100
+# weight_l30 = min(pa_l30 / PA_L30_FULL_WEIGHT, PA_L30_BLEND_CAP)
+PA_L30_FULL_WEIGHT: int = 150
+PA_L30_BLEND_CAP: float = 0.6
+
+# refresh-skills: season totals require this many PA; below → league-average skill.
+MIN_PA_BATTER_SEASON: int = 150
+
+# L30 window in refresh-skills: below this PA, L30 columns are intentionally NULL.
+L30_MIN_PA: int = 30
 
 # ---------------------------------------------------------------------------
 # Pitcher handedness splits
@@ -97,7 +104,15 @@ DOME_WEATHER_ADJ: float = 1.0
 # Per-PA rate and derived-count clamps
 # ---------------------------------------------------------------------------
 
-RATE_CLAMP: tuple[float, float] = (0.001, 0.999)
+# Hard clamps on final adjusted per-PA rates (after all multipliers).
+ADJUSTED_HIT_PER_PA_CLAMP: tuple[float, float] = (0.10, 0.45)
+ADJUSTED_HR_PER_PA_CLAMP: tuple[float, float] = (0.001, 0.10)
+ADJUSTED_K_PER_PA_CLAMP: tuple[float, float] = (0.05, 0.45)
+
+# Pitcher matchup multipliers (raw rate / league rate).
+PITCHER_MULT_HIT_CLAMP: tuple[float, float] = (0.75, 1.30)
+PITCHER_MULT_HR_CLAMP: tuple[float, float] = (0.60, 1.50)
+PITCHER_MULT_K_CLAMP: tuple[float, float] = (0.70, 1.40)
 
 # expected_total_bases: avg bases per hit ≈ 1 + iso_blend * 3
 AVG_BASES_PER_HIT_ISO_MULT: float = 3.0

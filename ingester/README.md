@@ -88,16 +88,18 @@ uv run python main.py daily-slate
 
 ## refresh-weather
 
-Fetches hourly weather from [Open-Meteo](https://open-meteo.com/) for each
-`Scheduled` game today with a start time within the next 24 h.
+Fetches hourly weather from [Open-Meteo](https://open-meteo.com/) for each game on
+the slate date that is not finished, cancelled, or in progress (status NOT IN:
+Final, Game Over, Postponed, Suspended, Cancelled, In Progress, Live).
 
 ```bash
 uv run python main.py refresh-weather
+uv run python main.py refresh-weather --date 2025-05-28
 ```
 
 - **Open-Meteo is free for non-commercial use — no API key required.**
-- Fully enclosed domed stadiums (`is_dome=true`, `is_retractable=false`) receive
-  sentinel values (72 °F, 0 mph, 0°) instead of an API call.
+- All domed stadiums (`is_dome=true`) receive sentinel values (72 °F, 0 mph, 0°)
+  with no API call.
 - `wind_direction_degrees` is the **meteorological "from" direction**: 0° = wind
   blowing from North (southward), 90° = from East (westward), etc.
   Compare against `stadiums.cf_bearing_degrees` in the projector to determine

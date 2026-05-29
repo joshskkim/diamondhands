@@ -25,11 +25,6 @@ from ingester.projection.weather_adj import compute_weather_adjustments
 
 log = logging.getLogger(__name__)
 
-# Keep in sync with ingester.statcast.SEASON_BOUNDARIES
-_SEASON_BOUNDARIES: dict[int, tuple[date, date]] = {
-    2025: (date(2025, 3, 18), date(2025, 9, 28)),
-}
-
 _PITCHER_POSITIONS = frozenset({"P", "SP", "RP", "CP", "TWP"})
 
 
@@ -69,9 +64,7 @@ class HitterCandidate:
 
 
 def infer_season(game_date: date) -> int:
-    for season, (start, end) in _SEASON_BOUNDARIES.items():
-        if start <= game_date <= end:
-            return season
+    """Map a game date to its MLB season year (calendar year for skill lookup)."""
     return game_date.year
 
 
@@ -222,13 +215,17 @@ def _load_pitcher_splits(
     return splits
 
 
-def _load_pitcher_throws(conn: psycopg.Connection, pitcher_id: int) -> str | None:
+def _load_pitcher_throws(conn: psycopg.Connection, pitcher_id: int) -> str:
     row = conn.execute(
         "SELECT throws FROM players WHERE id = %s",
         (pitcher_id,),
     ).fetchone()
     if row is None or row[0] is None:
-        return None
+        log.warning(
+            "pitcher %s missing throws hand; assuming R",
+            pitcher_id,
+        )
+        return "R"
     return str(row[0])
 
 
@@ -331,13 +328,6 @@ def _project_team_side(
         return None
 
     pitcher_throws = _load_pitcher_throws(conn, opposing_pitcher_id)
-    if pitcher_throws is None:
-        log.warning(
-            "game %s: opposing pitcher %s missing throws hand",
-            game.game_id,
-            opposing_pitcher_id,
-        )
-        return None
 
     splits = _load_pitcher_splits(conn, opposing_pitcher_id, season)
     if not splits:

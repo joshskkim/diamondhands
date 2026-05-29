@@ -6,6 +6,7 @@ so we use `stand` directly for pitcher handedness splits — no correction neede
 """
 from __future__ import annotations
 
+import sys
 import warnings
 from datetime import date, timedelta
 from typing import Iterator
@@ -16,10 +17,26 @@ import pybaseball
 
 pybaseball.cache.enable()
 
-# 2025 regular season includes the Seoul Series opener
-SEASON_BOUNDARIES: dict[int, tuple[date, date]] = {
-    2025: (date(2025, 3, 18), date(2025, 9, 28)),
-}
+MIN_SEASON_YEAR = 2015
+
+
+def season_boundaries(year: int) -> tuple[date, date]:
+    """MLB regular season runs late March through early October.
+
+    Use generous bounds; pybaseball will return empty for off-season days.
+    """
+    return date(year, 3, 15), date(year, 11, 5)
+
+
+def require_valid_season(season: int, *, cmd: str = "") -> None:
+    """Exit if season is outside 2015 through the current calendar year."""
+    current_year = date.today().year
+    if season < MIN_SEASON_YEAR or season > current_year:
+        prefix = f"[{cmd}] " if cmd else ""
+        sys.exit(
+            f"{prefix}Season {season} not supported. "
+            f"Use {MIN_SEASON_YEAR}–{current_year}."
+        )
 
 # Terminal event classification (used on end-of-PA rows only)
 HIT_EVENTS = frozenset({"single", "double", "triple", "home_run"})
@@ -43,7 +60,7 @@ SC_TO_MLBAM: dict[str, str] = {
 
 def pull_statcast_chunks(season: int, chunk_days: int = 7) -> Iterator[pd.DataFrame]:
     """Yield weekly chunks of pitch-level Statcast data for a season."""
-    start, end = SEASON_BOUNDARIES[season]
+    start, end = season_boundaries(season)
     cur = start
     while cur <= end:
         chunk_end = min(cur + timedelta(days=chunk_days - 1), end)
@@ -74,15 +91,22 @@ def _terminal_pa(df: pd.DataFrame) -> pd.DataFrame:
     return pa
 
 
+def _to_float64(series: pd.Series | None) -> pd.Series:
+    """Coerce Statcast columns to float64 (avoids Int64/float mix in combine)."""
+    if series is None:
+        return pd.Series(dtype=np.float64)
+    return pd.to_numeric(series, errors="coerce").astype(np.float64)
+
+
 def _xwoba_num(pa: pd.DataFrame) -> pd.Series:
     """
     Per-PA xwOBA numerator:
     - batted-ball events: use estimated_woba_using_speedangle
     - non-contact events (K, BB, HBP): fall back to woba_value
     """
-    ew = pd.to_numeric(pa.get("estimated_woba_using_speedangle", pd.Series(dtype=float)), errors="coerce")
-    wv = pd.to_numeric(pa.get("woba_value", pd.Series(dtype=float)), errors="coerce")
-    return ew.where(ew.notna(), wv)
+    ew = _to_float64(pa.get("estimated_woba_using_speedangle"))
+    wv = _to_float64(pa.get("woba_value"))
+    return ew.combine_first(wv)
 
 
 def agg_batter_game_stats(df: pd.DataFrame, abbrev_to_id: dict[str, int]) -> list[dict]:
@@ -93,8 +117,8 @@ def agg_batter_game_stats(df: pd.DataFrame, abbrev_to_id: dict[str, int]) -> lis
 
     pa = pa.copy()
     pa["xwoba_num"] = _xwoba_num(pa)
-    pa["woba_value"]  = pd.to_numeric(pa.get("woba_value",  pd.Series(dtype=float)), errors="coerce")
-    pa["woba_denom"]  = pd.to_numeric(pa.get("woba_denom",  pd.Series(dtype=float)), errors="coerce")
+    pa["woba_value"] = _to_float64(pa.get("woba_value"))
+    pa["woba_denom"] = _to_float64(pa.get("woba_denom"))
 
     pa["is_hit"] = pa["events"].isin(HIT_EVENTS).astype(int)
     pa["is_hr"]  = (pa["events"] == "home_run").astype(int)
@@ -231,8 +255,8 @@ def agg_pitcher_vs_handedness(pa_chunks: list[pd.DataFrame]) -> list[dict]:
             continue
 
         sub["xwoba_num"] = _xwoba_num(sub)
-        sub["woba_value"] = pd.to_numeric(sub.get("woba_value", pd.Series(dtype=float)), errors="coerce")
-        sub["woba_denom"] = pd.to_numeric(sub.get("woba_denom", pd.Series(dtype=float)), errors="coerce").fillna(0)
+        sub["woba_value"] = _to_float64(sub.get("woba_value"))
+        sub["woba_denom"] = _to_float64(sub.get("woba_denom")).fillna(0)
         sub["is_k"]   = sub["events"].isin({"strikeout", "strikeout_double_play"}).astype(int)
         sub["is_bb"]  = sub["events"].isin(BB_EVENTS).astype(int)
         sub["is_hit"] = sub["events"].isin(HIT_EVENTS).astype(int)

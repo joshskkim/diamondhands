@@ -8,6 +8,9 @@ from ingester.projection.constants import (
     LEAGUE_HR_PER_PA,
     LEAGUE_K_PER_PA,
     MIN_BF_PITCHER_HANDEDNESS,
+    PITCHER_MULT_HIT_CLAMP,
+    PITCHER_MULT_HR_CLAMP,
+    PITCHER_MULT_K_CLAMP,
 )
 from ingester.projection.weather_adj import effective_bats
 
@@ -30,11 +33,19 @@ class PitcherAdjustments:
     k: float
 
 
-def rate_multiplier(pitcher_rate: float, league_rate: float) -> float:
-    """Pitcher rate divided by league average (e.g. 30% K vs 22% league → 1.36)."""
+def _clamp_mult(value: float, bounds: tuple[float, float]) -> float:
+    return max(bounds[0], min(bounds[1], value))
+
+
+def rate_multiplier(
+    pitcher_rate: float,
+    league_rate: float,
+    bounds: tuple[float, float],
+) -> float:
+    """Pitcher rate / league average, clamped so one matchup moves rates modestly."""
     if league_rate <= 0:
         return 1.0
-    return pitcher_rate / league_rate
+    return _clamp_mult(pitcher_rate / league_rate, bounds)
 
 
 def _weighted_rate(
@@ -85,9 +96,11 @@ def select_pitcher_split(
 
 def compute_pitcher_adjustments(split: PitcherHandSplit) -> PitcherAdjustments:
     return PitcherAdjustments(
-        hit=rate_multiplier(split.hits_per_pa, LEAGUE_HIT_PER_PA),
-        hr=rate_multiplier(split.hr_per_pa, LEAGUE_HR_PER_PA),
-        k=rate_multiplier(split.k_rate, LEAGUE_K_PER_PA),
+        hit=rate_multiplier(
+            split.hits_per_pa, LEAGUE_HIT_PER_PA, PITCHER_MULT_HIT_CLAMP
+        ),
+        hr=rate_multiplier(split.hr_per_pa, LEAGUE_HR_PER_PA, PITCHER_MULT_HR_CLAMP),
+        k=rate_multiplier(split.k_rate, LEAGUE_K_PER_PA, PITCHER_MULT_K_CLAMP),
     )
 
 
