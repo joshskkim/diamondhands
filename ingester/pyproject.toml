@@ -1,0 +1,16 @@
+[project]
+name = "ingester"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.4.6",
+    "psycopg[binary]>=3.3.4",
+    "pybaseball>=2.2.7",
+    "pydantic>=2.13.4",
+    "python-dotenv>=1.2.2",
+    "rapidfuzz>=3.14.5",
+    "requests>=2.34.2",
+    "scipy>=1.17.1",
+]
