@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: diamond-postgres
+    environment:
+      POSTGRES_DB: diamond
+      POSTGRES_USER: diamond
+      POSTGRES_PASSWORD: diamond
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U diamond -d diamond"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: diamond-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  flyway:
+    image: flyway/flyway:10
+    container_name: diamond-flyway
+    command: >
+      -url=jdbc:postgresql://postgres:5432/diamond
+      -user=diamond
+      -password=diamond
+      -locations=filesystem:/flyway/sql
+      migrate
+    volumes:
+      - ./db/migrations:/flyway/sql
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
