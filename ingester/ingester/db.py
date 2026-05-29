@@ -2,9 +2,18 @@
 from __future__ import annotations
 
 import os
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import psycopg
 from dotenv import load_dotenv
+
+_EASTERN = ZoneInfo("America/New_York")
+
+
+def eastern_today() -> date:
+    """Return today's date in US/Eastern (MLB schedules are Eastern-based)."""
+    return datetime.now(tz=_EASTERN).date()
 
 
 def get_connection() -> psycopg.Connection:

@@ -1,9 +1,9 @@
-"""smoke-skills: Sanity-check batter_skill and pitcher_skill tables."""
+"""smoke commands: smoke-skills and smoke-slate sanity checks."""
 from __future__ import annotations
 
 import argparse
 
-from ingester.db import get_connection
+from ingester.db import eastern_today, get_connection
 
 MIN_PA_L30 = 50   # minimum L30 PA for batter smoke check
 MIN_BF     = 50   # minimum BF for pitcher smoke check
@@ -80,4 +80,62 @@ def cmd_smoke_skills(args: argparse.Namespace) -> None:
         )
 
     conn.close()
+    print()
+
+
+def cmd_smoke_slate(args: argparse.Namespace) -> None:
+    """Print the slate for a given date: matchup, stadium, dome, weather, and both probable SPs."""
+    conn = get_connection()
+    today = args.date if args.date is not None else eastern_today()
+
+    rows = conn.execute(
+        """
+        SELECT
+            t_home.abbreviation   AS home,
+            t_away.abbreviation   AS away,
+            s.name                AS stadium,
+            s.is_dome,
+            g.temperature_f,
+            g.wind_speed_mph,
+            g.wind_direction_degrees,
+            p_home.full_name      AS home_sp,
+            p_away.full_name      AS away_sp,
+            g.start_time_utc,
+            g.status
+        FROM games g
+        JOIN teams   t_home ON t_home.id = g.home_team_id
+        JOIN teams   t_away ON t_away.id = g.away_team_id
+        JOIN stadiums s     ON s.id      = g.stadium_id
+        LEFT JOIN players p_home ON p_home.id = g.home_probable_pitcher_id
+        LEFT JOIN players p_away ON p_away.id = g.away_probable_pitcher_id
+        WHERE g.game_date = %s
+        ORDER BY g.start_time_utc
+        """,
+        (today,),
+    ).fetchall()
+
+    conn.close()
+
+    if not rows:
+        print(f"\n[smoke-slate] No games found for {today}.")
+        return
+
+    print(f"\n=== Slate for {today} — {len(rows)} game(s) ===")
+    hdr = (
+        f"{'Matchup':<12} {'Stadium':<30} {'Dome':<5} "
+        f"{'Temp':>6} {'Wind':>11}  {'Home SP':<24} {'Away SP':<24}"
+    )
+    print(hdr)
+    print("-" * len(hdr))
+
+    for home, away, stadium, is_dome, temp, wind_spd, wind_dir, home_sp, away_sp, start, status in rows:
+        matchup  = f"{away}@{home}"
+        dome_str = "YES" if is_dome else "no"
+        temp_str = f"{temp}°F"  if temp      is not None else "—"
+        wind_str = f"{wind_spd}/{wind_dir}°" if wind_spd is not None else "—"
+        print(
+            f"{matchup:<12} {(stadium or '?'):<30} {dome_str:<5} "
+            f"{temp_str:>6} {wind_str:>11}  "
+            f"{(home_sp or 'TBA'):<24} {(away_sp or 'TBA'):<24}"
+        )
     print()

@@ -12,35 +12,30 @@ Subcommands:
     refresh-skills   Recompute batter_skill and pitcher_skill aggregates
     project          Compute batter_projections for today's slate
     smoke            End-to-end sanity check (read-only)
+    smoke-project    Run project + verify projection row counts
 """
 
 import argparse
 import sys
+from datetime import date
 from pathlib import Path
 
 from ingester.commands.load_static import cmd_load_static
 from ingester.commands.backfill_stats import cmd_backfill_stats
+from ingester.commands.daily_slate import cmd_daily_slate
+from ingester.commands.refresh_weather import cmd_refresh_weather
 from ingester.commands.refresh_skills import cmd_refresh_skills
-from ingester.commands.smoke import cmd_smoke_skills
+from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
+from ingester.projection.runner import cmd_project, cmd_smoke_project
 
 
-# ---------------------------------------------------------------------------
-# Subcommand stubs
-# ---------------------------------------------------------------------------
-
-def cmd_daily_slate(args: argparse.Namespace) -> None:
-    """Fetch today's scheduled games + probable pitchers from the MLB Stats API."""
-    print("[daily-slate] stub — not yet implemented")
-
-
-def cmd_refresh_weather(args: argparse.Namespace) -> None:
-    """Fetch weather for each stadium hosting a game today and store on games row."""
-    print("[refresh-weather] stub — not yet implemented")
-
-
-def cmd_project(args: argparse.Namespace) -> None:
-    """Generate batter_projections and game_projections for today's slate."""
-    print("[project] stub — not yet implemented")
+def _date_arg(s: str) -> date:
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"Invalid date {s!r} — expected YYYY-MM-DD (e.g. 2026-04-15)"
+        )
 
 
 def cmd_smoke(args: argparse.Namespace) -> None:
@@ -88,15 +83,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_backfill = sub.add_parser("backfill-stats", help="Pull historical game logs via pybaseball")
     p_backfill.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
 
-    sub.add_parser("daily-slate",     help="Fetch today's games + probable pitchers")
-    sub.add_parser("refresh-weather", help="Attach weather to today's games")
+    p_slate   = sub.add_parser("daily-slate",     help="Fetch today's games + probable pitchers")
+    p_weather = sub.add_parser("refresh-weather", help="Attach weather to today's games")
 
     p_skills = sub.add_parser("refresh-skills", help="Recompute batter/pitcher skill aggregates")
     p_skills.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
 
-    sub.add_parser("project",      help="Compute projections for today's slate")
+    p_project      = sub.add_parser("project",      help="Compute projections for today's slate")
     sub.add_parser("smoke",        help="DB connectivity sanity check")
     sub.add_parser("smoke-skills", help="Print top batters/pitchers from skill tables")
+    p_smoke_slate    = sub.add_parser("smoke-slate",    help="Print today's slate with weather and probables")
+    p_smoke_project  = sub.add_parser("smoke-project",  help="Run project and verify projection counts")
+
+    # Shared --date flag for date-scoped commands.
+    # Default is None; each command resolves it to eastern_today() if absent.
+    for p in (p_slate, p_weather, p_project, p_smoke_slate, p_smoke_project):
+        p.add_argument(
+            "--date",
+            metavar="YYYY-MM-DD",
+            type=_date_arg,
+            default=None,
+            help="Date to process (default: today in US/Eastern)",
+        )
 
     return parser
 
@@ -110,6 +118,8 @@ COMMANDS = {
     "project":         cmd_project,
     "smoke":           cmd_smoke,
     "smoke-skills":    cmd_smoke_skills,
+    "smoke-slate":     cmd_smoke_slate,
+    "smoke-project":   cmd_smoke_project,
 }
 
 
