@@ -16,16 +16,14 @@ Subcommands:
 
 import argparse
 import sys
+from pathlib import Path
+
+from ingester.commands.load_static import cmd_load_static
 
 
 # ---------------------------------------------------------------------------
 # Subcommand stubs
 # ---------------------------------------------------------------------------
-
-def cmd_load_static(args: argparse.Namespace) -> None:
-    """Seed teams and stadiums from /data/stadiums.json into the DB."""
-    print("[load-static] stub — not yet implemented")
-
 
 def cmd_backfill_stats(args: argparse.Namespace) -> None:
     """Pull historical game-level stats via pybaseball and upsert player_game_stats."""
@@ -87,7 +85,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("load-static",     help="Seed teams + stadiums from /data/stadiums.json")
+    p_static = sub.add_parser("load-static", help="Seed teams + stadiums from /data/stadiums.json")
+    p_static.add_argument(
+        "--data-dir",
+        default=str(Path(__file__).parent.parent / "data"),
+        help="Directory containing stadiums.json (default: ../data)",
+    )
     sub.add_parser("backfill-stats",  help="Pull historical game logs via pybaseball")
     sub.add_parser("daily-slate",     help="Fetch today's games + probable pitchers")
     sub.add_parser("refresh-weather", help="Attach weather to today's games")
