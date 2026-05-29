@@ -20,6 +20,7 @@ public class ProjectionRepository {
             bp.p_hit_1plus, bp.p_hit_2plus, bp.p_hr, bp.p_k_1plus,
             bp.expected_hits, bp.expected_total_bases,
             bp.adj_park, bp.adj_pitcher, bp.adj_weather_hr, bp.adj_weather_hits,
+            bp.pitcher_data_quality,
             p.full_name     AS batter_name,
             p.bats,
             p.position,
@@ -78,7 +79,8 @@ public class ProjectionRepository {
             probs,
             toDouble(rs.getBigDecimal("expected_hits")),
             toDouble(rs.getBigDecimal("expected_total_bases")),
-            adjs);
+            adjs,
+            rs.getString("pitcher_data_quality"));
 
         return new BatterRow(rs.getBoolean("is_home"), rs.getString("home_abbr"), rs.getString("away_abbr"), proj);
     }

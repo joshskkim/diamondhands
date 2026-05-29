@@ -7,5 +7,6 @@ public record BatterProjectionDto(
     ProbabilitiesDto probabilities,
     Double expectedHits,
     Double expectedTotalBases,
-    AdjustmentsDto adjustments
+    AdjustmentsDto adjustments,
+    String pitcherDataQuality
 ) {}

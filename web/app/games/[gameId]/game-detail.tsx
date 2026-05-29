@@ -45,12 +45,26 @@ function kClass(p: number) {
 
 type SortCol = 'hit1plus' | 'hit2plus' | 'hr' | 'k1plus'
 
-function adjTooltip(finalVal: number, adjs: Adjustments, isHr: boolean): string {
+function pitcherQualityLabel(q: string | null): string {
+  if (q === 'matchup') return 'Matchup sample'
+  if (q === 'overall') return 'Overall pitcher stats'
+  if (q === 'league_avg') return 'Unknown pitcher (league avg)'
+  return ''
+}
+
+function adjTooltip(
+  finalVal: number,
+  adjs: Adjustments,
+  isHr: boolean,
+  pitcherDataQuality: string | null,
+): string {
   const w = isHr ? adjs.weatherHr : adjs.weatherHit
   const combined = (adjs.park ?? 1) * (adjs.pitcher ?? 1) * (w ?? 1)
   const base = combined !== 0 ? finalVal / combined : finalVal
   const f = (n: number | null | undefined) => (n != null ? n.toFixed(3) : '—')
-  return `Base: ${f(base)} · Park ×${f(adjs.park)} · Pitcher ×${f(adjs.pitcher)} · Weather ×${f(w)} → ${f(finalVal)}`
+  const breakdown = `Base: ${f(base)} · Park ×${f(adjs.park)} · Pitcher ×${f(adjs.pitcher)} · Weather ×${f(w)} → ${f(finalVal)}`
+  const ql = pitcherQualityLabel(pitcherDataQuality)
+  return ql ? `${breakdown}\n${ql}` : breakdown
 }
 
 // ── batter table ─────────────────────────────────────────────────────────────
@@ -128,25 +142,25 @@ function BatterTable({
                 </td>
                 <td
                   className={cn('px-2 py-2 text-right tabular-nums', hitClass(p.hit1plus))}
-                  title={adjTooltip(p.hit1plus, a, false)}
+                  title={adjTooltip(p.hit1plus, a, false, b.pitcherDataQuality)}
                 >
                   {pct(p.hit1plus)}
                 </td>
                 <td
                   className="px-2 py-2 text-right tabular-nums text-zinc-700"
-                  title={adjTooltip(p.hit2plus, a, false)}
+                  title={adjTooltip(p.hit2plus, a, false, b.pitcherDataQuality)}
                 >
                   {pct(p.hit2plus)}
                 </td>
                 <td
                   className={cn('px-2 py-2 text-right tabular-nums', hrClass(p.hr))}
-                  title={adjTooltip(p.hr, a, true)}
+                  title={adjTooltip(p.hr, a, true, b.pitcherDataQuality)}
                 >
                   {pct(p.hr)}
                 </td>
                 <td
                   className={cn('px-2 py-2 text-right tabular-nums', kClass(p.k1plus))}
-                  title={adjTooltip(p.k1plus, a, false)}
+                  title={adjTooltip(p.k1plus, a, false, b.pitcherDataQuality)}
                 >
                   {pct(p.k1plus)}
                 </td>

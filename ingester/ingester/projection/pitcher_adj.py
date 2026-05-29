@@ -26,6 +26,17 @@ class PitcherHandSplit:
     k_rate: float
 
 
+# Synthetic league-average pitcher used as Tier 3 fallback.
+# All rates equal league averages → compute_pitcher_adjustments returns ≈ 1.0 multipliers.
+LEAGUE_AVG_PITCHER = PitcherHandSplit(
+    vs_handedness="*",
+    batters_faced=9999,
+    hits_per_pa=LEAGUE_HIT_PER_PA,
+    hr_per_pa=LEAGUE_HR_PER_PA,
+    k_rate=LEAGUE_K_PER_PA,
+)
+
+
 @dataclass(frozen=True)
 class PitcherAdjustments:
     hit: float
@@ -112,3 +123,33 @@ def pitcher_adjustments_for_batter(
     """Select split (with fallback) and return hit / HR / K multipliers."""
     split = select_pitcher_split(splits, bats, pitcher_throws)
     return compute_pitcher_adjustments(split)
+
+
+def resolve_pitcher_skill(
+    splits: list[PitcherHandSplit],
+    batter_hand: str,
+    pitcher_throws: str | None = None,
+) -> tuple[PitcherHandSplit, str]:
+    """
+    Three-tier pitcher skill resolution. Returns (split, quality_tag).
+
+    Tier 1 'matchup'    — vs-handedness row with BF ≥ MIN_BF_PITCHER_HANDEDNESS.
+    Tier 2 'overall'    — BF-weighted average of both hands when total BF ≥ threshold.
+    Tier 3 'league_avg' — synthetic league-average pitcher (adjustment multipliers ≈ 1.0).
+    """
+    if splits:
+        hand = effective_bats(batter_hand, pitcher_throws)
+        by_hand = {s.vs_handedness.upper(): s for s in splits}
+        matchup = by_hand.get(hand)
+
+        # Tier 1: matchup-specific split with sufficient sample.
+        if matchup is not None and matchup.batters_faced >= MIN_BF_PITCHER_HANDEDNESS:
+            return matchup, "matchup"
+
+        # Tier 2: overall both-hands average with sufficient combined sample.
+        total_bf = sum(s.batters_faced for s in splits)
+        if total_bf >= MIN_BF_PITCHER_HANDEDNESS:
+            return overall_pitcher_split(list(by_hand.values())), "overall"
+
+    # Tier 3: no usable data — fall back to league average.
+    return LEAGUE_AVG_PITCHER, "league_avg"

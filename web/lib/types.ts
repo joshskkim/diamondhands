@@ -81,6 +81,7 @@ export interface BatterProjection {
   expectedHits: number
   expectedTotalBases: number
   adjustments: Adjustments
+  pitcherDataQuality: string | null
 }
 
 export interface TeamBatters {

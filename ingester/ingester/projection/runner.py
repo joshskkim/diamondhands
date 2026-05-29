@@ -19,7 +19,8 @@ from ingester.projection.constants import LINEUP_SIZE_HITTERS, LINEUP_STARTERS
 from ingester.projection.park_adj import ParkAdjustments, ParkFactors, compute_park_adjustments
 from ingester.projection.pitcher_adj import (
     PitcherHandSplit,
-    pitcher_adjustments_for_batter,
+    compute_pitcher_adjustments,
+    resolve_pitcher_skill,
 )
 from ingester.projection.weather_adj import compute_weather_adjustments
 
@@ -249,6 +250,7 @@ def _upsert_batter_projection(
     opposing_pitcher_id: int,
     is_home: bool,
     proj,
+    pitcher_data_quality: str,
 ) -> None:
     conn.execute(
         """
@@ -258,6 +260,7 @@ def _upsert_batter_projection(
             p_hit_1plus, p_hit_2plus, p_hr, p_k_1plus,
             expected_hits, expected_total_bases,
             adj_park, adj_pitcher, adj_weather_hr, adj_weather_hits,
+            pitcher_data_quality,
             computed_at
         )
         VALUES (
@@ -266,23 +269,25 @@ def _upsert_batter_projection(
             %s, %s, %s, %s,
             %s, %s,
             %s, %s, %s, %s,
+            %s,
             NOW()
         )
         ON CONFLICT (game_id, player_id) DO UPDATE SET
-            opposing_pitcher_id = EXCLUDED.opposing_pitcher_id,
-            is_home             = EXCLUDED.is_home,
-            expected_pa         = EXCLUDED.expected_pa,
-            p_hit_1plus         = EXCLUDED.p_hit_1plus,
-            p_hit_2plus         = EXCLUDED.p_hit_2plus,
-            p_hr                = EXCLUDED.p_hr,
-            p_k_1plus           = EXCLUDED.p_k_1plus,
-            expected_hits       = EXCLUDED.expected_hits,
-            expected_total_bases = EXCLUDED.expected_total_bases,
-            adj_park            = EXCLUDED.adj_park,
-            adj_pitcher         = EXCLUDED.adj_pitcher,
-            adj_weather_hr      = EXCLUDED.adj_weather_hr,
-            adj_weather_hits    = EXCLUDED.adj_weather_hits,
-            computed_at         = NOW()
+            opposing_pitcher_id   = EXCLUDED.opposing_pitcher_id,
+            is_home               = EXCLUDED.is_home,
+            expected_pa           = EXCLUDED.expected_pa,
+            p_hit_1plus           = EXCLUDED.p_hit_1plus,
+            p_hit_2plus           = EXCLUDED.p_hit_2plus,
+            p_hr                  = EXCLUDED.p_hr,
+            p_k_1plus             = EXCLUDED.p_k_1plus,
+            expected_hits         = EXCLUDED.expected_hits,
+            expected_total_bases  = EXCLUDED.expected_total_bases,
+            adj_park              = EXCLUDED.adj_park,
+            adj_pitcher           = EXCLUDED.adj_pitcher,
+            adj_weather_hr        = EXCLUDED.adj_weather_hr,
+            adj_weather_hits      = EXCLUDED.adj_weather_hits,
+            pitcher_data_quality  = EXCLUDED.pitcher_data_quality,
+            computed_at           = NOW()
         """,
         (
             game_id,
@@ -300,6 +305,7 @@ def _upsert_batter_projection(
             round(proj.adj_pitcher_hit, 3),
             round(proj.adj_weather_hr, 3),
             round(proj.adj_weather_hit, 3),
+            pitcher_data_quality,
         ),
     )
 
@@ -331,12 +337,11 @@ def _project_team_side(
 
     splits = _load_pitcher_splits(conn, opposing_pitcher_id, season)
     if not splits:
-        log.warning(
-            "game %s: no pitcher_skill for pitcher %s",
+        log.info(
+            "game %s: no pitcher_skill for pitcher %s — using league-avg fallback",
             game.game_id,
             opposing_pitcher_id,
         )
-        return None
 
     # v1: retractable domes assumed closed (no open/closed flag on games yet).
     is_retractable_open = False
@@ -355,12 +360,13 @@ def _project_team_side(
             )
             continue
 
+        pitcher_split, pitcher_quality = resolve_pitcher_skill(
+            splits, hitter.bats, pitcher_throws
+        )
         park_adj = compute_park_adjustments(
             park, hitter.bats, pitcher_throws
         )
-        pitcher_adj = pitcher_adjustments_for_batter(
-            splits, hitter.bats, pitcher_throws
-        )
+        pitcher_adj = compute_pitcher_adjustments(pitcher_split)
         adj_weather_hit, adj_weather_hr = compute_weather_adjustments(
             temperature_f=game.temperature_f or 70.0,
             wind_speed_mph=game.wind_speed_mph or 0.0,
@@ -386,6 +392,7 @@ def _project_team_side(
             opposing_pitcher_id,
             is_home,
             proj,
+            pitcher_quality,
         )
         rows_written += 1
         summary.batter_rows += 1
