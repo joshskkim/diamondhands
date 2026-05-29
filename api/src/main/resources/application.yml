@@ -1,0 +1,22 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/diamond
+    username: diamond
+    password: diamond
+    hikari:
+      connection-timeout: 5000
+      maximum-pool-size: 10
+  jpa:
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+  flyway:
+    enabled: false   # Migrations are run by docker-compose flyway service
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      connect-timeout: 2s
+
+server:
+  port: 8080
