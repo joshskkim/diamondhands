@@ -16,11 +16,13 @@ from ingester.projection.constants import (
     LEAGUE_HIT_PER_PA,
     LEAGUE_HR_PER_PA,
     LEAGUE_ISO,
+    LEAGUE_K_PER_PA,
     LEAGUE_RUNS_PER_GAME_BASE,
     LEAGUE_XWOBA,
     PA_L30_BLEND_CAP,
     PA_L30_FULL_WEIGHT,
     PROB_DECIMAL_PLACES,
+    SHRINKAGE_ALPHA,
     TEAM_RUNS_XWOBA_EXPONENT,
 )
 from ingester.projection.park_adj import ParkAdjustments
@@ -151,6 +153,23 @@ def adjusted_rates_from_factors(
     )
 
 
+def shrink_rates(rates: AdjustedRates) -> AdjustedRates:
+    """
+    Pull adjusted per-PA rates toward league means before probabilities (v1.5.3).
+
+    The multiplicative adjustment chain (skill × pitcher × park × weather) compounds
+    and over-states the tails — a top batter in a good matchup stacks several
+    multipliers on an already-elite base. Blending each rate toward its league mean
+    by SHRINKAGE_ALPHA reins that in.
+    """
+    a = SHRINKAGE_ALPHA
+    return AdjustedRates(
+        hit_per_pa=(1.0 - a) * rates.hit_per_pa + a * LEAGUE_HIT_PER_PA,
+        hr_per_pa=(1.0 - a) * rates.hr_per_pa + a * LEAGUE_HR_PER_PA,
+        k_per_pa=(1.0 - a) * rates.k_per_pa + a * LEAGUE_K_PER_PA,
+    )
+
+
 def avg_bases_per_hit(iso_blend: float) -> float:
     raw = 1.0 + iso_blend * AVG_BASES_PER_HIT_ISO_MULT
     return max(AVG_BASES_PER_HIT_CLAMP[0], min(AVG_BASES_PER_HIT_CLAMP[1], raw))
@@ -209,17 +228,35 @@ def project_batter(
     adj_weather_hit: float,
     adj_weather_hr: float,
     expected_pa: float = EXPECTED_PA_PER_STARTER,
+    matchup_xwoba: float | None = None,
+    matchup_k_rate: float | None = None,
+    matchup_iso: float | None = None,
 ) -> BatterProjection:
     """
     Compute full batter projection from blended skill and environment adjustments.
 
-    v1 uses a flat ``expected_pa`` for every starter (lineup order unknown).
+    Expected PA comes from the confirmed batting order (v2.0) or a flat fallback.
+
+    v2.1: when ``matchup_*`` are supplied, the season/L30 skill blend is replaced by
+    the pitch-mix matchup values — xwOBA drives hit rate, k_rate drives the K rate,
+    ISO drives HR rate. All downstream adjustments (pitcher, park, weather,
+    shrinkage, clamps) are unchanged. Omitting them reproduces v2.0.0 exactly.
     """
     blends = blend_batter_skills(skill)
+    if matchup_xwoba is not None:
+        blends = SkillBlends(
+            xwoba=matchup_xwoba,
+            k_rate=matchup_k_rate if matchup_k_rate is not None else blends.k_rate,
+            iso=matchup_iso if matchup_iso is not None else blends.iso,
+            weight_l30=blends.weight_l30,
+        )
     base = base_rates_from_blend(blends)
     adjusted = adjusted_rates_from_factors(
         base, pitcher, park, adj_weather_hit, adj_weather_hr
     )
+    # Shrink toward league means before deriving any outputs so probabilities and
+    # expected counts stay consistent with the rates actually stored for audit.
+    adjusted = shrink_rates(adjusted)
     probs = compute_probabilities(adjusted, expected_pa)
     exp_hits, exp_tb = compute_expected_counts(adjusted, blends.iso, expected_pa)
 

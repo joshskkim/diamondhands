@@ -127,10 +127,36 @@ def _write_pitcher_snapshot(
 # Command entrypoint
 # ---------------------------------------------------------------------------
 
+def _delete_existing_snapshots(conn: psycopg.Connection, mondays: list[date]) -> None:
+    """
+    Remove all snapshot rows for the target dates so a rebuild can't leave stale
+    rows behind. Needed when the player population changes (e.g. lowering the PA
+    floor): plain upsert only overwrites players still present, leaving dropped
+    players' old rows in place. Delete-then-insert guarantees a clean rebuild.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM batter_skill_snapshots WHERE as_of_date = ANY(%s)",
+            (mondays,),
+        )
+        n_batter = cur.rowcount
+        cur.execute(
+            "DELETE FROM pitcher_skill_snapshots WHERE as_of_date = ANY(%s)",
+            (mondays,),
+        )
+        n_pitcher = cur.rowcount
+    conn.commit()
+    print(
+        f"[refresh-skill-snapshots] --force-rebuild: cleared "
+        f"{n_batter} batter + {n_pitcher} pitcher snapshot rows for {len(mondays)} dates"
+    )
+
+
 def cmd_refresh_skill_snapshots(args: argparse.Namespace) -> None:
     season: int = args.season
     start: date = args.start
     end: date = args.end
+    force_rebuild: bool = getattr(args, "force_rebuild", False)
 
     require_valid_season(season, cmd="refresh-skill-snapshots")
 
@@ -154,6 +180,9 @@ def cmd_refresh_skill_snapshots(args: argparse.Namespace) -> None:
     total_pitcher_rows = 0
 
     try:
+        if force_rebuild:
+            _delete_existing_snapshots(conn, mondays)
+
         for monday in mondays:
             batter_rows = compute_batter_skill_rows(conn, season, cutoff_date=monday)
             _write_batter_snapshot(conn, monday, batter_rows)

@@ -7,10 +7,14 @@ Usage:
 Subcommands:
     load-static      Seed teams and stadiums from /data/stadiums.json
     backfill-stats   Pull historical player_game_stats via pybaseball
+    backfill-games   Populate historical games for a date range from MLB Stats API
     daily-slate      Fetch today's games + probable pitchers from MLB Stats API
+    refresh-lineups  Pull today's confirmed batting orders (cron-friendly, idempotent)
+    backfill-lineups Populate historical confirmed lineups for a date range (backtesting)
     refresh-weather  Attach weather snapshot to today's games
     refresh-skills   Recompute batter_skill and pitcher_skill aggregates
     project          Compute batter_projections for today's slate
+    backtest         Run full backtesting suite comparing predictions to actuals
     smoke            End-to-end sanity check (read-only)
     smoke-project    Run project + verify projection row counts
 """
@@ -22,10 +26,17 @@ from pathlib import Path
 
 from ingester.commands.load_static import cmd_load_static
 from ingester.commands.backfill_stats import cmd_backfill_stats
+from ingester.commands.backfill_games import cmd_backfill_games
 from ingester.commands.daily_slate import cmd_daily_slate
+from ingester.commands.lineups import cmd_backfill_lineups, cmd_refresh_lineups
 from ingester.commands.refresh_weather import cmd_refresh_weather
 from ingester.commands.refresh_skills import cmd_refresh_skills
 from ingester.commands.skill_snapshots import cmd_refresh_skill_snapshots
+from ingester.commands.pitch_aggregations import (
+    cmd_refresh_pitch_aggregations,
+    cmd_refresh_pitch_snapshots,
+)
+from ingester.commands.backtest import cmd_backtest
 from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
 from ingester.projection.runner import cmd_project, cmd_smoke_project
 
@@ -84,8 +95,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_backfill = sub.add_parser("backfill-stats", help="Pull historical game logs via pybaseball")
     p_backfill.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
 
+    p_bf_games = sub.add_parser("backfill-games", help="Populate historical games for a date range")
+    p_bf_games.add_argument(
+        "--start", metavar="YYYY-MM-DD", type=_date_arg, required=True,
+        help="First date in range (inclusive)",
+    )
+    p_bf_games.add_argument(
+        "--end", metavar="YYYY-MM-DD", type=_date_arg, required=True,
+        help="Last date in range (inclusive)",
+    )
+
     p_slate   = sub.add_parser("daily-slate",     help="Fetch today's games + probable pitchers")
+    p_lineups = sub.add_parser("refresh-lineups", help="Pull today's confirmed batting orders")
     p_weather = sub.add_parser("refresh-weather", help="Attach weather to today's games")
+
+    p_bf_lineups = sub.add_parser(
+        "backfill-lineups", help="Populate historical confirmed lineups for a date range"
+    )
+    p_bf_lineups.add_argument(
+        "--start", metavar="YYYY-MM-DD", type=_date_arg, required=True,
+        help="First date in range (inclusive)",
+    )
+    p_bf_lineups.add_argument(
+        "--end", metavar="YYYY-MM-DD", type=_date_arg, required=True,
+        help="Last date in range (inclusive)",
+    )
 
     p_skills = sub.add_parser("refresh-skills", help="Recompute batter/pitcher skill aggregates")
     p_skills.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
@@ -107,8 +141,56 @@ def build_parser() -> argparse.ArgumentParser:
         "--interval", choices=["weekly"], default="weekly",
         help="Snapshot frequency (default: weekly = every Monday)",
     )
+    p_snapshots.add_argument(
+        "--force-rebuild", action="store_true", default=False, dest="force_rebuild",
+        help="Delete existing snapshots for the target dates before rebuilding "
+             "(required to clear stale rows when the player population changes)",
+    )
+
+    p_pitch_agg = sub.add_parser(
+        "refresh-pitch-aggregations",
+        help="Aggregate pitch-level Statcast into batter pitch-type stats, arsenals, baselines",
+    )
+    p_pitch_agg.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
+    p_pitch_agg.add_argument(
+        "--as-of", metavar="YYYY-MM-DD", type=_date_arg, default=None, dest="as_of",
+        help="Aggregate season-to-date through this date (default: today in US/Eastern)",
+    )
+
+    p_pitch_snap = sub.add_parser(
+        "refresh-pitch-snapshots",
+        help="Backfill point-in-time pitch-mix snapshots (one per Monday) for backtesting",
+    )
+    p_pitch_snap.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
+    p_pitch_snap.add_argument(
+        "--start", metavar="YYYY-MM-DD", type=_date_arg, required=True,
+        help="First date in snapshot range",
+    )
+    p_pitch_snap.add_argument(
+        "--end", metavar="YYYY-MM-DD", type=_date_arg, required=True,
+        help="Last date in snapshot range",
+    )
+    p_pitch_snap.add_argument(
+        "--interval", choices=["weekly"], default="weekly",
+        help="Snapshot frequency (default: weekly = every Monday)",
+    )
 
     p_project      = sub.add_parser("project",      help="Compute projections for today's slate")
+
+    p_backtest = sub.add_parser("backtest", help="Run backtesting suite comparing predictions to actuals")
+    p_backtest.add_argument(
+        "--start", metavar="YYYY-MM-DD", type=_date_arg, required=True,
+        help="First date in backtest range",
+    )
+    p_backtest.add_argument(
+        "--end", metavar="YYYY-MM-DD", type=_date_arg, required=True,
+        help="Last date in backtest range",
+    )
+    p_backtest.add_argument(
+        "--csv", action="store_true", default=False,
+        help="Write per-row predictions to /tmp/backtest_<run_id>.csv",
+    )
+
     sub.add_parser("smoke",        help="DB connectivity sanity check")
     sub.add_parser("smoke-skills", help="Print top batters/pitchers from skill tables")
     p_smoke_slate    = sub.add_parser("smoke-slate",    help="Print today's slate with weather and probables")
@@ -116,7 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Shared --date flag for date-scoped commands.
     # Default is None; each command resolves it to eastern_today() if absent.
-    for p in (p_slate, p_weather, p_project, p_smoke_slate, p_smoke_project):
+    for p in (p_slate, p_lineups, p_weather, p_project, p_smoke_slate, p_smoke_project):
         p.add_argument(
             "--date",
             metavar="YYYY-MM-DD",
@@ -141,11 +223,17 @@ def build_parser() -> argparse.ArgumentParser:
 COMMANDS = {
     "load-static":              cmd_load_static,
     "backfill-stats":           cmd_backfill_stats,
+    "backfill-games":           cmd_backfill_games,
     "daily-slate":              cmd_daily_slate,
+    "refresh-lineups":          cmd_refresh_lineups,
+    "backfill-lineups":         cmd_backfill_lineups,
     "refresh-weather":          cmd_refresh_weather,
     "refresh-skills":           cmd_refresh_skills,
     "refresh-skill-snapshots":  cmd_refresh_skill_snapshots,
+    "refresh-pitch-aggregations": cmd_refresh_pitch_aggregations,
+    "refresh-pitch-snapshots":  cmd_refresh_pitch_snapshots,
     "project":                  cmd_project,
+    "backtest":                 cmd_backtest,
     "smoke":                    cmd_smoke,
     "smoke-skills":             cmd_smoke_skills,
     "smoke-slate":              cmd_smoke_slate,

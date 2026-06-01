@@ -13,11 +13,18 @@ import psycopg
 
 from ingester.db import eastern_today, get_connection
 from ingester.projection.constants import (
+    LEAGUE_BB_PER_PA,
+    LEAGUE_HIT_PER_PA,
+    LEAGUE_HR_PER_PA,
     LEAGUE_ISO,
     LEAGUE_K_PER_PA,
+    LEAGUE_WOBA,
     LEAGUE_XWOBA,
     L30_MIN_PA,
     MIN_PA_BATTER_SEASON,
+    REGRESSION_K_BF,
+    REGRESSION_K_PA,
+    REGRESSION_K_PA_L30,
 )
 from ingester.statcast import (
     _terminal_pa,
@@ -30,18 +37,27 @@ from ingester.statcast import (
 MIN_BF_PITCHER = 50    # minimum BF vs a handedness for pitcher_skill
 
 
+def _regress(raw: float | None, league: float, weight_player: float) -> float:
+    """
+    Empirical-Bayes blend of a raw rate toward the league mean by sample weight.
+
+    weight_player = n / (n + K); weight_league is the complement. A None raw rate
+    (couldn't be computed from the sample) collapses to the full league mean.
+    """
+    if raw is None:
+        return round(league, 4)
+    return round(weight_player * raw + (1.0 - weight_player) * league, 4)
+
+
 def _resolve_l30_fields(
     l30_row: tuple | None,
-    *,
-    season_xwoba: float | None,
-    season_k_rate: float | None,
-    season_iso: float | None,
 ) -> tuple[int | None, float | None, float | None, float | None]:
     """
-    Return (pa_l30, xwoba_l30, k_rate_l30, iso_l30) for batter_skill.
+    Return (pa_l30, xwoba_l30, k_rate_l30, iso_l30) for batter_skill, regressed.
 
     If pa_l30 < L30_MIN_PA, all L30 fields are NULL (insufficient recent sample).
-    If pa_l30 >= L30_MIN_PA, every L30 metric is populated (season fallback if needed).
+    Otherwise each metric is regressed toward its league mean using the smaller
+    L30 regression constant (recent form should move faster than season).
     """
     if l30_row is None:
         return None, None, None, None
@@ -50,18 +66,17 @@ def _resolve_l30_fields(
     if pa_l30 < L30_MIN_PA:
         return None, None, None, None
 
-    xwoba_l30 = float(l30_row[2]) if l30_row[2] is not None else season_xwoba
-    k_rate_l30 = float(l30_row[3]) if l30_row[3] is not None else season_k_rate
-    iso_l30 = float(l30_row[4]) if l30_row[4] is not None else season_iso
+    weight = pa_l30 / (pa_l30 + REGRESSION_K_PA_L30)
+    raw_xwoba_l30 = float(l30_row[2]) if l30_row[2] is not None else None
+    raw_k_rate_l30 = float(l30_row[3]) if l30_row[3] is not None else None
+    raw_iso_l30 = float(l30_row[4]) if l30_row[4] is not None else None
 
-    if xwoba_l30 is not None:
-        xwoba_l30 = round(xwoba_l30, 4)
-    if k_rate_l30 is not None:
-        k_rate_l30 = round(k_rate_l30, 4)
-    if iso_l30 is not None:
-        iso_l30 = round(iso_l30, 4)
-
-    return pa_l30, xwoba_l30, k_rate_l30, iso_l30
+    return (
+        pa_l30,
+        _regress(raw_xwoba_l30, LEAGUE_XWOBA, weight),
+        _regress(raw_k_rate_l30, LEAGUE_K_PER_PA, weight),
+        _regress(raw_iso_l30, LEAGUE_ISO, weight),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -107,9 +122,9 @@ def compute_batter_skill_rows(
         WHERE game_date BETWEEN %s AND %s
           AND plate_appearances IS NOT NULL
         GROUP BY player_id
-        HAVING SUM(plate_appearances) >= 1
+        HAVING SUM(plate_appearances) >= %s
         """,
-        (start, as_of),
+        (start, as_of, MIN_PA_BATTER_SEASON),
     ).fetchall()
 
     l30_rows = conn.execute(
@@ -141,28 +156,29 @@ def compute_batter_skill_rows(
         bb = int(bb or 0)
         pa = int(pa or 0)
 
-        use_league = pa < MIN_PA_BATTER_SEASON
-        if use_league:
-            xwoba_f = LEAGUE_XWOBA
-            woba_f = LEAGUE_XWOBA
-            k_rate = round(LEAGUE_K_PER_PA, 4)
-            bb_rate = round(0.085, 4)
-            iso = round(LEAGUE_ISO, 4)
-            babip = None
-        else:
-            xwoba_f = float(xwoba) if xwoba is not None else LEAGUE_XWOBA
-            woba_f = float(woba) if woba is not None else LEAGUE_XWOBA
-            k_rate = round(k / pa, 4) if pa > 0 else None
-            bb_rate = round(bb / pa, 4) if pa > 0 else None
-            iso = round((tb - hits) / ab, 4) if ab > 0 else round(LEAGUE_ISO, 4)
-            babip_d = ab - k - hr
-            babip = round((hits - hr) / babip_d, 4) if babip_d > 0 else None
+        # Empirical-Bayes regression: blend each raw rate toward the league mean
+        # by sample size. No more hard league-average fallback — a 50-PA player
+        # lands ~80% league / 20% own, a 600-PA player ~25% league / 75% own.
+        weight = pa / (pa + REGRESSION_K_PA)
+
+        raw_xwoba = float(xwoba) if xwoba is not None else None
+        raw_woba = float(woba) if woba is not None else None
+        raw_k_rate = k / pa if pa > 0 else None
+        raw_bb_rate = bb / pa if pa > 0 else None
+        raw_iso = (tb - hits) / ab if ab > 0 else None
+
+        xwoba_f = _regress(raw_xwoba, LEAGUE_XWOBA, weight)
+        woba_f = _regress(raw_woba, LEAGUE_WOBA, weight)
+        k_rate = _regress(raw_k_rate, LEAGUE_K_PER_PA, weight)
+        bb_rate = _regress(raw_bb_rate, LEAGUE_BB_PER_PA, weight)
+        iso = _regress(raw_iso, LEAGUE_ISO, weight)
+
+        # babip is stored for reference only (not a model input); leave it raw.
+        babip_d = ab - k - hr
+        babip = round((hits - hr) / babip_d, 4) if babip_d > 0 else None
 
         pa_l30, xwoba_l30, k_rate_l30, iso_l30 = _resolve_l30_fields(
             l30_by_pid.get(pid),
-            season_xwoba=xwoba_f,
-            season_k_rate=k_rate,
-            season_iso=iso,
         )
 
         rows.append({
@@ -227,6 +243,14 @@ def compute_pitcher_skill_rows(
     ph_rows = agg_pitcher_vs_handedness(filtered)
     ph_rows = [r for r in ph_rows if r["batters_faced"] >= MIN_BF_PITCHER]
     for r in ph_rows:
+        # Regress each pitcher×hand rate toward the league mean by batters faced.
+        weight = r["batters_faced"] / (r["batters_faced"] + REGRESSION_K_BF)
+        r["xwoba_against"] = _regress(r["xwoba_against"], LEAGUE_XWOBA, weight)
+        r["woba_against"] = _regress(r["woba_against"], LEAGUE_WOBA, weight)
+        r["k_rate"] = _regress(r["k_rate"], LEAGUE_K_PER_PA, weight)
+        r["bb_rate"] = _regress(r["bb_rate"], LEAGUE_BB_PER_PA, weight)
+        r["hr_per_pa"] = _regress(r["hr_per_pa"], LEAGUE_HR_PER_PA, weight)
+        r["hits_per_pa"] = _regress(r["hits_per_pa"], LEAGUE_HIT_PER_PA, weight)
         r["season"] = season
     return ph_rows
 
@@ -350,7 +374,7 @@ def cmd_refresh_skills(args: argparse.Namespace) -> None:
     ).fetchone()[0]
     print(
         f"  → {n_batters} batters written "
-        f"(min {MIN_PA_BATTER_SEASON} PA for season rates; {with_l30} with L30)"
+        f"(min {MIN_PA_BATTER_SEASON} PA, regressed to mean; {with_l30} with L30)"
     )
 
     print(f"[refresh-skills] Aggregating pitcher_skill for {season}…")

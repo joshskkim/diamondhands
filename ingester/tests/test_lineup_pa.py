@@ -1,0 +1,130 @@
+"""Tests for lineup-aware PA weighting (v2.0 Sprint 1).
+
+Covers the PA_BY_ORDER mapping and _resolve_lineup's confirmed-vs-projected branching.
+_resolve_lineup is exercised with a fake connection so no database is required: the
+confirmed branch reads canned game_lineups rows; the fallback branch is verified by
+monkeypatching _likely_hitters.
+"""
+from __future__ import annotations
+
+from datetime import date
+
+import pytest
+
+from ingester.projection import runner
+from ingester.projection.constants import EXPECTED_PA_PER_STARTER, PA_BY_ORDER
+
+
+# ---------------------------------------------------------------------------
+# Fakes
+# ---------------------------------------------------------------------------
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+class _FakeConn:
+    """Returns the same canned rows for the single game_lineups query in _resolve_lineup."""
+
+    def __init__(self, lineup_rows):
+        self._lineup_rows = lineup_rows
+
+    def execute(self, sql, params=None):
+        return _FakeResult(self._lineup_rows)
+
+
+_AS_OF = date(2025, 4, 15)
+
+
+# ---------------------------------------------------------------------------
+# PA_BY_ORDER mapping
+# ---------------------------------------------------------------------------
+
+class TestPaByOrder:
+    def test_covers_all_nine_slots(self):
+        assert sorted(PA_BY_ORDER.keys()) == list(range(1, 10))
+
+    def test_exact_values(self):
+        assert PA_BY_ORDER == {
+            1: 4.62, 2: 4.51, 3: 4.40, 4: 4.30, 5: 4.20,
+            6: 4.10, 7: 4.00, 8: 3.90, 9: 3.80,
+        }
+
+    def test_monotonic_decreasing(self):
+        values = [PA_BY_ORDER[i] for i in range(1, 10)]
+        assert all(earlier > later for earlier, later in zip(values, values[1:]))
+
+    def test_leadoff_gets_most_nine_hole_least(self):
+        assert PA_BY_ORDER[1] == max(PA_BY_ORDER.values())
+        assert PA_BY_ORDER[9] == min(PA_BY_ORDER.values())
+
+    def test_fallback_constant(self):
+        # Projected lineups use the flat per-starter PA, which sits mid-order.
+        assert EXPECTED_PA_PER_STARTER == 4.0
+
+
+# ---------------------------------------------------------------------------
+# _resolve_lineup
+# ---------------------------------------------------------------------------
+
+class TestResolveLineup:
+    def test_confirmed_lineup_uses_pa_by_order(self, monkeypatch):
+        # Guard: the confirmed branch must NOT consult the L30 proxy.
+        monkeypatch.setattr(
+            runner, "_likely_hitters",
+            lambda *a, **k: pytest.fail("_likely_hitters called for a confirmed lineup"),
+        )
+        # rows: (batting_order, player_id, bats)
+        rows = [(order, 1000 + order, "R") for order in range(1, 10)]
+        conn = _FakeConn(rows)
+
+        hitters = runner._resolve_lineup(
+            conn, game_id=1, team_id=2, is_home=True, as_of=_AS_OF
+        )
+
+        assert len(hitters) == 9
+        assert all(h.lineup_confirmed for h in hitters)
+        assert [h.lineup_position for h in hitters] == list(range(1, 10))
+        assert [h.expected_pa for h in hitters] == [PA_BY_ORDER[i] for i in range(1, 10)]
+        # Leadoff hitter: highest PA, player_id 1001.
+        assert hitters[0].player_id == 1001
+        assert hitters[0].expected_pa == 4.62
+        assert hitters[-1].expected_pa == 3.80
+
+    def test_no_lineup_falls_back_to_proxy(self, monkeypatch):
+        candidates = [
+            runner.HitterCandidate(player_id=500 + i, bats="R", pa_l30=200 - i)
+            for i in range(13)
+        ]
+        monkeypatch.setattr(
+            runner, "_likely_hitters", lambda conn, team_id, as_of: candidates
+        )
+        conn = _FakeConn([])  # no confirmed slots
+
+        hitters = runner._resolve_lineup(
+            conn, game_id=1, team_id=2, is_home=False, as_of=_AS_OF
+        )
+
+        assert len(hitters) == 13
+        assert all(not h.lineup_confirmed for h in hitters)
+        assert all(h.lineup_position is None for h in hitters)
+        assert all(h.expected_pa == EXPECTED_PA_PER_STARTER for h in hitters)
+        assert hitters[0].player_id == 500
+
+    def test_partial_lineup_falls_back(self, monkeypatch):
+        # Fewer than nine posted slots is not a confirmation — use the proxy.
+        proxy = [runner.HitterCandidate(player_id=42, bats="L", pa_l30=120)] * 9
+        monkeypatch.setattr(runner, "_likely_hitters", lambda *a, **k: proxy)
+        conn = _FakeConn([(order, 1000 + order, "R") for order in range(1, 6)])  # 5 slots
+
+        hitters = runner._resolve_lineup(
+            conn, game_id=1, team_id=2, is_home=True, as_of=_AS_OF
+        )
+
+        assert len(hitters) == 9
+        assert all(not h.lineup_confirmed for h in hitters)
+        assert all(h.expected_pa == EXPECTED_PA_PER_STARTER for h in hitters)

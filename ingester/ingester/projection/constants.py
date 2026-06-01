@@ -2,8 +2,19 @@
 
 All rates are per plate appearance unless noted. Coefficients match the v1
 projection spec; change here when backtesting suggests new values.
+Bump MODEL_VERSION whenever the projection logic or constants change.
 """
 from __future__ import annotations
+
+# ---------------------------------------------------------------------------
+# Model identity (increment on any constants or logic change)
+# ---------------------------------------------------------------------------
+
+# Projection model identity. v2.1.0: the pitch-mix matchup drives the batter's
+# hit/K/HR rates (replacing the season blend). Note the full-season backtest found
+# this Brier-neutral-to-slightly-negative vs v2.0.0 — kept for an explainable
+# projection that matches the matchup surfaced in the UI (user decision).
+MODEL_VERSION: str = "v2.1.0"
 
 # ---------------------------------------------------------------------------
 # League-average reference (2025 MLB approximations)
@@ -14,7 +25,41 @@ LEAGUE_WOBA: float = 0.318
 LEAGUE_HIT_PER_PA: float = 0.225
 LEAGUE_HR_PER_PA: float = 0.030
 LEAGUE_K_PER_PA: float = 0.225
+LEAGUE_BB_PER_PA: float = 0.085
 LEAGUE_ISO: float = 0.155
+
+# ---------------------------------------------------------------------------
+# Empirical-Bayes regression to the mean (v1.6.0)
+# ---------------------------------------------------------------------------
+# refresh-skills regresses every player's raw rates toward the league mean by
+# sample size: weight_player = n / (n + K). Replaces the old hard league-average
+# fallback for sub-threshold players (which crushed prediction variance — 50% of
+# snapshots were sitting at exactly LEAGUE_XWOBA). Larger K = more regression.
+
+# "Phantom" league-average PAs added to each batter's season sample.
+REGRESSION_K_PA: int = 200
+# Smaller K for the 30-day window (recent form should move faster).
+REGRESSION_K_PA_L30: int = 80
+# Pitcher batters-faced regression. BF accrues ~1:1 with PA, so no scaling.
+REGRESSION_K_BF: int = 100
+
+# ---------------------------------------------------------------------------
+# Pitch-mix matchup regression (v2.1.0)
+# ---------------------------------------------------------------------------
+# Per-pitch-type batter/pitcher samples are thin, so the matchup model regresses
+# each per-pitch-type rate toward its league baseline by sample size at query
+# time (matchup.py), same empirical-Bayes shape as the skill blend. Phantom
+# league-average pitches added to each sample:
+REGRESSION_K_PITCHES_BATTER: int = 100
+REGRESSION_K_PITCHES_PITCHER: int = 200
+
+# A pitcher needs at least this many arsenal pitches (vs the batter's hand) before
+# we trust a matchup; below it, fall back to the v2.0.0 season blend.
+MATCHUP_MIN_ARSENAL_PITCHES: int = 100
+
+# When the batter has data for less than this share of the pitcher's mix, the
+# uncovered share is filled with the batter's overall blend (partial fallback).
+MATCHUP_MIN_COVERED_USAGE: float = 0.6
 
 # ---------------------------------------------------------------------------
 # Batter skill blending (L30 vs season)
@@ -24,8 +69,9 @@ LEAGUE_ISO: float = 0.155
 PA_L30_FULL_WEIGHT: int = 150
 PA_L30_BLEND_CAP: float = 0.6
 
-# refresh-skills: season totals require this many PA; below → league-average skill.
-MIN_PA_BATTER_SEASON: int = 150
+# refresh-skills: minimum season PA to get a (regressed) batter_skill row.
+# Below this, the sample is too noisy to blend even with regression — skip entirely.
+MIN_PA_BATTER_SEASON: int = 30
 
 # L30 window in refresh-skills: below this PA, L30 columns are intentionally NULL.
 L30_MIN_PA: int = 30
@@ -47,23 +93,26 @@ LINEUP_SIZE_HITTERS: int = 13
 # Starters used for team run aggregation (9 lineup spots).
 LINEUP_STARTERS: int = 9
 
-# Fixed team PA budget for v1 (actual weights sum to ~37; we use flat PA below).
+# Fixed team PA budget (actual weights sum to ~37; informational only).
 TEAM_PA_ESTIMATE: float = 38.0
 
-# Order-weighted PA when lineup order is known (v2). Sum ≈ 37.
-LINEUP_PA_WEIGHTS: tuple[float, ...] = (
-    4.6,
-    4.4,
-    4.3,
-    4.2,
-    4.1,
-    4.0,
-    3.9,
-    3.8,
-    3.7,
-)
+# v2.0: expected PA by confirmed batting-order slot (1-9). The leadoff hitter gets
+# ~0.8 more PA/game than the 9-hole; values from research (Tom Tango et al.) and
+# used directly when a lineup is confirmed. Sum ≈ 38.3.
+PA_BY_ORDER: dict[int, float] = {
+    1: 4.62,
+    2: 4.51,
+    3: 4.40,
+    4: 4.30,
+    5: 4.20,
+    6: 4.10,
+    7: 4.00,
+    8: 3.90,
+    9: 3.80,
+}
 
-# v1: unknown batting order → same expected PA for every projected starter.
+# Fallback when batting order is unknown (lineup not yet confirmed): flat PA for
+# every projected starter, same as v1.
 EXPECTED_PA_PER_STARTER: float = 4.0
 
 # ---------------------------------------------------------------------------
@@ -104,6 +153,14 @@ DOME_WEATHER_ADJ: float = 1.0
 # Per-PA rate and derived-count clamps
 # ---------------------------------------------------------------------------
 
+# Shrinkage toward league means, applied to the final adjusted per-PA rates
+# before computing probabilities (v1.5.3). Curbs over-confidence at the tails
+# from the compounding multiplicative adjustment chain. Higher = more shrinkage.
+# Re-tuned 0.40 → 0.20 in v1.6.0: upstream empirical-Bayes regression now does
+# most of the pulling, so this is a lighter final safety net (0.20 gave the
+# flattest HR calibration; 0.40 over-shrank K, 0.0 let the tails drift).
+SHRINKAGE_ALPHA: float = 0.20
+
 # Hard clamps on final adjusted per-PA rates (after all multipliers).
 ADJUSTED_HIT_PER_PA_CLAMP: tuple[float, float] = (0.10, 0.45)
 ADJUSTED_HR_PER_PA_CLAMP: tuple[float, float] = (0.001, 0.10)
@@ -122,8 +179,8 @@ AVG_BASES_PER_HIT_CLAMP: tuple[float, float] = (1.0, 2.5)
 # Team run expectation (v1 Pythagorean-ish proxy; weak — see PROJECTION_MODEL.md)
 # ---------------------------------------------------------------------------
 
-LEAGUE_RUNS_PER_GAME_BASE: float = 4.5
-TEAM_RUNS_XWOBA_EXPONENT: float = 1.8
+LEAGUE_RUNS_PER_GAME_BASE: float = 4.3
+TEAM_RUNS_XWOBA_EXPONENT: float = 1.4
 
 # ---------------------------------------------------------------------------
 # Probability output

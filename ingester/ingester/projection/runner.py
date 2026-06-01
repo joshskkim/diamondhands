@@ -2,20 +2,30 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import psycopg
 
 from ingester.db import eastern_today, get_connection
 from ingester.projection.batter_model import (
     BatterSkillInput,
+    blend_batter_skills,
     expected_team_runs,
     project_batter,
 )
-from ingester.projection.constants import LINEUP_SIZE_HITTERS, LINEUP_STARTERS
+from ingester.projection.constants import (
+    EXPECTED_PA_PER_STARTER,
+    LEAGUE_XWOBA,
+    LINEUP_SIZE_HITTERS,
+    LINEUP_STARTERS,
+    MODEL_VERSION,
+    PA_BY_ORDER,
+)
+from ingester.projection.matchup import MatchupResult, compute_matchup
 from ingester.projection.park_adj import ParkAdjustments, ParkFactors, compute_park_adjustments
 from ingester.projection.pitcher_adj import (
     PitcherHandSplit,
@@ -49,6 +59,7 @@ class SlateGame:
     temperature_f: float | None
     wind_speed_mph: float | None
     wind_from_degrees: float | None
+    weather_fetched_at: datetime | None
     is_dome: bool
     is_retractable: bool
     cf_bearing_degrees: float
@@ -62,6 +73,17 @@ class HitterCandidate:
     player_id: int
     bats: str
     pa_l30: int
+
+
+@dataclass(frozen=True)
+class LineupHitter:
+    """A batter to project for one team side, with its expected-PA source resolved."""
+
+    player_id: int
+    bats: str
+    expected_pa: float
+    lineup_position: int | None  # 1-9 when confirmed, else None
+    lineup_confirmed: bool
 
 
 def infer_season(game_date: date) -> int:
@@ -87,6 +109,7 @@ def _load_slate_games(conn: psycopg.Connection, game_date: date) -> list[SlateGa
             g.temperature_f,
             g.wind_speed_mph,
             g.wind_direction_degrees,
+            g.weather_fetched_at,
             s.is_dome,
             COALESCE(s.is_retractable, FALSE),
             s.cf_bearing_degrees,
@@ -114,12 +137,13 @@ def _load_slate_games(conn: psycopg.Connection, game_date: date) -> list[SlateGa
                 temperature_f=_as_float(row[5]),
                 wind_speed_mph=_as_float(row[6]),
                 wind_from_degrees=_as_float(row[7]),
-                is_dome=bool(row[8]),
-                is_retractable=bool(row[9]),
-                cf_bearing_degrees=float(row[10]),
-                park_factor_hits=float(row[11]),
-                park_factor_hr_lhb=float(row[12]),
-                park_factor_hr_rhb=float(row[13]),
+                weather_fetched_at=row[8],
+                is_dome=bool(row[9]),
+                is_retractable=bool(row[10]),
+                cf_bearing_degrees=float(row[11]),
+                park_factor_hits=float(row[12]),
+                park_factor_hr_lhb=float(row[13]),
+                park_factor_hr_rhb=float(row[14]),
             )
         )
     return games
@@ -159,6 +183,59 @@ def _likely_hitters(
     return [
         HitterCandidate(player_id=int(r[0]), bats=str(r[1]), pa_l30=int(r[2]))
         for r in rows
+    ]
+
+
+def _resolve_lineup(
+    conn: psycopg.Connection,
+    *,
+    game_id: int,
+    team_id: int,
+    is_home: bool,
+    as_of: date,
+) -> list[LineupHitter]:
+    """
+    Resolve the batting order to project for one team side.
+
+    Confirmed lineup (game_lineups holds all nine slots): project those nine in order,
+    weighting expected PA by lineup position (``PA_BY_ORDER``).
+
+    Otherwise fall back to the v1 proxy — top hitters by L30 PA, each at the flat
+    ``EXPECTED_PA_PER_STARTER`` — marked unconfirmed. Re-running ``project`` once the
+    lineup posts (the cron does this naturally) replaces these with the real slots.
+    """
+    rows = conn.execute(
+        """
+        SELECT gl.batting_order, gl.player_id, COALESCE(p.bats, 'R')
+        FROM game_lineups gl
+        JOIN players p ON p.id = gl.player_id
+        WHERE gl.game_id = %s AND gl.is_home = %s
+        ORDER BY gl.batting_order
+        """,
+        (game_id, is_home),
+    ).fetchall()
+
+    if len(rows) == LINEUP_STARTERS:
+        return [
+            LineupHitter(
+                player_id=int(order_pid_bats[1]),
+                bats=str(order_pid_bats[2]),
+                expected_pa=PA_BY_ORDER[int(order_pid_bats[0])],
+                lineup_position=int(order_pid_bats[0]),
+                lineup_confirmed=True,
+            )
+            for order_pid_bats in rows
+        ]
+
+    return [
+        LineupHitter(
+            player_id=c.player_id,
+            bats=c.bats,
+            expected_pa=EXPECTED_PA_PER_STARTER,
+            lineup_position=None,
+            lineup_confirmed=False,
+        )
+        for c in _likely_hitters(conn, team_id, as_of)
     ]
 
 
@@ -230,6 +307,46 @@ def _load_pitcher_throws(conn: psycopg.Connection, pitcher_id: int) -> str:
     return str(row[0])
 
 
+def _effective_bat_side(bats: str, pitcher_throws: str) -> str:
+    """Side the batter actually hits from (switch hitters bat opposite the pitcher)."""
+    if bats == "S":
+        return "L" if pitcher_throws == "R" else "R"
+    return bats if bats in ("L", "R") else "R"
+
+
+def _resolve_matchup(
+    conn: psycopg.Connection,
+    *,
+    batter_id: int,
+    bats: str,
+    skill: BatterSkillInput,
+    pitcher_id: int,
+    pitcher_throws: str,
+    as_of_date: date,
+    season: int,
+) -> MatchupResult:
+    """Build the pitch-mix matchup for one batter vs the opposing starter.
+
+    v2.1 driver: the resulting xwOBA / k_rate / ISO replace the season blend in
+    project_batter (and are stored for audit/UI). The v2.0.0 season/L30 blend is the
+    fallback baseline passed as ``overall_*``; compute_matchup returns it verbatim
+    (quality='fallback_overall') when arsenal or pitch-type data is too thin.
+    """
+    overall = blend_batter_skills(skill)
+    return compute_matchup(
+        conn,
+        batter_id=batter_id,
+        pitcher_id=pitcher_id,
+        batter_hand=_effective_bat_side(bats, pitcher_throws),
+        pitcher_hand=pitcher_throws,
+        as_of_date=as_of_date,
+        season=season,
+        overall_xwoba=overall.xwoba,
+        overall_k_rate=overall.k_rate,
+        overall_iso=overall.iso,
+    )
+
+
 def _game_ready(game: SlateGame) -> str | None:
     if game.home_probable_pitcher_id is None or game.away_probable_pitcher_id is None:
         return "missing probable pitcher"
@@ -251,6 +368,10 @@ def _upsert_batter_projection(
     is_home: bool,
     proj,
     pitcher_data_quality: str,
+    lineup_position: int | None,
+    lineup_confirmed: bool,
+    matchup_xwoba: float | None,
+    matchup_quality: str | None,
 ) -> None:
     conn.execute(
         """
@@ -261,6 +382,8 @@ def _upsert_batter_projection(
             expected_hits, expected_total_bases,
             adj_park, adj_pitcher, adj_weather_hr, adj_weather_hits,
             pitcher_data_quality,
+            lineup_position, lineup_confirmed,
+            matchup_xwoba, matchup_quality,
             computed_at
         )
         VALUES (
@@ -270,6 +393,8 @@ def _upsert_batter_projection(
             %s, %s,
             %s, %s, %s, %s,
             %s,
+            %s, %s,
+            %s, %s,
             NOW()
         )
         ON CONFLICT (game_id, player_id) DO UPDATE SET
@@ -287,6 +412,10 @@ def _upsert_batter_projection(
             adj_weather_hr        = EXCLUDED.adj_weather_hr,
             adj_weather_hits      = EXCLUDED.adj_weather_hits,
             pitcher_data_quality  = EXCLUDED.pitcher_data_quality,
+            lineup_position       = EXCLUDED.lineup_position,
+            lineup_confirmed      = EXCLUDED.lineup_confirmed,
+            matchup_xwoba         = EXCLUDED.matchup_xwoba,
+            matchup_quality       = EXCLUDED.matchup_quality,
             computed_at           = NOW()
         """,
         (
@@ -306,8 +435,36 @@ def _upsert_batter_projection(
             round(proj.adj_weather_hr, 3),
             round(proj.adj_weather_hit, 3),
             pitcher_data_quality,
+            lineup_position,
+            lineup_confirmed,
+            matchup_xwoba,
+            matchup_quality,
         ),
     )
+
+
+def _pad_confirmed_starters(
+    starter_xwobas: list[float],
+    weather_hits: list[float],
+    lineup_confirmed: bool,
+) -> None:
+    """
+    Backfill the team-run inputs to nine slots for a confirmed lineup (in place).
+
+    A confirmed lineup is exactly nine batters; if one lacks batter_skill we still want
+    a run projection rather than dropping the whole game. Pad the missing slots with
+    league-average xwOBA (and the mean weather adjustment) so ``expected_team_runs`` sees
+    nine inputs. Individual batter rows are unaffected — only batters we could actually
+    project were written. No-op for the projected fallback, which has bench-depth slack.
+    """
+    if not lineup_confirmed:
+        return
+    if not (0 < len(starter_xwobas) < LINEUP_STARTERS):
+        return
+    pad = LINEUP_STARTERS - len(starter_xwobas)
+    starter_xwobas.extend([LEAGUE_XWOBA] * pad)
+    mean_weather = sum(weather_hits) / len(weather_hits)
+    weather_hits.extend([mean_weather] * pad)
 
 
 def _project_team_side(
@@ -322,16 +479,20 @@ def _project_team_side(
     summary: ProjectSummary,
 ) -> float | None:
     """Project hitters for one team; return expected_team_runs or None if insufficient data."""
-    hitters = _likely_hitters(conn, team_id, summary.game_date)
+    hitters = _resolve_lineup(
+        conn, game_id=game.game_id, team_id=team_id, is_home=is_home, as_of=summary.game_date
+    )
     if len(hitters) < LINEUP_STARTERS:
         log.warning(
-            "game %s team %s: only %d hitters with L30 PA (need %d)",
+            "game %s team %s: only %d hitters available (need %d)",
             game.game_id,
             team_id,
             len(hitters),
             LINEUP_STARTERS,
         )
         return None
+
+    lineup_confirmed = hitters[0].lineup_confirmed  # confirmation is per-side, all-or-nothing
 
     pitcher_throws = _load_pitcher_throws(conn, opposing_pitcher_id)
 
@@ -348,7 +509,6 @@ def _project_team_side(
 
     starter_xwobas: list[float] = []
     weather_hits: list[float] = []
-    rows_written = 0
 
     for hitter in hitters:
         skill = _load_batter_skill(conn, hitter.player_id)
@@ -378,12 +538,28 @@ def _project_team_side(
             is_retractable_open=is_retractable_open,
         )
 
+        # v2.1: the matchup drives the batter's hit/K/HR rates and is stored for audit/UI.
+        matchup = _resolve_matchup(
+            conn,
+            batter_id=hitter.player_id,
+            bats=hitter.bats,
+            skill=skill,
+            pitcher_id=opposing_pitcher_id,
+            pitcher_throws=pitcher_throws,
+            as_of_date=summary.game_date,
+            season=season,
+        )
+
         proj = project_batter(
             skill,
             pitcher_adj,
             park_adj,
             adj_weather_hit,
             adj_weather_hr,
+            expected_pa=hitter.expected_pa,
+            matchup_xwoba=matchup.xwoba,
+            matchup_k_rate=matchup.k_rate,
+            matchup_iso=matchup.iso,
         )
         _upsert_batter_projection(
             conn,
@@ -393,13 +569,18 @@ def _project_team_side(
             is_home,
             proj,
             pitcher_quality,
+            hitter.lineup_position,
+            hitter.lineup_confirmed,
+            matchup.xwoba,
+            matchup.quality,
         )
-        rows_written += 1
         summary.batter_rows += 1
 
         if len(starter_xwobas) < LINEUP_STARTERS:
             starter_xwobas.append(proj.xwoba_blend)
             weather_hits.append(adj_weather_hit)
+
+    _pad_confirmed_starters(starter_xwobas, weather_hits, lineup_confirmed)
 
     if len(starter_xwobas) < LINEUP_STARTERS:
         log.warning(
@@ -489,6 +670,40 @@ def _project_game(
     return True
 
 
+def _clear_slate_projections(conn: psycopg.Connection, game_date: date) -> int:
+    """
+    Drop projections for the slate date and any earlier date before recomputing.
+
+    The write path has no DELETE, so batter_projections / game_projections rows from
+    prior days pile up: each day's slate has fresh game_ids, so the (game_id, player_id)
+    PK never collides and old rows are never overwritten. A player then appears once per
+    past day in any cross-day query — the "duplicate rows" bug. We recompute the entire
+    slate from scratch on every run, so it is safe to clear:
+
+      * the current date — makes re-runs idempotent and drops a batter who fell out of a
+        (now confirmed) lineup, and
+      * strictly-earlier dates — phases out the accumulated stale rows.
+
+    Future-dated projections, if any were ever written, are left untouched. Returns the
+    number of batter_projections rows removed (for logging).
+    """
+    deleted = conn.execute(
+        """
+        DELETE FROM batter_projections
+        WHERE game_id IN (SELECT id FROM games WHERE game_date <= %s)
+        """,
+        (game_date,),
+    ).rowcount
+    conn.execute(
+        """
+        DELETE FROM game_projections
+        WHERE game_id IN (SELECT id FROM games WHERE game_date <= %s)
+        """,
+        (game_date,),
+    )
+    return deleted
+
+
 def run_projections(
     conn: psycopg.Connection, game_date: date
 ) -> ProjectSummary:
@@ -500,6 +715,13 @@ def run_projections(
     if not games:
         log.info("no games on slate for %s", game_date)
         return summary
+
+    # Clear stale + current-slate rows up front so the live table only ever holds the
+    # slate we are about to (re)compute. Only runs once we know the slate is non-empty,
+    # so an empty/failed slate fetch can't wipe a previously good day. See PART A.
+    cleared = _clear_slate_projections(conn, game_date)
+    if cleared:
+        log.info("cleared %d stale/prior batter_projection row(s) before recompute", cleared)
 
     for game in games:
         if _project_game(conn, game, season, summary):
@@ -592,6 +814,8 @@ def _upsert_backtest_projection(
     player_id: int,
     as_of_date: date,
     proj,
+    matchup_xwoba: float | None = None,
+    matchup_quality: str | None = None,
 ) -> None:
     conn.execute(
         """
@@ -599,9 +823,10 @@ def _upsert_backtest_projection(
             backtest_run_id, game_id, player_id, as_of_date,
             expected_pa,
             p_hit_1plus, p_hit_2plus, p_hr, p_k_1plus,
-            expected_hits, expected_total_bases
+            expected_hits, expected_total_bases,
+            matchup_xwoba, matchup_quality
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (backtest_run_id, game_id, player_id) DO UPDATE SET
             as_of_date           = EXCLUDED.as_of_date,
             expected_pa          = EXCLUDED.expected_pa,
@@ -610,7 +835,9 @@ def _upsert_backtest_projection(
             p_hr                 = EXCLUDED.p_hr,
             p_k_1plus            = EXCLUDED.p_k_1plus,
             expected_hits        = EXCLUDED.expected_hits,
-            expected_total_bases = EXCLUDED.expected_total_bases
+            expected_total_bases = EXCLUDED.expected_total_bases,
+            matchup_xwoba        = EXCLUDED.matchup_xwoba,
+            matchup_quality      = EXCLUDED.matchup_quality
         """,
         (
             backtest_run_id,
@@ -624,6 +851,8 @@ def _upsert_backtest_projection(
             proj.probabilities.p_k_1plus,
             round(proj.expected_hits, 3),
             round(proj.expected_total_bases, 3),
+            matchup_xwoba,
+            matchup_quality,
         ),
     )
 
@@ -633,6 +862,24 @@ def _game_ready_backtest(game: SlateGame) -> str | None:
     if game.home_probable_pitcher_id is None or game.away_probable_pitcher_id is None:
         return "missing probable pitcher"
     return None
+
+
+# Neutral multiplier applied when weather is skipped (historical/stale games).
+_NEUTRAL_WEATHER_ADJ = 1.0
+
+
+def _backtest_weather_skipped(game: SlateGame, game_date: date) -> bool:
+    """
+    Decide whether to skip weather adjustments for a backtested game.
+
+    Historical games never had a live weather snapshot taken (refresh-weather only
+    runs against today's slate), so the stored temperature/wind are absent or stale.
+    Skip weather when there is no snapshot, or the game is more than a day in the
+    past. Backtest then reflects park + pitcher + skill adjustments only.
+    """
+    if game.weather_fetched_at is None:
+        return True
+    return (eastern_today() - game_date).days > 1
 
 
 def _project_team_side_backtest(
@@ -649,13 +896,17 @@ def _project_team_side_backtest(
     summary: ProjectSummary,
 ) -> float | None:
     """Project one team side using snapshot skill tables; return expected_team_runs or None."""
-    hitters = _likely_hitters(conn, team_id, summary.game_date)
+    hitters = _resolve_lineup(
+        conn, game_id=game.game_id, team_id=team_id, is_home=is_home, as_of=summary.game_date
+    )
     if len(hitters) < LINEUP_STARTERS:
         log.warning(
-            "game %s team %s: only %d hitters with L30 PA (need %d)",
+            "game %s team %s: only %d hitters available (need %d)",
             game.game_id, team_id, len(hitters), LINEUP_STARTERS,
         )
         return None
+
+    lineup_confirmed = hitters[0].lineup_confirmed
 
     pitcher_throws = _load_pitcher_throws(conn, opposing_pitcher_id)
     splits = _load_pitcher_splits_snapshot(conn, opposing_pitcher_id, season, as_of_date)
@@ -663,6 +914,10 @@ def _project_team_side_backtest(
     is_retractable_open = False
     starter_xwobas: list[float] = []
     weather_hits: list[float] = []
+
+    # Historical/stale games have no usable weather snapshot — neutralize weather so
+    # the backtest measures only park + pitcher + skill. Decided once per game side.
+    weather_skipped = _backtest_weather_skipped(game, summary.game_date)
 
     for hitter in hitters:
         skill = _load_batter_skill_snapshot(conn, hitter.player_id, as_of_date)
@@ -676,27 +931,51 @@ def _project_team_side_backtest(
         pitcher_split, _quality = resolve_pitcher_skill(splits, hitter.bats, pitcher_throws)
         park_adj = compute_park_adjustments(park, hitter.bats, pitcher_throws)
         pitcher_adj = compute_pitcher_adjustments(pitcher_split)
-        # Use historical weather if available; default to neutral if missing.
-        adj_weather_hit, adj_weather_hr = compute_weather_adjustments(
-            temperature_f=game.temperature_f or 70.0,
-            wind_speed_mph=game.wind_speed_mph or 0.0,
-            wind_from_degrees=game.wind_from_degrees or 0.0,
-            cf_bearing_degrees=game.cf_bearing_degrees,
+        if weather_skipped:
+            adj_weather_hit = _NEUTRAL_WEATHER_ADJ
+            adj_weather_hr = _NEUTRAL_WEATHER_ADJ
+        else:
+            adj_weather_hit, adj_weather_hr = compute_weather_adjustments(
+                temperature_f=game.temperature_f or 70.0,
+                wind_speed_mph=game.wind_speed_mph or 0.0,
+                wind_from_degrees=game.wind_from_degrees or 0.0,
+                cf_bearing_degrees=game.cf_bearing_degrees,
+                bats=hitter.bats,
+                pitcher_throws=pitcher_throws,
+                is_dome=game.is_dome,
+                is_retractable_open=is_retractable_open,
+            )
+
+        # v2.1: the matchup drives the projection; store it so the backtest is auditable.
+        matchup = _resolve_matchup(
+            conn,
+            batter_id=hitter.player_id,
             bats=hitter.bats,
+            skill=skill,
+            pitcher_id=opposing_pitcher_id,
             pitcher_throws=pitcher_throws,
-            is_dome=game.is_dome,
-            is_retractable_open=is_retractable_open,
+            as_of_date=as_of_date,
+            season=season,
         )
 
-        proj = project_batter(skill, pitcher_adj, park_adj, adj_weather_hit, adj_weather_hr)
+        proj = project_batter(
+            skill, pitcher_adj, park_adj, adj_weather_hit, adj_weather_hr,
+            expected_pa=hitter.expected_pa,
+            matchup_xwoba=matchup.xwoba,
+            matchup_k_rate=matchup.k_rate,
+            matchup_iso=matchup.iso,
+        )
         _upsert_backtest_projection(
-            conn, backtest_run_id, game.game_id, hitter.player_id, as_of_date, proj
+            conn, backtest_run_id, game.game_id, hitter.player_id, as_of_date, proj,
+            matchup.xwoba, matchup.quality,
         )
         summary.batter_rows += 1
 
         if len(starter_xwobas) < LINEUP_STARTERS:
             starter_xwobas.append(proj.xwoba_blend)
             weather_hits.append(adj_weather_hit)
+
+    _pad_confirmed_starters(starter_xwobas, weather_hits, lineup_confirmed)
 
     if len(starter_xwobas) < LINEUP_STARTERS:
         log.warning(
@@ -751,18 +1030,23 @@ def run_backtest_projections(
     conn: psycopg.Connection,
     game_date: date,
     as_of_date: date,
+    backtest_run_id: int | None = None,
 ) -> ProjectSummary:
     """
     Project a historical game_date using skill snapshots as of as_of_date.
     Writes to backtest_projections; never touches batter_projections.
+
+    backtest_run_id: must be a valid backtest_runs.id after V7 migration.
+    When None, a date-derived surrogate is used (pre-V7 compatibility only).
     """
     summary = ProjectSummary(game_date=game_date)
     season = infer_season(game_date)
     games = _load_slate_games(conn, game_date)
     summary.games_seen = len(games)
 
-    # Derive run ID from the as_of date (e.g. 20250715 for 2025-07-15).
-    backtest_run_id = int(as_of_date.strftime("%Y%m%d"))
+    if backtest_run_id is None:
+        # Surrogate for ad-hoc usage; breaks after V7 adds the FK.
+        backtest_run_id = int(as_of_date.strftime("%Y%m%d"))
 
     if not games:
         log.info("no games on slate for %s", game_date)
@@ -777,6 +1061,29 @@ def run_backtest_projections(
     return summary
 
 
+def create_adhoc_backtest_run(
+    conn: psycopg.Connection,
+    game_date: date,
+    as_of_date: date,
+) -> int:
+    """
+    Insert a minimal backtest_runs row for an ad-hoc 'project --as-of' call.
+    Returns the new run id.
+    """
+    row = conn.execute(
+        """
+        INSERT INTO backtest_runs (
+            range_start, range_end, model_version, model_constants, notes
+        )
+        VALUES (%s, %s, %s, %s::jsonb, 'ad-hoc via project --as-of')
+        RETURNING id
+        """,
+        (game_date, game_date, MODEL_VERSION, json.dumps({})),
+    ).fetchone()
+    conn.commit()
+    return int(row[0])
+
+
 def cmd_project(args: argparse.Namespace) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     game_date = args.date if args.date is not None else eastern_today()
@@ -789,13 +1096,15 @@ def cmd_project(args: argparse.Namespace) -> None:
         )
         conn = get_connection()
         try:
-            summary = run_backtest_projections(conn, game_date, as_of_date)
+            run_id = create_adhoc_backtest_run(conn, game_date, as_of_date)
+            summary = run_backtest_projections(conn, game_date, as_of_date, run_id)
             conn.commit()
         except Exception:
             conn.rollback()
             raise
         finally:
             conn.close()
+        print(f"[project] Backtest run_id={run_id}")
     else:
         print(f"[project] Computing projections for {game_date}…")
         conn = get_connection()
@@ -857,9 +1166,11 @@ def verify_projection_counts(
     conn: psycopg.Connection, game_date: date
 ) -> ProjectionVerifyResult:
     """
-    Compare batter_projection rows to the v1 lineup proxy on projected games.
+    Compare batter_projection rows to the resolved lineup on projected games.
 
-    ``projectable_hitter_count`` = slate hitters with ``batter_skill``; the runner
+    Uses the same ``_resolve_lineup`` the runner does (confirmed batting order, or the
+    L30-PA proxy), so the expected count tracks confirmed (9) vs projected lineups.
+    ``projectable_hitter_count`` = resolved hitters with ``batter_skill``; the runner
     should write exactly that many rows (one per projectable hitter).
     """
     projected = conn.execute(
@@ -878,8 +1189,10 @@ def verify_projection_counts(
 
     for game_id, home_id, away_id in projected:
         expected = 0
-        for team_id in (home_id, away_id):
-            for hitter in _likely_hitters(conn, team_id, game_date):
+        for team_id, is_home in ((home_id, True), (away_id, False)):
+            for hitter in _resolve_lineup(
+                conn, game_id=game_id, team_id=team_id, is_home=is_home, as_of=game_date
+            ):
                 slate_total += 1
                 if _load_batter_skill(conn, hitter.player_id) is not None:
                     projectable += 1
