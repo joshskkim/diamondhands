@@ -1,5 +1,7 @@
 package com.diamond.api.dto;
 
+import java.util.List;
+
 public record BatterProjectionDto(
     PlayerDto player,
     PitcherDto opposingPitcher,
@@ -8,5 +10,11 @@ public record BatterProjectionDto(
     Double expectedHits,
     Double expectedTotalBases,
     AdjustmentsDto adjustments,
-    String pitcherDataQuality
+    String pitcherDataQuality,
+    Integer lineupPosition,
+    Boolean lineupConfirmed,
+    Double matchupXwoba,
+    String matchupQuality,
+    List<PitchArsenalDto> pitcherArsenal,
+    List<BatterVsArsenalDto> batterVsArsenal
 ) {}

@@ -15,10 +15,33 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from datetime import date, timedelta
 
 import pandas as pd
 import psycopg
+
+log = logging.getLogger(__name__)
+
+# Defense-in-depth: clip stored xwOBA at this generous ceiling before INSERT and log
+# when it triggers. The aggregation already asserts <= 2.0 (impossible above a HR);
+# real values rarely exceed ~0.8 even in 30-pitch samples, so a clamp here is a
+# tripwire for upstream anomalies, not an expected code path.
+_WRITE_XWOBA_CEILING = 1.5
+
+
+def _clamp_xwoba_field(rows: list[dict], field: str, as_of_date: date) -> None:
+    n = 0
+    for r in rows:
+        v = r.get(field)
+        if v is not None and v > _WRITE_XWOBA_CEILING:
+            r[field] = _WRITE_XWOBA_CEILING
+            n += 1
+    if n:
+        log.warning(
+            "clamped %d %s value(s) above %.1f at write for as_of=%s — upstream anomaly",
+            n, field, _WRITE_XWOBA_CEILING, as_of_date,
+        )
 
 from ingester.commands.skill_snapshots import _iter_mondays
 from ingester.db import eastern_today, get_connection
@@ -123,6 +146,11 @@ def _write_for_date(
         conn,
         {r["player_id"] for r in batter_rows} | {r["player_id"] for r in arsenal_rows},
     )
+
+    # Defense-in-depth clamp before write (aggregation already asserts <= 2.0).
+    _clamp_xwoba_field(batter_rows, "xwoba", as_of_date)
+    _clamp_xwoba_field(arsenal_rows, "xwoba_against", as_of_date)
+    _clamp_xwoba_field(baseline_rows, "league_xwoba", as_of_date)
 
     with conn.cursor() as cur:
         cur.execute(

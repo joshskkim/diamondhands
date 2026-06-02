@@ -37,6 +37,8 @@ from ingester.commands.pitch_aggregations import (
     cmd_refresh_pitch_snapshots,
 )
 from ingester.commands.backtest import cmd_backtest
+from ingester.ml.dataset import cmd_build_training_data
+from ingester.ml.train import cmd_train_xgb, cmd_tune_blend
 from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
 from ingester.projection.runner import cmd_project, cmd_smoke_project
 
@@ -175,6 +177,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="Snapshot frequency (default: weekly = every Monday)",
     )
 
+    p_build_td = sub.add_parser(
+        "build-training-data",
+        help="Build per-batter-game feature rows (point-in-time) into models/training_<season>.parquet",
+    )
+    p_build_td.add_argument(
+        "--season", type=int, action="append",
+        help="Season year (repeatable; default 2025)",
+    )
+
+    p_train_xgb = sub.add_parser(
+        "train-xgb",
+        help="Time-series-CV-tuned XGBoost for one market; reports Brier vs the mechanistic baseline",
+    )
+    p_train_xgb.add_argument("--target", default="hr", help="Market: h1|h2|hr|k|all (default hr)")
+    p_train_xgb.add_argument("--season", type=int, action="append", help="Season(s) (default 2025)")
+    p_train_xgb.add_argument("--trials", type=int, default=30, help="Optuna trials (default 30)")
+    p_train_xgb.add_argument("--folds", type=int, default=4, help="Walk-forward CV folds (default 4)")
+    p_train_xgb.add_argument(
+        "--save", action="store_true", default=False,
+        help="Fit a final model on the whole season and save to models/<target>.json",
+    )
+    p_train_xgb.add_argument(
+        "--train-end", metavar="YYYY-MM-DD", type=_date_arg, default=None, dest="train_end",
+        help="Temporal holdout: train only on games on/before this date",
+    )
+
+    p_tune_blend = sub.add_parser(
+        "tune-blend",
+        help="Grid-search per-market blend weights from two backtest runs; writes models/blend.json",
+    )
+    p_tune_blend.add_argument("--mech-run", type=int, required=True, dest="mech_run",
+                              help="backtest_runs.id of the mechanistic run")
+    p_tune_blend.add_argument("--xgb-run", type=int, required=True, dest="xgb_run",
+                              help="backtest_runs.id of the xgb run (same rows)")
+
     p_project      = sub.add_parser("project",      help="Compute projections for today's slate")
 
     p_backtest = sub.add_parser("backtest", help="Run backtesting suite comparing predictions to actuals")
@@ -189,6 +226,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_backtest.add_argument(
         "--csv", action="store_true", default=False,
         help="Write per-row predictions to /tmp/backtest_<run_id>.csv",
+    )
+    p_backtest.add_argument(
+        "--model", choices=["mechanistic", "xgb", "blend"], default="mechanistic",
+        help="Probability source: mechanistic (default), xgb, or blend (per-market w*mech+(1-w)*xgb)",
     )
 
     sub.add_parser("smoke",        help="DB connectivity sanity check")
@@ -216,6 +257,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest="as_of",
         help="Use skill snapshots as of this date (backtest mode)",
     )
+    p_project.add_argument(
+        "--model", choices=["mechanistic", "xgb", "blend"], default="blend",
+        help="Probability source for live projections: blend (default; per-market "
+             "w*mech+(1-w)*xgb, falls back to mechanistic if models missing), xgb, or mechanistic",
+    )
 
     return parser
 
@@ -232,6 +278,9 @@ COMMANDS = {
     "refresh-skill-snapshots":  cmd_refresh_skill_snapshots,
     "refresh-pitch-aggregations": cmd_refresh_pitch_aggregations,
     "refresh-pitch-snapshots":  cmd_refresh_pitch_snapshots,
+    "build-training-data":      cmd_build_training_data,
+    "train-xgb":                cmd_train_xgb,
+    "tune-blend":               cmd_tune_blend,
     "project":                  cmd_project,
     "backtest":                 cmd_backtest,
     "smoke":                    cmd_smoke,

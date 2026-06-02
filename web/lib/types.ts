@@ -73,6 +73,22 @@ export interface Adjustments {
   weatherHit: number
 }
 
+/** One pitch type in the opposing pitcher's arsenal vs this batter's hand. */
+export interface PitchArsenal {
+  pitchType: string
+  usageRate: number | null
+  leagueXwoba: number | null
+}
+
+/** The batter's regressed xwOBA vs one of the pitcher's pitch types, with signed edge. */
+export interface BatterVsArsenal {
+  pitchType: string
+  xwobaRegressed: number | null
+  pitchesSeen: number | null
+  /** Signed string vs league baseline, e.g. "+0.064" / "-0.067". */
+  edge: string | null
+}
+
 export interface BatterProjection {
   player: BatterPlayer
   opposingPitcher: Pitcher
@@ -82,10 +98,39 @@ export interface BatterProjection {
   expectedTotalBases: number
   adjustments: Adjustments
   pitcherDataQuality: string | null
+  /** 1-9 when the lineup is confirmed, else null (projected lineup). */
+  lineupPosition: number | null
+  lineupConfirmed: boolean | null
+  /** Usage-weighted, pitch-type-regressed xwOBA that drove the hit rate (v2.1). */
+  matchupXwoba: number | null
+  /** 'matchup' when built from the pitcher's arsenal, else 'fallback_overall'. */
+  matchupQuality: string | null
+  pitcherArsenal: PitchArsenal[] | null
+  /** Sorted by the pitcher's usage of each pitch type, descending. */
+  batterVsArsenal: BatterVsArsenal[] | null
+}
+
+/** GET /api/leaderboards/pitch-types */
+export interface PitchTypeRef {
+  code: string
+  name: string
+}
+
+/** GET /api/leaderboards/pitch-type */
+export interface PitchTypeLeaderboardEntry {
+  player: { id: number; name: string; teamAbbr: string }
+  opposingPitcher: Pitcher
+  pitchTypeUsage: number
+  batterXwoba: number
+  leagueXwoba: number
+  edge: number
+  pitchesSeen: number
 }
 
 export interface TeamBatters {
   teamAbbr: string
+  /** True when this side's batting order came from a confirmed lineup. */
+  lineupConfirmed: boolean
   batters: BatterProjection[]
 }
 

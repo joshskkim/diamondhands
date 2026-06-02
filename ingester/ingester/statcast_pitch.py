@@ -141,6 +141,23 @@ def _safe_div(num: float, den: float) -> float | None:
     return round(float(num) / float(den), 4) if den else None
 
 
+# Physical ceiling on an aggregated xwOBA: a single PA tops out at a home run
+# (~2.0 on the wOBA scale), so the per-PA mean can never exceed it. Anything above
+# means the denominator collapsed (the woba_denom-sparsity bug); fail fast.
+_XWOBA_MAX = 2.0
+
+
+def _assert_xwoba_sane(rows: list[dict], field: str) -> None:
+    vals = [r[field] for r in rows if r.get(field) is not None]
+    if not vals:
+        return
+    mx = max(vals)
+    assert mx <= _XWOBA_MAX, (
+        f"Impossible {field}={mx} (>{_XWOBA_MAX}); denominator bug? "
+        f"offending row: {next(r for r in rows if r.get(field) == mx)}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Batter pitch-type stats
 # ---------------------------------------------------------------------------
@@ -160,7 +177,6 @@ def _batter_rows_for_hand(
         whiffs=("is_whiff", "sum"),
         xwoba_num=("xwoba_num", "sum"),
         woba_num=("woba_value", "sum"),
-        woba_denom=("woba_denom", "sum"),
         hits=("is_hit", "sum"),
         hr=("is_hr", "sum"),
         k=("is_k", "sum"),
@@ -176,6 +192,10 @@ def _batter_rows_for_hand(
         pa_ended = int(r["pa_ended"])
         swings = int(r["swings"])
         ab = int(r["ab"])
+        # Divide by the PA count, NOT sum(woba_denom): the Statcast woba_denom column
+        # is populated on only ~1 of every ~9 PA-ending rows in the bulk feed, so
+        # summing it collapses the denominator and inflates xwOBA (observed up to 6.45).
+        # Each PA-ending row is one PA, so pa_ended is the correct denominator.
         rows.append({
             "player_id": int(r["batter"]),
             "season": season,
@@ -184,8 +204,8 @@ def _batter_rows_for_hand(
             "vs_handedness": vs_hand,
             "pitches_seen": pitches_seen,
             "pa_ended_on_type": pa_ended,
-            "xwoba": _safe_div(r["xwoba_num"], r["woba_denom"]),
-            "woba": _safe_div(r["woba_num"], r["woba_denom"]),
+            "xwoba": _safe_div(r["xwoba_num"], pa_ended),
+            "woba": _safe_div(r["woba_num"], pa_ended),
             "k_rate": _safe_div(r["k"], pa_ended),
             "iso": _safe_div(r["tb"] - r["hits"], ab),
             "hr_rate": _safe_div(r["hr"], pa_ended),
@@ -206,6 +226,7 @@ def aggregate_batter_pitch_stats(
     rows += _batter_rows_for_hand(prepared[prepared["p_throws"] == "L"], "L", as_of_date, season)
     rows += _batter_rows_for_hand(prepared[prepared["p_throws"] == "R"], "R", as_of_date, season)
     rows += _batter_rows_for_hand(prepared, "A", as_of_date, season)
+    _assert_xwoba_sane(rows, "xwoba")
     return rows
 
 
@@ -214,21 +235,34 @@ def aggregate_batter_pitch_stats(
 # ---------------------------------------------------------------------------
 
 def _arsenal_rows_for_hand(
-    prepared: pd.DataFrame, vs_hand: str, as_of_date: date, season: int
+    prepared: pd.DataFrame,
+    vs_hand: str,
+    as_of_date: date,
+    season: int,
+    *,
+    min_pitches: int = MIN_PITCHES_PITCHER,
+    qualifying: set[tuple[int, str]] | None = None,
 ) -> list[dict]:
     """Aggregate prepared pitches (already filtered to one batter-stand, or all) to
     one row per (pitcher, pitch_type), with usage_rate within the pitcher's total
-    pitches vs that hand."""
+    pitches vs that hand.
+
+    ``min_pitches`` gates how many pitches of a type are needed to emit a row;
+    ``qualifying`` (when given) restricts emission to (pitcher, pitch_type) pairs that
+    cleared the overall threshold. Per-handedness rows use min_pitches=1 + qualifying
+    so a pitch type that qualifies overall always gets L/R rows (however thin) and
+    query-time empirical-Bayes regression handles the small samples.
+    """
     if prepared.empty:
         return []
     totals = prepared.groupby("pitcher", sort=False).size()  # pitches vs this hand
     grp = prepared.groupby(["pitcher", "pt"], sort=False)
     agg = grp.agg(
         pitches_thrown=("pt", "size"),
+        pa_ended=("is_terminal", "sum"),
         swings=("is_swing", "sum"),
         whiffs=("is_whiff", "sum"),
         xwoba_num=("xwoba_num", "sum"),
-        woba_denom=("woba_denom", "sum"),
         velo_sum=("velo", "sum"),
         velo_n=("velo", "count"),
     ).reset_index()
@@ -236,9 +270,12 @@ def _arsenal_rows_for_hand(
     rows: list[dict] = []
     for _, r in agg.iterrows():
         pitches_thrown = int(r["pitches_thrown"])
-        if pitches_thrown < MIN_PITCHES_PITCHER:
+        if pitches_thrown < min_pitches:
             continue
         pitcher_id = int(r["pitcher"])
+        pt = str(r["pt"])
+        if qualifying is not None and (pitcher_id, pt) not in qualifying:
+            continue
         total = int(totals.get(pitcher_id, 0))
         swings = int(r["swings"])
         velo_n = int(r["velo_n"])
@@ -246,11 +283,12 @@ def _arsenal_rows_for_hand(
             "player_id": pitcher_id,
             "season": season,
             "as_of_date": as_of_date,
-            "pitch_type": str(r["pt"]),
+            "pitch_type": pt,
             "vs_handedness": vs_hand,
             "pitches_thrown": pitches_thrown,
             "usage_rate": _safe_div(pitches_thrown, total),
-            "xwoba_against": _safe_div(r["xwoba_num"], r["woba_denom"]),
+            # Denominator is PA count, not sum(woba_denom) — see _batter_rows_for_hand.
+            "xwoba_against": _safe_div(r["xwoba_num"], int(r["pa_ended"])),
             "whiff_rate": _safe_div(r["whiffs"], swings),
             "avg_velocity": round(float(r["velo_sum"]) / velo_n, 1) if velo_n else None,
         })
@@ -260,14 +298,30 @@ def _arsenal_rows_for_hand(
 def aggregate_pitcher_arsenal(
     df: pd.DataFrame, as_of_date: date, season: int
 ) -> list[dict]:
-    """Produce pitcher_arsenal rows for vs_handedness L, R and A (any)."""
+    """Produce pitcher_arsenal rows for vs_handedness A, L and R.
+
+    A pitch type qualifies on its OVERALL count (>= MIN_PITCHES_PITCHER); the 'A' rows
+    define that qualifying set. For every qualifying (pitcher, pitch_type) we then emit
+    L and R rows from whatever pitches exist vs that hand (no per-hand minimum), so
+    low-volume / spot starters still get handedness splits and the matchup lookup —
+    which is keyed by the batter's hand, never 'A' — finds them. Thin L/R samples are
+    handled by empirical-Bayes regression at query time (matchup.py).
+    """
     prepared = _prepare_pitches(df, as_of_date, season)
     if prepared.empty:
         return []
-    rows: list[dict] = []
-    rows += _arsenal_rows_for_hand(prepared[prepared["stand"] == "L"], "L", as_of_date, season)
-    rows += _arsenal_rows_for_hand(prepared[prepared["stand"] == "R"], "R", as_of_date, season)
-    rows += _arsenal_rows_for_hand(prepared, "A", as_of_date, season)
+    a_rows = _arsenal_rows_for_hand(prepared, "A", as_of_date, season)
+    qualifying = {(r["player_id"], r["pitch_type"]) for r in a_rows}
+    rows: list[dict] = list(a_rows)
+    rows += _arsenal_rows_for_hand(
+        prepared[prepared["stand"] == "L"], "L", as_of_date, season,
+        min_pitches=1, qualifying=qualifying,
+    )
+    rows += _arsenal_rows_for_hand(
+        prepared[prepared["stand"] == "R"], "R", as_of_date, season,
+        min_pitches=1, qualifying=qualifying,
+    )
+    _assert_xwoba_sane(rows, "xwoba_against")
     return rows
 
 
@@ -283,7 +337,6 @@ def _baseline_rows_for_hand(prepared: pd.DataFrame, vs_hand: str, season: int) -
     agg = grp.agg(
         pitches=("pt", "size"),
         xwoba_num=("xwoba_num", "sum"),
-        woba_denom=("woba_denom", "sum"),
         hits=("is_hit", "sum"),
         k=("is_k", "sum"),
         ab=("is_ab", "sum"),
@@ -297,7 +350,8 @@ def _baseline_rows_for_hand(prepared: pd.DataFrame, vs_hand: str, season: int) -
             "season": season,
             "pitch_type": str(r["pt"]),
             "vs_handedness": vs_hand,
-            "league_xwoba": _safe_div(r["xwoba_num"], r["woba_denom"]),
+            # Denominator is PA count, not sum(woba_denom) — see _batter_rows_for_hand.
+            "league_xwoba": _safe_div(r["xwoba_num"], int(r["pa_ended"])),
             "league_iso": _safe_div(r["tb"] - r["hits"], r["ab"]),
             "league_k_rate": _safe_div(r["k"], r["pa_ended"]),
             "league_usage_rate": _safe_div(r["pitches"], total_pitches),
@@ -317,6 +371,7 @@ def compute_league_baselines(df: pd.DataFrame, season: int, as_of_date: date) ->
     rows += _baseline_rows_for_hand(prepared[prepared["p_throws"] == "L"], "L", season)
     rows += _baseline_rows_for_hand(prepared[prepared["p_throws"] == "R"], "R", season)
     rows += _baseline_rows_for_hand(prepared, "A", season)
+    _assert_xwoba_sane(rows, "league_xwoba")
     return rows
 
 

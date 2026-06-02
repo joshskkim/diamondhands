@@ -1,5 +1,12 @@
 import { queryOptions } from '@tanstack/react-query'
-import type { GameProjections, PlayerDetail, RecentStat, TodayGame } from './types'
+import type {
+  GameProjections,
+  PitchTypeLeaderboardEntry,
+  PitchTypeRef,
+  PlayerDetail,
+  RecentStat,
+  TodayGame,
+} from './types'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8080'
 
@@ -45,6 +52,20 @@ export function fetchPlayerRecentStats(
   )
 }
 
+export function fetchPitchTypes(): Promise<PitchTypeRef[]> {
+  return apiGet<PitchTypeRef[]>('/api/leaderboards/pitch-types')
+}
+
+export function fetchPitchTypeLeaderboard(
+  pitch: string,
+  date?: string,
+  limit = 20,
+): Promise<PitchTypeLeaderboardEntry[]> {
+  const params = new URLSearchParams({ pitch, limit: String(limit) })
+  if (date) params.set('date', date)
+  return apiGet<PitchTypeLeaderboardEntry[]>(`/api/leaderboards/pitch-type?${params}`)
+}
+
 /** @deprecated Prefer named fetchers; kept for existing imports. */
 export const api = {
   todayGames: fetchTodayGames,
@@ -65,6 +86,11 @@ export const queryKeys = {
     detail: (playerId: number) => ['player', 'detail', playerId] as const,
     recent: (playerId: number, limit = 20) =>
       ['player', 'recent', playerId, limit] as const,
+  },
+  leaderboards: {
+    pitchTypes: () => ['leaderboards', 'pitch-types'] as const,
+    pitchType: (pitch: string, date?: string, limit = 20) =>
+      ['leaderboards', 'pitch-type', pitch, date ?? 'today', limit] as const,
   },
 }
 
@@ -95,5 +121,24 @@ export function playerRecentStatsQueryOptions(playerId: number, limit = 20) {
   return queryOptions({
     queryKey: queryKeys.players.recent(playerId, limit),
     queryFn: () => fetchPlayerRecentStats(playerId, limit),
+  })
+}
+
+export function pitchTypesQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.leaderboards.pitchTypes(),
+    queryFn: fetchPitchTypes,
+  })
+}
+
+export function pitchTypeLeaderboardQueryOptions(
+  pitch: string,
+  date?: string,
+  limit = 20,
+) {
+  return queryOptions({
+    queryKey: queryKeys.leaderboards.pitchType(pitch, date, limit),
+    queryFn: () => fetchPitchTypeLeaderboard(pitch, date, limit),
+    enabled: Boolean(pitch),
   })
 }

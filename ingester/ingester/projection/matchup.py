@@ -31,6 +31,18 @@ from ingester.projection.constants import (
 QUALITY_MATCHUP = "matchup"
 QUALITY_FALLBACK = "fallback_overall"
 
+# Defensible physical bounds on a matchup value. Thin per-pitch-type samples can have
+# non-physical raw rates (raw xwOBA observed up to ~6.5 on tiny early-season samples),
+# and EB regression only pulls *between* raw and league — it can't bound a wild raw
+# value. These clamps are the hard guarantee that no batter gets an impossible matchup.
+_XWOBA_CLAMP = (0.20, 0.50)
+_K_RATE_CLAMP = (0.10, 0.40)
+_ISO_CLAMP = (0.080, 0.350)
+
+
+def _clamp(v: float, bounds: tuple[float, float]) -> float:
+    return max(bounds[0], min(bounds[1], v))
+
 
 @dataclass(frozen=True)
 class ArsenalEntry:
@@ -121,19 +133,19 @@ def combine_component(
 # ---------------------------------------------------------------------------
 
 def fetch_pitcher_arsenal(
-    conn: psycopg.Connection, pitcher_id: int, as_of_date: date, batter_hand: str
+    conn: psycopg.Connection, pitcher_id: int, as_of_date: date, batter_hand: str, season: int
 ) -> list[ArsenalEntry]:
     rows = conn.execute(
         """
         SELECT pitch_type, usage_rate, pitches_thrown
         FROM pitcher_arsenal
-        WHERE player_id = %s AND vs_handedness = %s
+        WHERE player_id = %s AND vs_handedness = %s AND season = %s
           AND as_of_date = (
               SELECT MAX(as_of_date) FROM pitcher_arsenal
-              WHERE player_id = %s AND vs_handedness = %s AND as_of_date <= %s
+              WHERE player_id = %s AND vs_handedness = %s AND season = %s AND as_of_date <= %s
           )
         """,
-        (pitcher_id, batter_hand, pitcher_id, batter_hand, as_of_date),
+        (pitcher_id, batter_hand, season, pitcher_id, batter_hand, season, as_of_date),
     ).fetchall()
     return [
         ArsenalEntry(
@@ -146,19 +158,19 @@ def fetch_pitcher_arsenal(
 
 
 def fetch_batter_pitch_stats(
-    conn: psycopg.Connection, batter_id: int, pitcher_hand: str, as_of_date: date
+    conn: psycopg.Connection, batter_id: int, pitcher_hand: str, as_of_date: date, season: int
 ) -> dict[str, BatterPitchStat]:
     rows = conn.execute(
         """
         SELECT pitch_type, xwoba, k_rate, iso, pitches_seen
         FROM batter_pitch_type_stats
-        WHERE player_id = %s AND vs_handedness = %s
+        WHERE player_id = %s AND vs_handedness = %s AND season = %s
           AND as_of_date = (
               SELECT MAX(as_of_date) FROM batter_pitch_type_stats
-              WHERE player_id = %s AND vs_handedness = %s AND as_of_date <= %s
+              WHERE player_id = %s AND vs_handedness = %s AND season = %s AND as_of_date <= %s
           )
         """,
-        (batter_id, pitcher_hand, batter_id, pitcher_hand, as_of_date),
+        (batter_id, pitcher_hand, season, batter_id, pitcher_hand, season, as_of_date),
     ).fetchall()
     return {
         str(r[0]): BatterPitchStat(
@@ -220,11 +232,11 @@ def compute_matchup(
     pitcher has too little arsenal data or the batter has no per-pitch-type data
     for any pitch the pitcher throws.
     """
-    arsenal = fetch_pitcher_arsenal(conn, pitcher_id, as_of_date, batter_hand)
+    arsenal = fetch_pitcher_arsenal(conn, pitcher_id, as_of_date, batter_hand, season)
     if not arsenal or sum(a.pitches_thrown for a in arsenal) < MATCHUP_MIN_ARSENAL_PITCHES:
         return MatchupResult(overall_xwoba, overall_k_rate, overall_iso, QUALITY_FALLBACK, 0.0)
 
-    batter_stats = fetch_batter_pitch_stats(conn, batter_id, pitcher_hand, as_of_date)
+    batter_stats = fetch_batter_pitch_stats(conn, batter_id, pitcher_hand, as_of_date, season)
     baselines = fetch_league_baselines(conn, season, pitcher_hand)
     league_xwoba = {pt: b.xwoba for pt, b in baselines.items() if b.xwoba is not None}
     league_k = {pt: b.k_rate for pt, b in baselines.items() if b.k_rate is not None}
@@ -239,6 +251,12 @@ def compute_matchup(
     iso, _ = combine_component(
         arsenal, batter_stats, league_iso, overall_iso, metric="iso"
     )
+
+    # Clamp to defensible bounds: a value outside these means a thin-sample anomaly
+    # (the raw per-pitch-type rate was non-physical), so cap rather than propagate it.
+    xwoba = _clamp(xwoba, _XWOBA_CLAMP)
+    k_rate = _clamp(k_rate, _K_RATE_CLAMP)
+    iso = _clamp(iso, _ISO_CLAMP)
 
     quality = QUALITY_MATCHUP if covered > 0.0 else QUALITY_FALLBACK
     return MatchupResult(round(xwoba, 4), round(k_rate, 4), round(iso, 4), quality, covered)

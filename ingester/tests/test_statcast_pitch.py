@@ -119,6 +119,26 @@ class TestAggregateBatterPitchStats:
         assert not any(r["pitch_type"] == "SL" for r in rows)
         assert any(r["pitch_type"] == "FF" for r in rows)
 
+    def test_xwoba_divides_by_pa_count_not_sparse_woba_denom(self):
+        # Real bulk Statcast populates woba_denom on only some PA-ending rows (NaN on
+        # the rest) while woba_value is always present. Dividing by sum(woba_denom)
+        # collapsed the denominator (xwOBA up to 6.45). xwOBA must divide by PA count.
+        nonterminal = [_pitch(batter=300, description="ball") for _ in range(27)]
+        terminal = [
+            # value present on all; woba_denom present on only ONE of the three PAs
+            _pitch(batter=300, events="home_run", description="hit_into_play",
+                   estimated_woba_using_speedangle=None, woba_value=2.0, woba_denom=None),
+            _pitch(batter=300, events="single", description="hit_into_play",
+                   estimated_woba_using_speedangle=None, woba_value=0.9, woba_denom=None),
+            _pitch(batter=300, events="field_out", description="hit_into_play",
+                   estimated_woba_using_speedangle=None, woba_value=0.0, woba_denom=1.0),
+        ]
+        df = pd.DataFrame(nonterminal + terminal)
+        rows = aggregate_batter_pitch_stats(df, AS_OF, SEASON)
+        ff_r = next(r for r in rows if r["pitch_type"] == "FF" and r["vs_handedness"] == "R")
+        assert ff_r["pa_ended_on_type"] == 3
+        assert ff_r["xwoba"] == round(2.9 / 3, 4)   # 0.9667, NOT 2.9 (sum/sum_denom)
+
     def test_as_of_date_excludes_future_pitches(self):
         df = pd.DataFrame(
             _batter_ff_block()
@@ -148,6 +168,29 @@ class TestAggregatePitcherArsenal:
 
     def test_below_min_pitches_dropped(self):
         df = pd.DataFrame([_pitch(pitcher=200, pitch_type="FF") for _ in range(40)])
+        assert aggregate_pitcher_arsenal(df, AS_OF, SEASON) == []
+
+    def test_thin_handedness_rows_still_written(self):
+        # FF: 50 vs RHB + 10 vs LHB = 60 overall (qualifies). The 10-pitch L sample is
+        # well below the 50 floor but must still produce an FF-L row (regression at
+        # query time handles the small sample). Mirrors the Ty Madden 'A-only' bug.
+        df = pd.DataFrame(
+            [_pitch(pitcher=200, pitch_type="FF", stand="R") for _ in range(50)]
+            + [_pitch(pitcher=200, pitch_type="FF", stand="L") for _ in range(10)]
+        )
+        rows = aggregate_pitcher_arsenal(df, AS_OF, SEASON)
+        by_hand = {r["vs_handedness"]: r for r in rows if r["pitch_type"] == "FF"}
+        assert set(by_hand) == {"A", "L", "R"}
+        assert by_hand["A"]["pitches_thrown"] == 60
+        assert by_hand["R"]["pitches_thrown"] == 50
+        assert by_hand["L"]["pitches_thrown"] == 10  # written despite < 50
+
+    def test_below_overall_threshold_writes_no_handedness_rows(self):
+        # 40 overall (< 50) → pitch type doesn't qualify, so no A and no L/R rows.
+        df = pd.DataFrame(
+            [_pitch(pitcher=200, pitch_type="FF", stand="R") for _ in range(35)]
+            + [_pitch(pitcher=200, pitch_type="FF", stand="L") for _ in range(5)]
+        )
         assert aggregate_pitcher_arsenal(df, AS_OF, SEASON) == []
 
 

@@ -7,6 +7,7 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.LocalDate;
 import java.util.List;
 
 @Repository
@@ -21,6 +22,9 @@ public class ProjectionRepository {
             bp.expected_hits, bp.expected_total_bases,
             bp.adj_park, bp.adj_pitcher, bp.adj_weather_hr, bp.adj_weather_hits,
             bp.pitcher_data_quality,
+            bp.lineup_position, bp.lineup_confirmed,
+            bp.matchup_xwoba, bp.matchup_quality,
+            g.game_date,
             p.full_name     AS batter_name,
             p.bats,
             p.position,
@@ -36,7 +40,7 @@ public class ProjectionRepository {
         JOIN teams ht    ON ht.id  = g.home_team_id
         JOIN teams at2   ON at2.id = g.away_team_id
         WHERE bp.game_id = ?
-        ORDER BY bp.is_home DESC, bp.expected_pa DESC
+        ORDER BY bp.is_home DESC, bp.lineup_position ASC NULLS LAST, bp.expected_pa DESC
         """;
 
     private final JdbcTemplate jdbc;
@@ -73,6 +77,8 @@ public class ProjectionRepository {
             toDouble(rs.getBigDecimal("adj_weather_hr")),
             toDouble(rs.getBigDecimal("adj_weather_hits")));
 
+        // Arsenal lists are filled in by ProjectionService (it needs game_date and
+        // the pitch repo); mapped here as null so the row is otherwise complete.
         BatterProjectionDto proj = new BatterProjectionDto(
             player, pitcher,
             toDouble(rs.getBigDecimal("expected_pa")),
@@ -80,14 +86,25 @@ public class ProjectionRepository {
             toDouble(rs.getBigDecimal("expected_hits")),
             toDouble(rs.getBigDecimal("expected_total_bases")),
             adjs,
-            rs.getString("pitcher_data_quality"));
+            rs.getString("pitcher_data_quality"),
+            rs.getObject("lineup_position", Integer.class),
+            rs.getObject("lineup_confirmed", Boolean.class),
+            toDouble(rs.getBigDecimal("matchup_xwoba")),
+            rs.getString("matchup_quality"),
+            null, null);
 
-        return new BatterRow(rs.getBoolean("is_home"), rs.getString("home_abbr"), rs.getString("away_abbr"), proj);
+        return new BatterRow(
+            rs.getBoolean("is_home"),
+            rs.getString("home_abbr"),
+            rs.getString("away_abbr"),
+            rs.getObject("game_date", LocalDate.class),
+            proj);
     }
 
     private static Double toDouble(BigDecimal bd) {
         return bd == null ? null : bd.doubleValue();
     }
 
-    public record BatterRow(boolean isHome, String homeAbbr, String awayAbbr, BatterProjectionDto projection) {}
+    public record BatterRow(
+        boolean isHome, String homeAbbr, String awayAbbr, LocalDate gameDate, BatterProjectionDto projection) {}
 }

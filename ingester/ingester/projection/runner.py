@@ -5,13 +5,14 @@ import argparse
 import json
 import logging
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 
 import psycopg
 
 from ingester.db import eastern_today, get_connection
 from ingester.projection.batter_model import (
+    BatterProbabilities,
     BatterSkillInput,
     blend_batter_skills,
     expected_team_runs,
@@ -477,6 +478,7 @@ def _project_team_side(
     season: int,
     park: ParkFactors,
     summary: ProjectSummary,
+    bundle=None,
 ) -> float | None:
     """Project hitters for one team; return expected_team_runs or None if insufficient data."""
     hitters = _resolve_lineup(
@@ -561,6 +563,16 @@ def _project_team_side(
             matchup_k_rate=matchup.k_rate,
             matchup_iso=matchup.iso,
         )
+        if bundle is not None:
+            xprobs = _xgb_probabilities(
+                conn, hitter=hitter, opposing_pitcher_id=opposing_pitcher_id,
+                pitcher_throws=pitcher_throws, is_home=is_home, park=park,
+                as_of_date=summary.game_date, season=season, bundle=bundle,
+            )
+            if xprobs is not None:
+                if bundle.blend is not None:
+                    xprobs = _blend_probabilities(proj.probabilities, xprobs, bundle.blend)
+                proj = replace(proj, probabilities=xprobs)
         _upsert_batter_projection(
             conn,
             game.game_id,
@@ -605,6 +617,7 @@ def _project_game(
     game: SlateGame,
     season: int,
     summary: ProjectSummary,
+    bundle=None,
 ) -> bool:
     reason = _game_ready(game)
     if reason:
@@ -626,6 +639,7 @@ def _project_game(
         season=season,
         park=park,
         summary=summary,
+        bundle=bundle,
     )
     away_runs = _project_team_side(
         conn,
@@ -636,6 +650,7 @@ def _project_game(
         season=season,
         park=park,
         summary=summary,
+        bundle=bundle,
     )
     if home_runs is None or away_runs is None:
         summary.skip_reasons.append(
@@ -705,7 +720,7 @@ def _clear_slate_projections(conn: psycopg.Connection, game_date: date) -> int:
 
 
 def run_projections(
-    conn: psycopg.Connection, game_date: date
+    conn: psycopg.Connection, game_date: date, bundle=None
 ) -> ProjectSummary:
     summary = ProjectSummary(game_date=game_date)
     season = infer_season(game_date)
@@ -724,7 +739,7 @@ def run_projections(
         log.info("cleared %d stale/prior batter_projection row(s) before recompute", cleared)
 
     for game in games:
-        if _project_game(conn, game, season, summary):
+        if _project_game(conn, game, season, summary, bundle=bundle):
             summary.games_projected += 1
         else:
             summary.games_skipped += 1
@@ -882,6 +897,42 @@ def _backtest_weather_skipped(game: SlateGame, game_date: date) -> bool:
     return (eastern_today() - game_date).days > 1
 
 
+def _xgb_probabilities(
+    conn, *, hitter, opposing_pitcher_id, pitcher_throws, is_home, park, as_of_date, season, bundle
+) -> BatterProbabilities | None:
+    """Score one hitter with the saved XGBoost market models; None => keep mechanistic."""
+    from ingester.ml.features import build_feature_row  # lazy: keeps xgboost off the default path
+
+    feat = build_feature_row(
+        conn, batter_id=hitter.player_id, bats=hitter.bats,
+        opposing_pitcher_id=opposing_pitcher_id, pitcher_throws=pitcher_throws,
+        lineup_position=hitter.lineup_position, is_home=is_home, park=park,
+        as_of_date=as_of_date, season=season,
+    )
+    if feat is None:
+        return None
+    p = bundle.predict(feat)
+    return BatterProbabilities(
+        p_hit_1plus=round(p["h1"], 4), p_hit_2plus=round(p["h2"], 4),
+        p_hr=round(p["hr"], 4), p_k_1plus=round(p["k"], 4),
+    )
+
+
+def _blend_probabilities(
+    mech: BatterProbabilities, xgb: BatterProbabilities, weights: dict
+) -> BatterProbabilities:
+    """Per-market w*p_mech + (1-w)*p_xgb (w = weight on mechanistic)."""
+    def b(market, m, x):
+        w = float(weights.get(market, 0.5))
+        return round(w * m + (1.0 - w) * x, 4)
+    return BatterProbabilities(
+        p_hit_1plus=b("h1", mech.p_hit_1plus, xgb.p_hit_1plus),
+        p_hit_2plus=b("h2", mech.p_hit_2plus, xgb.p_hit_2plus),
+        p_hr=b("hr", mech.p_hr, xgb.p_hr),
+        p_k_1plus=b("k", mech.p_k_1plus, xgb.p_k_1plus),
+    )
+
+
 def _project_team_side_backtest(
     conn: psycopg.Connection,
     *,
@@ -894,6 +945,7 @@ def _project_team_side_backtest(
     as_of_date: date,
     backtest_run_id: int,
     summary: ProjectSummary,
+    bundle=None,
 ) -> float | None:
     """Project one team side using snapshot skill tables; return expected_team_runs or None."""
     hitters = _resolve_lineup(
@@ -965,6 +1017,19 @@ def _project_team_side_backtest(
             matchup_k_rate=matchup.k_rate,
             matchup_iso=matchup.iso,
         )
+        if bundle is not None:
+            # Replace the four market probabilities with XGBoost (or a per-market blend
+            # w*p_mech + (1-w)*p_xgb when bundle.blend is set); expected hits/TB stay
+            # mechanistic. Fall back per-batter when no feature row could be built.
+            xprobs = _xgb_probabilities(
+                conn, hitter=hitter, opposing_pitcher_id=opposing_pitcher_id,
+                pitcher_throws=pitcher_throws, is_home=is_home, park=park,
+                as_of_date=as_of_date, season=season, bundle=bundle,
+            )
+            if xprobs is not None:
+                if bundle.blend is not None:
+                    xprobs = _blend_probabilities(proj.probabilities, xprobs, bundle.blend)
+                proj = replace(proj, probabilities=xprobs)
         _upsert_backtest_projection(
             conn, backtest_run_id, game.game_id, hitter.player_id, as_of_date, proj,
             matchup.xwoba, matchup.quality,
@@ -995,6 +1060,7 @@ def _project_game_backtest(
     as_of_date: date,
     backtest_run_id: int,
     summary: ProjectSummary,
+    bundle=None,
 ) -> bool:
     reason = _game_ready_backtest(game)
     if reason:
@@ -1011,13 +1077,13 @@ def _project_game_backtest(
         conn, game=game, team_id=game.home_team_id,
         opposing_pitcher_id=game.away_probable_pitcher_id,
         is_home=True, season=season, park=park,
-        as_of_date=as_of_date, backtest_run_id=backtest_run_id, summary=summary,
+        as_of_date=as_of_date, backtest_run_id=backtest_run_id, summary=summary, bundle=bundle,
     )
     away_runs = _project_team_side_backtest(
         conn, game=game, team_id=game.away_team_id,
         opposing_pitcher_id=game.home_probable_pitcher_id,
         is_home=False, season=season, park=park,
-        as_of_date=as_of_date, backtest_run_id=backtest_run_id, summary=summary,
+        as_of_date=as_of_date, backtest_run_id=backtest_run_id, summary=summary, bundle=bundle,
     )
     if home_runs is None or away_runs is None:
         summary.skip_reasons.append(f"game {game.game_id}: incomplete team projection")
@@ -1031,6 +1097,7 @@ def run_backtest_projections(
     game_date: date,
     as_of_date: date,
     backtest_run_id: int | None = None,
+    bundle=None,
 ) -> ProjectSummary:
     """
     Project a historical game_date using skill snapshots as of as_of_date.
@@ -1038,6 +1105,8 @@ def run_backtest_projections(
 
     backtest_run_id: must be a valid backtest_runs.id after V7 migration.
     When None, a date-derived surrogate is used (pre-V7 compatibility only).
+    bundle: a loaded ml.infer.ModelBundle to score the four markets with XGBoost
+    instead of the mechanistic probabilities (None = mechanistic).
     """
     summary = ProjectSummary(game_date=game_date)
     season = infer_season(game_date)
@@ -1053,7 +1122,7 @@ def run_backtest_projections(
         return summary
 
     for game in games:
-        if _project_game_backtest(conn, game, season, as_of_date, backtest_run_id, summary):
+        if _project_game_backtest(conn, game, season, as_of_date, backtest_run_id, summary, bundle=bundle):
             summary.games_projected += 1
         else:
             summary.games_skipped += 1
@@ -1088,6 +1157,18 @@ def cmd_project(args: argparse.Namespace) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     game_date = args.date if args.date is not None else eastern_today()
     as_of_date: date | None = getattr(args, "as_of", None)
+    model: str = getattr(args, "model", "mechanistic")
+
+    bundle = None
+    if model in ("xgb", "blend"):
+        from ingester.ml.infer import ModelBundle  # lazy: keeps xgboost off the default path
+        bundle = ModelBundle.load(blend=(model == "blend"))
+        if bundle is None:
+            # Production must never hard-fail on missing (git-ignored) artifacts.
+            need = "train-xgb --target all --save" + (" then tune-blend" if model == "blend" else "")
+            print(f"[project] WARNING: --model {model} requested but models/weights missing "
+                  f"(run {need}); falling back to mechanistic.")
+            model = "mechanistic"
 
     if as_of_date is not None:
         print(
@@ -1106,10 +1187,10 @@ def cmd_project(args: argparse.Namespace) -> None:
             conn.close()
         print(f"[project] Backtest run_id={run_id}")
     else:
-        print(f"[project] Computing projections for {game_date}…")
+        print(f"[project] Computing projections for {game_date} (model={model})…")
         conn = get_connection()
         try:
-            summary = run_projections(conn, game_date)
+            summary = run_projections(conn, game_date, bundle=bundle)
             conn.commit()
         except Exception:
             conn.rollback()

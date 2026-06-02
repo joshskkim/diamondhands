@@ -47,13 +47,16 @@ cd ingester
 cp .env.example .env   # fill in DATABASE_URL
 uv sync
 
-# Subcommands (stubs — business logic TBD)
+# Subcommands
 uv run python main.py load-static        # seed teams / stadiums from /data
 uv run python main.py backfill-stats     # pull historical game logs
 uv run python main.py daily-slate        # fetch today's games + probable pitchers
+uv run python main.py refresh-lineups    # pull today's confirmed batting orders (idempotent)
+uv run python main.py backfill-lineups --start YYYY-MM-DD --end YYYY-MM-DD  # historical lineups
 uv run python main.py refresh-weather    # attach weather to today's games
 uv run python main.py refresh-skills     # recompute batter_skill / pitcher_skill
 uv run python main.py project            # compute batter_projections for today
+uv run python main.py backtest --start YYYY-MM-DD --end YYYY-MM-DD          # backtesting suite
 uv run python main.py smoke              # end-to-end sanity check
 ```
 
@@ -81,9 +84,34 @@ uv run python main.py refresh-weather
 # 4. Recompute skills if needed
 uv run python main.py refresh-skills
 
-# 5. Run projections
+# 5. Pull confirmed lineups + project (re-run as lineups post)
+uv run python main.py refresh-lineups
 uv run python main.py project
 
 # 6. View in UI
 cd ../web && npm run dev
 ```
+
+## Lineups & re-projection cadence (cron — not installed)
+
+Confirmed lineups post ~2–3 h before first pitch and trickle in across the
+afternoon. `refresh-lineups` is idempotent, and `project` recomputes the whole
+slate from scratch (it clears the day's rows first), so the two can run together
+on a loop. Once a game's lineup is confirmed, its batters are weighted by
+batting-order PA (`PA_BY_ORDER`); until then they fall back to the projected
+top-of-order proxy at a flat 4.0 PA.
+
+Suggested cadence (US/Eastern) — **document only, do not install yet:**
+
+```cron
+# Every 30 min, noon–6 PM ET: refresh lineups then re-project today's slate.
+# By first pitch all games should reflect confirmed lineups.
+*/30 12-18 * * *  cd /path/to/diamond/ingester && \
+    uv run python main.py refresh-lineups && \
+    uv run python main.py project
+```
+
+For backtesting, seed historical lineups once with
+`backfill-lineups --start … --end …` (uses the same MLB Stats API lineups
+hydration, which works for past games).
+

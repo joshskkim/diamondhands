@@ -145,15 +145,18 @@ def agg_batter_game_stats(df: pd.DataFrame, abbrev_to_id: dict[str, int]) -> lis
         walks=("is_bb", "sum"),
         xwoba_num=("xwoba_num", "sum"),
         woba_num=("woba_value", "sum"),
-        woba_denom=("woba_denom", "sum"),
         is_home=("is_home", "first"),
         home_team=("home_team", "first"),
         away_team=("away_team", "first"),
     ).reset_index()
 
-    # Safe division
-    agg["xwoba"] = (agg["xwoba_num"] / agg["woba_denom"].replace(0, np.nan)).round(4)
-    agg["woba"]  = (agg["woba_num"]  / agg["woba_denom"].replace(0, np.nan)).round(4)
+    # Divide by the PA count, NOT sum(woba_denom): Statcast's bulk feed populates
+    # woba_denom on only ~1 of every ~9 PA-ending rows (NaN on the rest), so summing
+    # it collapses the denominator and inflates xwOBA. Each PA-ending row is one PA,
+    # so plate_appearances is the correct denominator (season xwOBA in refresh-skills
+    # is PA-weighted, so sum(num)/sum(PA) stays exact). See statcast_pitch.py.
+    agg["xwoba"] = (agg["xwoba_num"] / agg["plate_appearances"].replace(0, np.nan)).round(4)
+    agg["woba"]  = (agg["woba_num"]  / agg["plate_appearances"].replace(0, np.nan)).round(4)
 
     rows: list[dict] = []
     for _, r in agg.iterrows():
@@ -292,13 +295,14 @@ def agg_pitcher_vs_handedness(pa_chunks: list[pd.DataFrame]) -> list[dict]:
     rows: list[dict] = []
     for (pitcher_id, stand), d in acc.items():
         bf    = d["bf"]
-        denom = d["woba_denom"] or np.nan
+        # Denominator is batters faced (PA count), NOT sum(woba_denom) — the latter is
+        # sparsely populated in the bulk feed and collapses the ratio. See agg_batter_game_stats.
         rows.append({
             "player_id":     pitcher_id,
             "vs_handedness": stand,
             "batters_faced": bf,
-            "xwoba_against": None if np.isnan(denom) else round(d["xwoba_num"] / denom, 4),
-            "woba_against":  None if np.isnan(denom) else round(d["woba_num"]  / denom, 4),
+            "xwoba_against": round(d["xwoba_num"] / bf, 4) if bf > 0 else None,
+            "woba_against":  round(d["woba_num"]  / bf, 4) if bf > 0 else None,
             "k_rate":        round(d["k"]    / bf, 4) if bf > 0 else None,
             "bb_rate":       round(d["bb"]   / bf, 4) if bf > 0 else None,
             "hr_per_pa":     round(d["hr"]   / bf, 4) if bf > 0 else None,

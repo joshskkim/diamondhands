@@ -116,6 +116,7 @@ def _insert_backtest_run(
     conn: psycopg.Connection,
     start: date,
     end: date,
+    model_version: str = MODEL_VERSION,
 ) -> int:
     """Create a new backtest_runs row in 'running' state; returns its id."""
     row = conn.execute(
@@ -126,7 +127,7 @@ def _insert_backtest_run(
         VALUES (%s, %s, %s, %s::jsonb)
         RETURNING id
         """,
-        (start, end, MODEL_VERSION, json.dumps(collect_model_constants())),
+        (start, end, model_version, json.dumps(collect_model_constants())),
     ).fetchone()
     conn.commit()
     return int(row[0])
@@ -348,17 +349,30 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date   = args.end
     want_csv: bool = getattr(args, "csv", False)
+    model: str = getattr(args, "model", "mechanistic")
 
     if start > end:
         print("[backtest] ERROR: --start must be <= --end", file=sys.stderr)
         sys.exit(1)
 
-    print(f"[backtest] Range {start} → {end}  |  Model {MODEL_VERSION}")
+    bundle = None
+    model_version = MODEL_VERSION
+    if model in ("xgb", "blend"):
+        from ingester.ml.infer import ModelBundle  # lazy: keeps xgboost off the default path
+        bundle = ModelBundle.load(blend=(model == "blend"))
+        if bundle is None:
+            need = "train-xgb --target all --save" + (" then tune-blend" if model == "blend" else "")
+            print(f"[backtest] ERROR: --model {model} but models/weights missing; run {need} first",
+                  file=sys.stderr)
+            sys.exit(1)
+        model_version = f"{MODEL_VERSION}-{model}"
+
+    print(f"[backtest] Range {start} → {end}  |  Model {model_version}")
 
     conn = get_connection()
     try:
         # Step a: create the run row.
-        run_id = _insert_backtest_run(conn, start, end)
+        run_id = _insert_backtest_run(conn, start, end, model_version)
         print(f"[backtest] Run #{run_id} created")
 
         # Step b: project each date in the range.
@@ -370,7 +384,7 @@ def cmd_backtest(args: argparse.Namespace) -> None:
                 current += timedelta(days=1)
                 continue
 
-            summary = run_backtest_projections(conn, current, as_of, run_id)
+            summary = run_backtest_projections(conn, current, as_of, run_id, bundle=bundle)
             conn.commit()
 
             if summary.games_projected > 0:

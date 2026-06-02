@@ -50,12 +50,17 @@ REGRESSION_K_BF: int = 100
 # each per-pitch-type rate toward its league baseline by sample size at query
 # time (matchup.py), same empirical-Bayes shape as the skill blend. Phantom
 # league-average pitches added to each sample:
-REGRESSION_K_PITCHES_BATTER: int = 100
+# Bumped 100 → 200: thin early-season per-pitch-type samples have wildly noisy raw
+# xwOBA, so regress them harder toward the league baseline. (Note: regression alone
+# can't bound non-physical raw values — see the matchup clamps in matchup.py.)
+REGRESSION_K_PITCHES_BATTER: int = 200
 REGRESSION_K_PITCHES_PITCHER: int = 200
 
 # A pitcher needs at least this many arsenal pitches (vs the batter's hand) before
-# we trust a matchup; below it, fall back to the v2.0.0 season blend.
-MATCHUP_MIN_ARSENAL_PITCHES: int = 100
+# we trust a matchup; below it, fall back to the v2.0.0 season blend. Set low (30):
+# even a spot starter's small sample carries signal once combine_component regresses
+# it toward the league baseline, so 100 was discarding useful (regressed) signal.
+MATCHUP_MIN_ARSENAL_PITCHES: int = 30
 
 # When the batter has data for less than this share of the pitcher's mix, the
 # uncovered share is filled with the batter's overall blend (partial fallback).
