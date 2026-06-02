@@ -359,7 +359,8 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     model_version = MODEL_VERSION
     if model in ("xgb", "blend"):
         from ingester.ml.infer import ModelBundle  # lazy: keeps xgboost off the default path
-        bundle = ModelBundle.load(blend=(model == "blend"))
+        from ingester.ml.train import resolve_models_dir
+        bundle = ModelBundle.load(resolve_models_dir(getattr(args, "models_dir", None)), blend=(model == "blend"))
         if bundle is None:
             need = "train-xgb --target all --save" + (" then tune-blend" if model == "blend" else "")
             print(f"[backtest] ERROR: --model {model} but models/weights missing; run {need} first",

@@ -28,6 +28,16 @@ _BINARY_TARGETS = list(_MECHANISTIC_BRIER)
 _BASE = {"objective": "binary:logistic", "eval_metric": "logloss", "tree_method": "hist", "seed": 42}
 
 
+def resolve_models_dir(name: str | None):
+    """Resolve an optional --models-dir to a Path under ingester/ (default the production
+    MODELS_DIR). A relative name lands beside MODELS_DIR (e.g. 'models_eval')."""
+    from pathlib import Path
+    if not name:
+        return MODELS_DIR
+    p = Path(name)
+    return p if p.is_absolute() else (MODELS_DIR.parent / name)
+
+
 def _load(seasons: list[int]) -> pd.DataFrame:
     frames = []
     for s in seasons:
@@ -45,7 +55,8 @@ def _fit(params, X_tr, y_tr, X_val, y_val):
                      early_stopping_rounds=50, verbose_eval=False)
 
 
-def _run_one(df: pd.DataFrame, target: str, trials: int, n_folds: int, save: bool) -> None:
+def _run_one(df: pd.DataFrame, target: str, trials: int, n_folds: int, save: bool, models_dir=None) -> None:
+    models_dir = models_dir or MODELS_DIR
     X = df[list(FEATURE_COLUMNS)].astype("float64")
     y = df[target].astype(int)
     folds = walk_forward_folds(df["game_date"], n_folds=n_folds)
@@ -106,10 +117,81 @@ def _run_one(df: pd.DataFrame, target: str, trials: int, n_folds: int, save: boo
     if save:
         n_rounds = int(np.median(best_iters))
         final = xgb.train(best, xgb.DMatrix(X, label=y), num_boost_round=max(n_rounds, 1))
-        MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        final.save_model(MODELS_DIR / f"{target}.json")
-        (MODELS_DIR / "feature_spec.json").write_text(json.dumps({"features": list(FEATURE_COLUMNS)}, indent=2))
-        print(f"  saved → models/{target}.json  ({n_rounds} rounds)  + feature_spec.json")
+        models_dir.mkdir(parents=True, exist_ok=True)
+        gi = models_dir / ".gitignore"
+        if not gi.exists():
+            gi.write_text("*\n!.gitignore\n")
+        final.save_model(models_dir / f"{target}.json")
+        (models_dir / "feature_spec.json").write_text(json.dumps({"features": list(FEATURE_COLUMNS)}, indent=2))
+        print(f"  saved → {models_dir.name}/{target}.json  ({n_rounds} rounds)  + feature_spec.json")
+
+
+# Regressor targets: name -> (label column, xgboost objective).
+_REGRESSORS = {"exp_hits": ("hits", "count:poisson"), "exp_tb": ("total_bases", "reg:tweedie")}
+
+
+def _run_regressor(df, name, trials, n_folds, save, models_dir):
+    models_dir = models_dir or MODELS_DIR
+    label_col, objective = _REGRESSORS[name]
+    X = df[list(FEATURE_COLUMNS)].astype("float64")
+    y = df[label_col].astype("float64")
+    folds = walk_forward_folds(df["game_date"], n_folds=n_folds)
+    base = {"objective": objective, "eval_metric": "mae", "tree_method": "hist", "seed": 42}
+
+    def mae(pred, actual):
+        return float(np.mean(np.abs(np.asarray(pred) - np.asarray(actual))))
+
+    def fit(params, X_tr, y_tr, X_val, y_val):
+        return xgb.train(params, xgb.DMatrix(X_tr, label=y_tr), num_boost_round=2000,
+                         evals=[(xgb.DMatrix(X_val, label=y_val), "val")],
+                         early_stopping_rounds=50, verbose_eval=False)
+
+    def objective_fn(trial):
+        params = {
+            **base,
+            "max_depth": trial.suggest_int("max_depth", 3, 8),
+            "eta": trial.suggest_float("eta", 0.01, 0.3, log=True),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 30),
+            "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+            "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
+        }
+        if objective == "reg:tweedie":
+            params["tweedie_variance_power"] = trial.suggest_float("tvp", 1.1, 1.9)
+        maes = []
+        for tr, val in folds:
+            bst = fit(params, X.iloc[tr], y.iloc[tr], X.iloc[val], y.iloc[val])
+            pred = bst.predict(xgb.DMatrix(X.iloc[val]), iteration_range=(0, bst.best_iteration + 1))
+            maes.append(mae(pred, y.iloc[val]))
+        return float(np.mean(maes))
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = optuna.create_study(direction="minimize", sampler=optuna.samplers.TPESampler(seed=42))
+    study.optimize(objective_fn, n_trials=trials, show_progress_bar=False)
+    best = {**base, **{k: v for k, v in study.best_params.items() if k != "tvp"}}
+    if objective == "reg:tweedie":
+        best["tweedie_variance_power"] = study.best_params["tvp"]
+
+    oof_pred, oof_actual, best_iters = [], [], []
+    for tr, val in folds:
+        bst = fit(best, X.iloc[tr], y.iloc[tr], X.iloc[val], y.iloc[val])
+        oof_pred += bst.predict(xgb.DMatrix(X.iloc[val]), iteration_range=(0, bst.best_iteration + 1)).tolist()
+        oof_actual += y.iloc[val].tolist()
+        best_iters.append(bst.best_iteration + 1)
+    model_mae = mae(oof_pred, oof_actual)
+    naive_mae = mae([np.mean(oof_actual)] * len(oof_actual), oof_actual)
+    print(f"[train-xgb] regressor {name} ({label_col}, {objective}) rows={len(df)} "
+          f"MAE {model_mae:.4f}  (naive-mean {naive_mae:.4f})")
+
+    if save:
+        n_rounds = int(np.median(best_iters))
+        final = xgb.train(best, xgb.DMatrix(X, label=y), num_boost_round=max(n_rounds, 1))
+        models_dir.mkdir(parents=True, exist_ok=True)
+        gi = models_dir / ".gitignore"
+        if not gi.exists():
+            gi.write_text("*\n!.gitignore\n")
+        final.save_model(models_dir / f"{name}.json")
+        print(f"  saved → {models_dir.name}/{name}.json  ({n_rounds} rounds)")
 
 
 def cmd_tune_blend(args: argparse.Namespace) -> None:
@@ -170,16 +252,24 @@ def cmd_tune_blend(args: argparse.Namespace) -> None:
         weights[m] = best_w
         print(f"  {m}: w_mech={best_w:.2f}  blended={best_b:.4f}  (mech {b_mech:.4f}, xgb {b_xgb:.4f})")
 
-    (MODELS_DIR / "blend.json").write_text(json.dumps(weights, indent=2))
-    print(f"  saved → models/blend.json  {weights}")
+    models_dir = resolve_models_dir(getattr(args, "models_dir", None))
+    models_dir.mkdir(parents=True, exist_ok=True)
+    (models_dir / "blend.json").write_text(json.dumps(weights, indent=2))
+    print(f"  saved → {models_dir.name}/blend.json  {weights}")
 
 
 def cmd_train_xgb(args: argparse.Namespace) -> None:
     seasons: list[int] = args.season or [2025]
-    targets = _BINARY_TARGETS if args.target == "all" else [args.target]
+    if args.target == "all":
+        targets = list(_BINARY_TARGETS)
+    elif args.target == "regressors":
+        targets = list(_REGRESSORS)
+    else:
+        targets = [args.target]
+    valid = set(_BINARY_TARGETS) | set(_REGRESSORS)
     for t in targets:
-        if t not in _BINARY_TARGETS:
-            raise SystemExit(f"[train-xgb] unknown target {t!r}; choose from {_BINARY_TARGETS} or 'all'")
+        if t not in valid:
+            raise SystemExit(f"[train-xgb] unknown target {t!r}; choose from {sorted(valid)}, 'all', 'regressors'")
     df = _load(seasons)
     train_end = getattr(args, "train_end", None)
     if train_end is not None:
@@ -187,5 +277,9 @@ def cmd_train_xgb(args: argparse.Namespace) -> None:
         # can be backtested as a genuine out-of-sample tail.
         df = df[df["game_date"] <= pd.Timestamp(train_end)].reset_index(drop=True)
         print(f"[train-xgb] restricted to game_date <= {train_end}: {len(df)} rows")
+    models_dir = resolve_models_dir(getattr(args, "models_dir", None))
     for t in targets:
-        _run_one(df, t, trials=args.trials, n_folds=args.folds, save=args.save)
+        if t in _REGRESSORS:
+            _run_regressor(df, t, trials=args.trials, n_folds=args.folds, save=args.save, models_dir=models_dir)
+        else:
+            _run_one(df, t, trials=args.trials, n_folds=args.folds, save=args.save, models_dir=models_dir)

@@ -39,6 +39,7 @@ from ingester.commands.pitch_aggregations import (
 from ingester.commands.backtest import cmd_backtest
 from ingester.ml.dataset import cmd_build_training_data
 from ingester.ml.train import cmd_train_xgb, cmd_tune_blend
+from ingester.commands.report import cmd_compare_runs
 from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
 from ingester.projection.runner import cmd_project, cmd_smoke_project
 
@@ -202,6 +203,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--train-end", metavar="YYYY-MM-DD", type=_date_arg, default=None, dest="train_end",
         help="Temporal holdout: train only on games on/before this date",
     )
+    p_train_xgb.add_argument(
+        "--models-dir", default=None, dest="models_dir",
+        help="Save models to this dir (default models/; e.g. models_eval to not clobber production)",
+    )
 
     p_tune_blend = sub.add_parser(
         "tune-blend",
@@ -211,6 +216,11 @@ def build_parser() -> argparse.ArgumentParser:
                               help="backtest_runs.id of the mechanistic run")
     p_tune_blend.add_argument("--xgb-run", type=int, required=True, dest="xgb_run",
                               help="backtest_runs.id of the xgb run (same rows)")
+    p_tune_blend.add_argument("--models-dir", default=None, dest="models_dir",
+                              help="Save blend.json to this dir (default models/)")
+
+    p_compare = sub.add_parser("compare-runs", help="Side-by-side Brier + calibration across backtest runs")
+    p_compare.add_argument("--runs", required=True, help="Comma-separated backtest_runs ids (e.g. 40,41,42)")
 
     p_project      = sub.add_parser("project",      help="Compute projections for today's slate")
 
@@ -230,6 +240,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_backtest.add_argument(
         "--model", choices=["mechanistic", "xgb", "blend"], default="mechanistic",
         help="Probability source: mechanistic (default), xgb, or blend (per-market w*mech+(1-w)*xgb)",
+    )
+    p_backtest.add_argument(
+        "--models-dir", default=None, dest="models_dir",
+        help="Load xgb/blend models from this dir (default models/)",
     )
 
     sub.add_parser("smoke",        help="DB connectivity sanity check")
@@ -281,6 +295,7 @@ COMMANDS = {
     "build-training-data":      cmd_build_training_data,
     "train-xgb":                cmd_train_xgb,
     "tune-blend":               cmd_tune_blend,
+    "compare-runs":             cmd_compare_runs,
     "project":                  cmd_project,
     "backtest":                 cmd_backtest,
     "smoke":                    cmd_smoke,

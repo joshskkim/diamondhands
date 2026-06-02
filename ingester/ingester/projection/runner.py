@@ -564,15 +564,11 @@ def _project_team_side(
             matchup_iso=matchup.iso,
         )
         if bundle is not None:
-            xprobs = _xgb_probabilities(
+            proj = _xgb_apply(
                 conn, hitter=hitter, opposing_pitcher_id=opposing_pitcher_id,
                 pitcher_throws=pitcher_throws, is_home=is_home, park=park,
-                as_of_date=summary.game_date, season=season, bundle=bundle,
+                as_of_date=summary.game_date, season=season, bundle=bundle, proj=proj,
             )
-            if xprobs is not None:
-                if bundle.blend is not None:
-                    xprobs = _blend_probabilities(proj.probabilities, xprobs, bundle.blend)
-                proj = replace(proj, probabilities=xprobs)
         _upsert_batter_projection(
             conn,
             game.game_id,
@@ -897,10 +893,16 @@ def _backtest_weather_skipped(game: SlateGame, game_date: date) -> bool:
     return (eastern_today() - game_date).days > 1
 
 
-def _xgb_probabilities(
-    conn, *, hitter, opposing_pitcher_id, pitcher_throws, is_home, park, as_of_date, season, bundle
-) -> BatterProbabilities | None:
-    """Score one hitter with the saved XGBoost market models; None => keep mechanistic."""
+def _xgb_apply(
+    conn, *, hitter, opposing_pitcher_id, pitcher_throws, is_home, park, as_of_date, season, bundle, proj
+):
+    """Score one hitter with the saved models and return an updated projection.
+
+    Builds the feature row ONCE, replaces the four market probabilities (blended with the
+    mechanistic probs when bundle.blend is set), and — when count regressors are loaded —
+    the expected hits / total bases. Returns proj unchanged when no feature row can be
+    built (sub-threshold batter) so it falls back to the mechanistic projection.
+    """
     from ingester.ml.features import build_feature_row  # lazy: keeps xgboost off the default path
 
     feat = build_feature_row(
@@ -910,12 +912,20 @@ def _xgb_probabilities(
         as_of_date=as_of_date, season=season,
     )
     if feat is None:
-        return None
+        return proj
     p = bundle.predict(feat)
-    return BatterProbabilities(
+    xprobs = BatterProbabilities(
         p_hit_1plus=round(p["h1"], 4), p_hit_2plus=round(p["h2"], 4),
         p_hr=round(p["hr"], 4), p_k_1plus=round(p["k"], 4),
     )
+    if bundle.blend is not None:
+        xprobs = _blend_probabilities(proj.probabilities, xprobs, bundle.blend)
+    updated = {"probabilities": xprobs}
+    counts = bundle.predict_counts(feat)
+    if counts is not None:
+        updated["expected_hits"] = round(max(counts["exp_hits"], 0.0), 3)
+        updated["expected_total_bases"] = round(max(counts["exp_tb"], 0.0), 3)
+    return replace(proj, **updated)
 
 
 def _blend_probabilities(
@@ -1018,18 +1028,14 @@ def _project_team_side_backtest(
             matchup_iso=matchup.iso,
         )
         if bundle is not None:
-            # Replace the four market probabilities with XGBoost (or a per-market blend
-            # w*p_mech + (1-w)*p_xgb when bundle.blend is set); expected hits/TB stay
-            # mechanistic. Fall back per-batter when no feature row could be built.
-            xprobs = _xgb_probabilities(
+            # Replace the four market probabilities (blended with mechanistic when
+            # bundle.blend is set) and, if regressors are loaded, expected hits/TB.
+            # Falls back per-batter when no feature row could be built.
+            proj = _xgb_apply(
                 conn, hitter=hitter, opposing_pitcher_id=opposing_pitcher_id,
                 pitcher_throws=pitcher_throws, is_home=is_home, park=park,
-                as_of_date=as_of_date, season=season, bundle=bundle,
+                as_of_date=as_of_date, season=season, bundle=bundle, proj=proj,
             )
-            if xprobs is not None:
-                if bundle.blend is not None:
-                    xprobs = _blend_probabilities(proj.probabilities, xprobs, bundle.blend)
-                proj = replace(proj, probabilities=xprobs)
         _upsert_backtest_projection(
             conn, backtest_run_id, game.game_id, hitter.player_id, as_of_date, proj,
             matchup.xwoba, matchup.quality,
