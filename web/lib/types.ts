@@ -141,6 +141,23 @@ export interface GameProjections {
   away: TeamBatters
 }
 
+/**
+ * A single batter's projection flattened with its game context, for use in the
+ * home "Today's Board" pick leaderboards. Additive helper type — derived
+ * entirely from existing endpoints (no backend changes).
+ */
+export interface FlatBatterPick {
+  batter: BatterProjection
+  gameId: number
+  teamAbbr: string
+  opponentAbbr: string
+  opposingPitcherName: string
+  opposingPitcherThrows: string
+  startTimeUtc: string
+  /** True when this batter's lineup slot came from a confirmed lineup. */
+  lineupConfirmed: boolean
+}
+
 /** GET /api/players/:playerId */
 export interface PlayerDetail {
   id: number

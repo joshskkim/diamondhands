@@ -1,9 +1,11 @@
 import { queryOptions } from '@tanstack/react-query'
 import type {
+  FlatBatterPick,
   GameProjections,
   PitchTypeLeaderboardEntry,
   PitchTypeRef,
   PlayerDetail,
+  TeamBatters,
   RecentStat,
   TodayGame,
 } from './types'
@@ -64,6 +66,35 @@ export function fetchPitchTypeLeaderboard(
   const params = new URLSearchParams({ pitch, limit: String(limit) })
   if (date) params.set('date', date)
   return apiGet<PitchTypeLeaderboardEntry[]>(`/api/leaderboards/pitch-type?${params}`)
+}
+
+// ── Home "Today's Board" helpers (additive, client-side aggregation) ──────────
+
+/**
+ * Flatten one game's batter projections into {@link FlatBatterPick} rows,
+ * attaching game/opponent context so the home pick boards can rank across all
+ * games. Each side's batters take the opposing side's team abbr as opponent.
+ */
+export function flattenGameBatters(
+  game: TodayGame,
+  projections: GameProjections,
+): FlatBatterPick[] {
+  const sides: Array<{ side: TeamBatters; oppAbbr: string }> = [
+    { side: projections.home, oppAbbr: game.away.abbr },
+    { side: projections.away, oppAbbr: game.home.abbr },
+  ]
+  return sides.flatMap(({ side, oppAbbr }) =>
+    side.batters.map((batter) => ({
+      batter,
+      gameId: game.gameId,
+      teamAbbr: side.teamAbbr,
+      opponentAbbr: oppAbbr,
+      opposingPitcherName: batter.opposingPitcher.name,
+      opposingPitcherThrows: batter.opposingPitcher.throws,
+      startTimeUtc: game.startTimeUtc,
+      lineupConfirmed: batter.lineupConfirmed ?? side.lineupConfirmed,
+    })),
+  )
 }
 
 /** @deprecated Prefer named fetchers; kept for existing imports. */
