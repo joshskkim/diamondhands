@@ -22,6 +22,7 @@ _ROWS_SQL = """
     SELECT
         pgs.player_id, pgs.game_id, pgs.game_date, pgs.is_home,
         pgs.hits, pgs.home_runs, pgs.strikeouts, pgs.total_bases,
+        pgs.plate_appearances, pgs.walks,
         COALESCE(b.bats, 'R') AS bats,
         CASE WHEN pgs.is_home THEN g.away_probable_pitcher_id
              ELSE g.home_probable_pitcher_id END AS opp_pid,
@@ -39,7 +40,8 @@ _ROWS_SQL = """
     ORDER BY pgs.game_date
 """
 
-_LABEL_COLUMNS = ("h1", "h2", "hr", "k", "hits", "total_bases", "game_date")
+_LABEL_COLUMNS = ("h1", "h2", "hr", "k", "hits", "total_bases", "game_date",
+                  "pa", "n_k", "n_bb", "n_hr", "n_hit")
 
 
 def build_dataset(conn, season: int) -> pd.DataFrame:
@@ -53,7 +55,8 @@ def build_dataset(conn, season: int) -> pd.DataFrame:
 
     for i, r in enumerate(raw, 1):
         (player_id, game_id, game_date, is_home, hits, home_runs, strikeouts,
-         total_bases, bats, opp_pid, lineup_position, pf_hits, pf_hr_lhb, pf_hr_rhb) = r
+         total_bases, plate_appearances, walks, bats, opp_pid, lineup_position,
+         pf_hits, pf_hr_lhb, pf_hr_rhb) = r
         if opp_pid is None:
             skipped_no_pitcher += 1
             continue
@@ -73,6 +76,8 @@ def build_dataset(conn, season: int) -> pd.DataFrame:
             h1=int(hits >= 1), h2=int(hits >= 2), hr=int(home_runs >= 1),
             k=int(strikeouts >= 1), hits=int(hits), total_bases=int(total_bases),
             game_date=pd.Timestamp(game_date),
+            pa=int(plate_appearances), n_k=int(strikeouts), n_bb=int(walks or 0),
+            n_hr=int(home_runs), n_hit=int(hits),
         )
         rows.append(feat)
         if i % 5000 == 0:

@@ -39,6 +39,7 @@ from ingester.commands.pitch_aggregations import (
 from ingester.commands.backtest import cmd_backtest
 from ingester.ml.dataset import cmd_build_training_data
 from ingester.ml.train import cmd_train_xgb, cmd_tune_blend
+from ingester.ml.perpa import cmd_train_pa
 from ingester.commands.report import cmd_compare_runs
 from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
 from ingester.projection.runner import cmd_project, cmd_smoke_project
@@ -222,6 +223,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_compare = sub.add_parser("compare-runs", help="Side-by-side Brier + calibration across backtest runs")
     p_compare.add_argument("--runs", required=True, help="Comma-separated backtest_runs ids (e.g. 40,41,42)")
 
+    p_train_pa = sub.add_parser(
+        "train-pa", help="Per-PA multiclass outcome model spike; reports binary-market Brier vs XGB")
+    p_train_pa.add_argument("--season", type=int, action="append", help="Season(s) (default 2023,2024,2025)")
+    p_train_pa.add_argument("--folds", type=int, default=4, help="Walk-forward CV folds (default 4)")
+    p_train_pa.add_argument("--rounds", type=int, default=300, help="Boosting rounds (default 300)")
+
     p_project      = sub.add_parser("project",      help="Compute projections for today's slate")
 
     p_backtest = sub.add_parser("backtest", help="Run backtesting suite comparing predictions to actuals")
@@ -296,6 +303,7 @@ COMMANDS = {
     "train-xgb":                cmd_train_xgb,
     "tune-blend":               cmd_tune_blend,
     "compare-runs":             cmd_compare_runs,
+    "train-pa":                 cmd_train_pa,
     "project":                  cmd_project,
     "backtest":                 cmd_backtest,
     "smoke":                    cmd_smoke,
