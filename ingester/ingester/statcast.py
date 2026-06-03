@@ -234,6 +234,82 @@ def agg_pitcher_game_stats(df: pd.DataFrame, abbrev_to_id: dict[str, int]) -> li
     return rows
 
 
+def agg_batter_vs_pitcher_hand(pa_chunks: list[pd.DataFrame]) -> list[dict]:
+    """
+    Aggregate across all season PA data to (batter, p_throws) for platoon splits.
+
+    Mirrors agg_pitcher_vs_handedness but groups by the OPPOSING PITCHER's throwing
+    hand (`p_throws`), producing one dict per (batter, vs_hand) with raw pa, xwoba,
+    k_rate, and iso. vs_hand ∈ {'L','R'} is the pitcher's hand.
+
+    Switch hitters need no correction: `stand` (and thus the matchup) already
+    reflects the effective side, but we key purely on p_throws here.
+    """
+    needed_cols = [
+        "batter", "p_throws", "events",
+        "estimated_woba_using_speedangle", "woba_value",
+    ]
+
+    acc: dict[tuple[int, str], dict] = {}
+
+    for pa in pa_chunks:
+        if pa.empty:
+            continue
+        sub = pa[[c for c in needed_cols if c in pa.columns]].copy()
+        sub = sub[sub["p_throws"].isin(["L", "R"])]
+        if sub.empty:
+            continue
+
+        sub["xwoba_num"] = _xwoba_num(sub)
+        sub["is_k"]   = sub["events"].isin({"strikeout", "strikeout_double_play"}).astype(int)
+        sub["is_hit"] = sub["events"].isin(HIT_EVENTS).astype(int)
+        sub["is_ab"]  = sub["events"].isin(AB_EVENTS).astype(int)
+        sub["tb"] = (
+            (sub["events"] == "single").astype(int)
+            + (sub["events"] == "double").astype(int) * 2
+            + (sub["events"] == "triple").astype(int) * 3
+            + (sub["events"] == "home_run").astype(int) * 4
+        )
+
+        grp = sub.groupby(["batter", "p_throws"])
+        chunk_agg = grp.agg(
+            pa=("events", "count"),
+            k=("is_k", "sum"),
+            hits=("is_hit", "sum"),
+            ab=("is_ab", "sum"),
+            tb=("tb", "sum"),
+            xwoba_num=("xwoba_num", "sum"),
+        )
+
+        for (batter, p_throws), row in chunk_agg.iterrows():
+            key = (int(batter), str(p_throws))
+            if key not in acc:
+                acc[key] = {"pa": 0, "k": 0, "hits": 0, "ab": 0, "tb": 0,
+                            "xwoba_num": 0.0}
+            d = acc[key]
+            d["pa"]        += int(row["pa"])
+            d["k"]         += int(row["k"])
+            d["hits"]      += int(row["hits"])
+            d["ab"]        += int(row["ab"])
+            d["tb"]        += int(row["tb"])
+            d["xwoba_num"] += float(row["xwoba_num"]) if not pd.isna(row["xwoba_num"]) else 0.0
+
+    rows: list[dict] = []
+    for (batter_id, p_throws), d in acc.items():
+        pa = d["pa"]
+        ab = d["ab"]
+        # xwOBA divides by PA count (not sparse woba_denom) — see agg_batter_game_stats.
+        rows.append({
+            "player_id": batter_id,
+            "vs_hand":   p_throws,
+            "pa":        pa,
+            "xwoba":     round(d["xwoba_num"] / pa, 4) if pa > 0 else None,
+            "k_rate":    round(d["k"] / pa, 4) if pa > 0 else None,
+            "iso":       round((d["tb"] - d["hits"]) / ab, 4) if ab > 0 else None,
+        })
+    return rows
+
+
 def agg_pitcher_vs_handedness(pa_chunks: list[pd.DataFrame]) -> list[dict]:
     """
     Aggregate across all season PA data to (pitcher, stand) for pitcher_skill.

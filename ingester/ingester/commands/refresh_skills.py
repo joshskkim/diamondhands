@@ -28,6 +28,7 @@ from ingester.projection.constants import (
 )
 from ingester.statcast import (
     _terminal_pa,
+    agg_batter_vs_pitcher_hand,
     agg_pitcher_vs_handedness,
     pull_statcast_chunks,
     require_valid_season,
@@ -35,6 +36,7 @@ from ingester.statcast import (
 )
 
 MIN_BF_PITCHER = 50    # minimum BF vs a handedness for pitcher_skill
+MIN_PA_PLATOON = 25    # minimum PA vs a pitcher hand for batter_platoon_skill
 
 
 def _regress(raw: float | None, league: float, weight_player: float) -> float:
@@ -256,6 +258,52 @@ def compute_pitcher_skill_rows(
 
 
 # ---------------------------------------------------------------------------
+# Shared batter platoon-split computation
+# ---------------------------------------------------------------------------
+
+def compute_batter_platoon_rows(
+    season: int,
+    all_pa: list[pd.DataFrame],
+    cutoff_date: date | None = None,
+) -> list[dict]:
+    """
+    Compute batter_platoon_skill rows from pre-loaded Statcast PA DataFrames.
+
+    Splits each batter by the opposing pitcher's throwing hand (p_throws).
+    When cutoff_date is given, only PAs with game_date < cutoff_date are used
+    (point-in-time semantics).  Splits with fewer than MIN_PA_PLATOON plate
+    appearances are dropped (too noisy even after regression).
+
+    Each surviving raw rate is regressed toward its league mean by PA count, the
+    same empirical-Bayes blend used for batter_skill / pitcher_skill.
+
+    Returns a list of dicts (one per batter×hand) ready for upsert, each
+    containing a 'season' key.
+    """
+    if cutoff_date is not None:
+        filtered: list[pd.DataFrame] = []
+        for pa in all_pa:
+            if pa.empty:
+                continue
+            mask = pd.to_datetime(pa["game_date"]).dt.date < cutoff_date
+            sub = pa[mask]
+            if not sub.empty:
+                filtered.append(sub)
+    else:
+        filtered = [pa for pa in all_pa if not pa.empty]
+
+    pl_rows = agg_batter_vs_pitcher_hand(filtered)
+    pl_rows = [r for r in pl_rows if r["pa"] >= MIN_PA_PLATOON]
+    for r in pl_rows:
+        weight = r["pa"] / (r["pa"] + REGRESSION_K_PA)
+        r["xwoba"] = _regress(r["xwoba"], LEAGUE_XWOBA, weight)
+        r["k_rate"] = _regress(r["k_rate"], LEAGUE_K_PER_PA, weight)
+        r["iso"] = _regress(r["iso"], LEAGUE_ISO, weight)
+        r["season"] = season
+    return pl_rows
+
+
+# ---------------------------------------------------------------------------
 # Live batter_skill upsert (refresh-skills writes to the non-snapshot table)
 # ---------------------------------------------------------------------------
 
@@ -306,10 +354,10 @@ def _aggregate_batter_skill(conn: psycopg.Connection, season: int) -> int:
 # Live pitcher_skill upsert
 # ---------------------------------------------------------------------------
 
-def _aggregate_pitcher_skill(conn: psycopg.Connection, season: int) -> int:
-    """Re-aggregate pitcher_skill from pybaseball's disk cache (fast after backfill)."""
-    print("  [pitcher] Reading Statcast cache for handedness splits…")
-    all_pa = load_all_statcast_pa(season)
+def _aggregate_pitcher_skill(
+    conn: psycopg.Connection, season: int, all_pa: list[pd.DataFrame]
+) -> int:
+    """Re-aggregate pitcher_skill from pre-loaded Statcast PA frames."""
     ph_rows = compute_pitcher_skill_rows(season, all_pa)
     if not ph_rows:
         return 0
@@ -346,6 +394,44 @@ def _aggregate_pitcher_skill(conn: psycopg.Connection, season: int) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Live batter_platoon_skill upsert
+# ---------------------------------------------------------------------------
+
+def _aggregate_batter_platoon_skill(
+    conn: psycopg.Connection, season: int, all_pa: list[pd.DataFrame]
+) -> int:
+    """Re-aggregate batter_platoon_skill (vs LHP/RHP) from pre-loaded PA frames."""
+    pl_rows = compute_batter_platoon_rows(season, all_pa)
+    if not pl_rows:
+        return 0
+
+    CHUNK = 500
+    with conn.cursor() as cur:
+        for i in range(0, len(pl_rows), CHUNK):
+            cur.executemany(
+                """
+                INSERT INTO batter_platoon_skill (
+                    player_id, season, vs_hand,
+                    pa, xwoba, k_rate, iso, updated_at
+                )
+                VALUES (
+                    %(player_id)s, %(season)s, %(vs_hand)s,
+                    %(pa)s, %(xwoba)s, %(k_rate)s, %(iso)s, NOW()
+                )
+                ON CONFLICT (player_id, season, vs_hand) DO UPDATE
+                    SET pa         = EXCLUDED.pa,
+                        xwoba      = EXCLUDED.xwoba,
+                        k_rate     = EXCLUDED.k_rate,
+                        iso        = EXCLUDED.iso,
+                        updated_at = NOW()
+                """,
+                pl_rows[i : i + CHUNK],
+            )
+
+    return len(pl_rows)
+
+
+# ---------------------------------------------------------------------------
 # Command entrypoint
 # ---------------------------------------------------------------------------
 
@@ -377,10 +463,20 @@ def cmd_refresh_skills(args: argparse.Namespace) -> None:
         f"(min {MIN_PA_BATTER_SEASON} PA, regressed to mean; {with_l30} with L30)"
     )
 
+    # Load the Statcast PA cache once; both pitcher splits and batter platoon
+    # splits derive from it (avoids reading the weekly cache twice).
+    print("[refresh-skills] Reading Statcast cache for handedness splits…")
+    all_pa = load_all_statcast_pa(season)
+
     print(f"[refresh-skills] Aggregating pitcher_skill for {season}…")
-    n_pitchers = _aggregate_pitcher_skill(conn, season)
+    n_pitchers = _aggregate_pitcher_skill(conn, season, all_pa)
     conn.commit()
     print(f"  → {n_pitchers} pitcher×hand rows written (min {MIN_BF_PITCHER} BF)")
+
+    print(f"[refresh-skills] Aggregating batter_platoon_skill for {season}…")
+    n_platoon = _aggregate_batter_platoon_skill(conn, season, all_pa)
+    conn.commit()
+    print(f"  → {n_platoon} batter×hand rows written (min {MIN_PA_PLATOON} PA)")
 
     conn.close()
     print("[refresh-skills] Done.")
