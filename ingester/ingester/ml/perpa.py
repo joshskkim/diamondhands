@@ -105,3 +105,33 @@ def cmd_train_pa(args: argparse.Namespace) -> None:
     print(sep)
     print("Verdict: per-PA wins a market only where its margin exceeds XGB's.")
     print(sep)
+
+    if getattr(args, "save", False):
+        from ingester.ml.train import resolve_models_dir
+        import json
+        models_dir = resolve_models_dir(getattr(args, "models_dir", None))
+        Xa, ya, wa = _expand(X, counts)
+        final = xgb.train(params, xgb.DMatrix(Xa, label=ya, weight=wa), num_boost_round=args.rounds)
+        models_dir.mkdir(parents=True, exist_ok=True)
+        gi = models_dir / ".gitignore"
+        if not gi.exists():
+            gi.write_text("*\n!.gitignore\n")
+        final.save_model(models_dir / "pa.json")
+        (models_dir / "feature_spec.json").write_text(json.dumps({"features": list(FEATURE_COLUMNS)}, indent=2))
+        print(f"  saved → {models_dir.name}/pa.json (per-PA 5-class) + feature_spec.json")
+
+
+def load_pa_model(models_dir):
+    """Load the per-PA multiclass booster (or None)."""
+    p = models_dir / "pa.json"
+    if not p.exists():
+        return None
+    b = xgb.Booster()
+    b.load_model(str(p))
+    return b
+
+
+def predict_pa_probs(booster, feature_rows: pd.DataFrame) -> np.ndarray:
+    """Per-PA class probabilities (n x 5) in _CLASS_ORDER for the given feature rows."""
+    X = feature_rows[list(FEATURE_COLUMNS)].astype("float64")
+    return booster.predict(xgb.DMatrix(X))

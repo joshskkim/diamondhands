@@ -29,6 +29,7 @@ from ingester.commands.backfill_stats import cmd_backfill_stats
 from ingester.commands.backfill_games import cmd_backfill_games
 from ingester.commands.daily_slate import cmd_daily_slate
 from ingester.commands.lineups import cmd_backfill_lineups, cmd_refresh_lineups
+from ingester.commands.scores import cmd_backfill_scores
 from ingester.commands.refresh_weather import cmd_refresh_weather
 from ingester.commands.refresh_skills import cmd_refresh_skills
 from ingester.commands.skill_snapshots import cmd_refresh_skill_snapshots
@@ -40,6 +41,7 @@ from ingester.commands.backtest import cmd_backtest
 from ingester.ml.dataset import cmd_build_training_data
 from ingester.ml.train import cmd_train_xgb, cmd_tune_blend
 from ingester.ml.perpa import cmd_train_pa
+from ingester.commands.simulate_eval import cmd_simulate_eval
 from ingester.commands.report import cmd_compare_runs
 from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
 from ingester.projection.runner import cmd_project, cmd_smoke_project
@@ -220,6 +222,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_tune_blend.add_argument("--models-dir", default=None, dest="models_dir",
                               help="Save blend.json to this dir (default models/)")
 
+    p_bf_scores = sub.add_parser("backfill-scores", help="Backfill actual final scores into games")
+    p_bf_scores.add_argument("--start", metavar="YYYY-MM-DD", type=_date_arg, required=True)
+    p_bf_scores.add_argument("--end", metavar="YYYY-MM-DD", type=_date_arg, required=True)
+
     p_compare = sub.add_parser("compare-runs", help="Side-by-side Brier + calibration across backtest runs")
     p_compare.add_argument("--runs", required=True, help="Comma-separated backtest_runs ids (e.g. 40,41,42)")
 
@@ -228,6 +234,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_train_pa.add_argument("--season", type=int, action="append", help="Season(s) (default 2023,2024,2025)")
     p_train_pa.add_argument("--folds", type=int, default=4, help="Walk-forward CV folds (default 4)")
     p_train_pa.add_argument("--rounds", type=int, default=300, help="Boosting rounds (default 300)")
+    p_train_pa.add_argument("--save", action="store_true", default=False, help="Save pa.json for the simulator")
+    p_train_pa.add_argument("--models-dir", default=None, dest="models_dir", help="Save/load dir (default models/)")
+
+    p_sim = sub.add_parser("simulate-eval", help="Backtest the lineup run simulator vs actual scores")
+    p_sim.add_argument("--start", metavar="YYYY-MM-DD", type=_date_arg, required=True)
+    p_sim.add_argument("--end", metavar="YYYY-MM-DD", type=_date_arg, required=True)
+    p_sim.add_argument("--models-dir", default=None, dest="models_dir", help="Load pa.json from (default models/)")
+    p_sim.add_argument("--sims", type=int, default=400, help="Monte-Carlo sims per game (default 400)")
+    p_sim.add_argument("--limit", type=int, default=None, help="Cap games (for a quick run)")
 
     p_project      = sub.add_parser("project",      help="Compute projections for today's slate")
 
@@ -294,6 +309,7 @@ COMMANDS = {
     "daily-slate":              cmd_daily_slate,
     "refresh-lineups":          cmd_refresh_lineups,
     "backfill-lineups":         cmd_backfill_lineups,
+    "backfill-scores":          cmd_backfill_scores,
     "refresh-weather":          cmd_refresh_weather,
     "refresh-skills":           cmd_refresh_skills,
     "refresh-skill-snapshots":  cmd_refresh_skill_snapshots,
@@ -304,6 +320,7 @@ COMMANDS = {
     "tune-blend":               cmd_tune_blend,
     "compare-runs":             cmd_compare_runs,
     "train-pa":                 cmd_train_pa,
+    "simulate-eval":            cmd_simulate_eval,
     "project":                  cmd_project,
     "backtest":                 cmd_backtest,
     "smoke":                    cmd_smoke,

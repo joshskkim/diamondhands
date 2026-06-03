@@ -58,6 +58,18 @@ def fetch_schedule(game_date: date, hydrate: str = "probablePitcher") -> list[di
     return games
 
 
+def parse_game_score(game: dict) -> tuple[int, int] | None:
+    """Return (home_score, away_score) for a Final game, else None."""
+    if (game.get("status") or {}).get("abstractGameState") != "Final":
+        return None
+    teams = game.get("teams") or {}
+    h = (teams.get("home") or {}).get("score")
+    a = (teams.get("away") or {}).get("score")
+    if h is None or a is None:
+        return None
+    return int(h), int(a)
+
+
 def parse_game_lineups(game: dict) -> dict[bool, list[tuple[int, str]]]:
     """
     Extract confirmed batting orders from a schedule game hydrated with ``lineups``.
