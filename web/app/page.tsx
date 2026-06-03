@@ -1,131 +1,114 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
 import { format } from 'date-fns'
-import { ArrowUp } from 'lucide-react'
-import Link from 'next/link'
-import { api } from '@/lib/api'
-import type { TodayGame, Weather } from '@/lib/types'
-import { parseApiDate } from '@/lib/utils'
+import { GameCard } from '@/components/home/game-card'
+import { BatterBoards, GameBoards } from '@/components/home/pick-boards'
+import { usePicks } from '@/components/home/use-picks'
 
-function degreesToCardinal(deg: number): string {
-  const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
-  return dirs[Math.round(deg / 45) % 8]
+const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
+
+function Skeleton({ className = '' }: { className?: string }) {
+  return <div className={`animate-pulse bg-white/5 rounded ${className}`} />
 }
 
-function WeatherChip({ weather, isDome }: { weather: Weather; isDome: boolean }) {
-  if (isDome) {
-    return (
-      <span className="text-xs text-zinc-500 bg-zinc-100 rounded px-2 py-0.5">
-        🏟 Dome — climate controlled
-      </span>
-    )
-  }
-  if (!weather.tempF || weather.windMph == null || weather.windDirDeg == null) {
-    return <span className="text-xs text-zinc-400">Weather TBD</span>
-  }
-  const from = degreesToCardinal(weather.windDirDeg)
-  const to = degreesToCardinal((weather.windDirDeg + 180) % 360)
+function BoardSkeleton() {
   return (
-    <span className="inline-flex items-center gap-1 text-xs text-zinc-600 bg-zinc-100 rounded px-2 py-0.5">
-      {weather.tempF}°F
-      <span className="mx-1">·</span>
-      <ArrowUp
-        size={12}
-        className="inline-block shrink-0"
-        style={{ transform: `rotate(${weather.windDirDeg}deg)` }}
-      />
-      {weather.windMph} mph {from}→{to}
-    </span>
-  )
-}
-
-function GameCard({ game }: { game: TodayGame }) {
-  const localTime = format(parseApiDate(game.startTimeUtc), 'h:mm a')
-
-  return (
-    <Link
-      href={`/games/${game.gameId}`}
-      className="block bg-white border border-zinc-200 rounded-xl p-5 hover:border-zinc-400 hover:shadow-sm transition-all"
-    >
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-xl font-bold tracking-tight">
-          {game.away.abbr}{' '}
-          <span className="text-zinc-400 font-normal">@</span>{' '}
-          {game.home.abbr}
-        </span>
-        <span className="text-sm text-zinc-500">{localTime}</span>
-      </div>
-      <div className="text-xs text-zinc-400 mb-3">
-        {game.away.name} @ {game.home.name}
-      </div>
-
-      <div className="flex items-center gap-2 mb-2">
-        <span className="text-sm text-zinc-600">{game.stadium.name}</span>
-        {game.stadium.isDome && (
-          <span className="text-xs bg-blue-50 text-blue-600 border border-blue-200 rounded px-1.5">
-            Dome
-          </span>
-        )}
-      </div>
-
-      <div className="mb-4">
-        <WeatherChip weather={game.weather} isDome={game.stadium.isDome} />
-      </div>
-
-      {game.projection ? (
-        <div className="flex items-end justify-between">
-          <div>
-            <div className="text-3xl font-bold tabular-nums">
-              {game.projection.expectedTotal.toFixed(2)}
-              <span className="text-base font-normal text-zinc-400 ml-1">R</span>
-            </div>
-            <div className="text-xs text-zinc-400 mt-0.5">
-              {game.home.abbr} {game.projection.expectedHomeRuns.toFixed(2)} · {game.away.abbr}{' '}
-              {game.projection.expectedAwayRuns.toFixed(2)}
-            </div>
-          </div>
-          <div className="text-xs text-zinc-400 text-right">
-            Projected at{' '}
-            {format(parseApiDate(game.projection.projectedAt), 'h:mm a')}
-          </div>
-        </div>
-      ) : (
-        <p className="text-xs text-amber-600 bg-amber-50 rounded px-2 py-1.5">
-          Projection pending — probable pitchers or lineups not yet confirmed.
-        </p>
-      )}
-    </Link>
+    <div className="bg-[#0e1015] border border-white/10 rounded-xl p-4 space-y-3">
+      <Skeleton className="h-4 w-40" />
+      <Skeleton className="h-3 w-56" />
+      {Array.from({ length: 5 }).map((_, i) => (
+        <Skeleton key={i} className="h-7 w-full" />
+      ))}
+    </div>
   )
 }
 
 export default function SlatePage() {
-  const today = format(new Date(), 'MMMM d, yyyy')
-  const { data: games, isPending, isError } = useQuery({
-    queryKey: ['games', 'today'],
-    queryFn: api.todayGames,
-  })
+  const today = format(new Date(), 'EEEE, MMMM d, yyyy')
+  const { games, picks, isPending, isError, projectionsLoading } = usePicks()
+
+  const projectedGames = games.filter((g) => g.projection)
+  const showBoards = picks.length > 0 || projectedGames.length > 0
 
   return (
-    <main className="max-w-5xl mx-auto w-full px-4 py-8">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold">Diamond</h1>
-        <p className="text-zinc-500 text-sm mt-0.5">{today}</p>
+    <main className="max-w-6xl mx-auto w-full px-4 py-8">
+      {/* page header */}
+      <div className="mb-8">
+        <div className={microLabel}>Today&apos;s Board</div>
+        <h1 className="text-3xl font-bold tracking-tight text-zinc-100 mt-1">
+          MLB Projections
+        </h1>
+        <p className="text-zinc-500 text-sm mt-1">
+          {today}
+          {games.length > 0 && (
+            <>
+              {' · '}
+              <span className="font-mono tabular-nums">{games.length}</span> games
+            </>
+          )}
+        </p>
       </div>
 
-      {isPending && <div className="text-zinc-400 text-sm">Loading slate…</div>}
       {isError && (
-        <div className="text-red-500 text-sm">Failed to load games. Is the API running?</div>
-      )}
-      {games && games.length === 0 && (
-        <p className="text-zinc-500">No games today.</p>
-      )}
-      {games && games.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {games.map((game) => (
-            <GameCard key={game.gameId} game={game} />
-          ))}
+        <div className="text-rose-400 text-sm bg-rose-400/10 border border-rose-400/30 rounded-xl p-4">
+          Failed to load today&apos;s slate. Is the API running?
         </div>
+      )}
+
+      {!isError && (
+        <>
+          {/* ── Top picks ─────────────────────────────────────────────── */}
+          <section className="mb-10">
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="text-sm font-semibold tracking-tight text-zinc-100">
+                Top Picks &amp; Edges
+              </h2>
+              {projectionsLoading && (
+                <span className="text-[11px] text-zinc-500">Loading projections…</span>
+              )}
+            </div>
+
+            {isPending || (projectionsLoading && picks.length === 0) ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <BoardSkeleton key={i} />
+                ))}
+              </div>
+            ) : showBoards ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <BatterBoards picks={picks} />
+                <GameBoards games={games} />
+              </div>
+            ) : (
+              <p className="text-zinc-500 text-sm bg-[#0e1015] border border-white/10 rounded-xl p-6">
+                No projections yet — probable pitchers or lineups aren&apos;t confirmed for
+                today&apos;s games.
+              </p>
+            )}
+          </section>
+
+          {/* ── Full slate ────────────────────────────────────────────── */}
+          <section>
+            <h2 className="text-sm font-semibold tracking-tight text-zinc-100 mb-3">
+              Full Slate
+            </h2>
+            {isPending ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <Skeleton key={i} className="h-44 w-full rounded-xl" />
+                ))}
+              </div>
+            ) : games.length === 0 ? (
+              <p className="text-zinc-500 text-sm">No games scheduled today.</p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {games.map((game) => (
+                  <GameCard key={game.gameId} game={game} />
+                ))}
+              </div>
+            )}
+          </section>
+        </>
       )}
     </main>
   )
