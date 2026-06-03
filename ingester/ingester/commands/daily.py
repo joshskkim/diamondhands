@@ -17,6 +17,7 @@ import time
 from ingester.db import eastern_today
 from ingester.commands.daily_slate import cmd_daily_slate
 from ingester.commands.refresh_weather import cmd_refresh_weather
+from ingester.commands.refresh_umpires import cmd_refresh_umpires
 from ingester.commands.refresh_skills import cmd_refresh_skills
 from ingester.commands.refresh_bullpen import cmd_refresh_bullpen
 from ingester.commands.lineups import cmd_refresh_lineups
@@ -40,6 +41,7 @@ def cmd_daily(args: argparse.Namespace) -> None:
         steps = [
             ("daily-slate", cmd_daily_slate),
             ("refresh-weather", cmd_refresh_weather),
+            ("refresh-umpires", cmd_refresh_umpires),
             ("refresh-skills", cmd_refresh_skills),
             ("refresh-bullpen", cmd_refresh_bullpen),
             ("refresh-lineups", cmd_refresh_lineups),

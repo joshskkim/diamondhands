@@ -70,6 +70,28 @@ def parse_game_score(game: dict) -> tuple[int, int] | None:
     return int(h), int(a)
 
 
+def parse_home_plate_umpire(game: dict) -> tuple[int, str] | None:
+    """
+    Extract the home-plate umpire from a schedule game hydrated with ``officials``.
+
+    Returns ``(umpire_id, full_name)`` for the official whose ``officialType`` is
+    "Home Plate", or None if officials aren't present (assignments post close to
+    first pitch, and some historical games never expose them).
+
+    game["officials"] shape:
+        [{"official": {"id": 482631, "fullName": "Mike Estabrook", ...},
+          "officialType": "Home Plate"}, ...]
+    """
+    for entry in game.get("officials") or []:
+        if entry.get("officialType") == "Home Plate":
+            official = entry.get("official") or {}
+            uid = official.get("id")
+            if uid is None:
+                return None
+            return int(uid), official.get("fullName") or f"Unknown#{uid}"
+    return None
+
+
 def parse_game_lineups(game: dict) -> dict[bool, list[tuple[int, str]]]:
     """
     Extract confirmed batting orders from a schedule game hydrated with ``lineups``.
