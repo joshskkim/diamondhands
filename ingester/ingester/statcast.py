@@ -309,3 +309,131 @@ def agg_pitcher_vs_handedness(pa_chunks: list[pd.DataFrame]) -> list[dict]:
             "hits_per_pa":   round(d["hits"] / bf, 4) if bf > 0 else None,
         })
     return rows
+
+
+def _mark_reliever_pa(pa: pd.DataFrame) -> pd.DataFrame:
+    """
+    Flag each terminal-PA row as a relief appearance and tag the pitching team.
+
+    Starter identification: within each (game_pk, inning_topbot) side, the
+    starting pitcher is the one who recorded the earliest at_bat_number — i.e.
+    threw the first pitch of that side.  Every PA charged to any *other* pitcher
+    on that side is a relief PA.
+
+    Pitching team: when the away team is batting (inning_topbot == 'Top') the
+    HOME team is on the mound, so the pitching team is `home_team`; in the
+    bottom of an inning the AWAY team pitches.  Statcast abbreviations are
+    remapped to MLBAM via _remap.
+
+    Returns the subset of rows that are relief PAs, with two added columns:
+    `is_reliever` (always True in the result) and `pitch_team` (remapped abbrev).
+    """
+    if pa.empty:
+        return pa.iloc[0:0]
+
+    sub = pa.copy()
+    sub["at_bat_number"] = pd.to_numeric(sub.get("at_bat_number"), errors="coerce")
+    sub = sub[sub["at_bat_number"].notna() & sub["inning_topbot"].isin(["Top", "Bot"])]
+    if sub.empty:
+        return sub
+
+    # Earliest at_bat_number per (game, side) belongs to the starter of that side.
+    starter_idx = sub.groupby(["game_pk", "inning_topbot"])["at_bat_number"].idxmin()
+    starter_lookup = (
+        sub.loc[starter_idx, ["game_pk", "inning_topbot", "pitcher"]]
+        .rename(columns={"pitcher": "_starter"})
+    )
+    merged = sub.merge(starter_lookup, on=["game_pk", "inning_topbot"], how="left")
+    relievers = merged[merged["pitcher"] != merged["_starter"]].copy()
+    if relievers.empty:
+        return relievers
+
+    # Top = away bats => home team pitches; Bot = home bats => away team pitches.
+    pitch_team_raw = relievers["home_team"].where(
+        relievers["inning_topbot"] == "Top", relievers["away_team"]
+    )
+    relievers["pitch_team"] = pitch_team_raw.map(_remap)
+    relievers["is_reliever"] = True
+    return relievers
+
+
+def agg_bullpen_vs_handedness(
+    pa_chunks: list[pd.DataFrame],
+    abbrev_to_id: dict[str, int],
+) -> list[dict]:
+    """
+    Aggregate season relief PAs to (team_id, stand) for bullpen_skill.
+
+    Mirrors agg_pitcher_vs_handedness, but (a) drops each game-side's starting
+    pitcher and (b) groups by the pitching TEAM rather than by individual
+    pitcher.  Accepts a list of per-chunk terminal-PA DataFrames so the full
+    season never has to be resident at once.  Returns one dict per
+    (team_id, vs_handedness).
+    """
+    needed_cols = [
+        "pitcher", "stand", "events", "game_pk", "inning_topbot",
+        "at_bat_number", "home_team", "away_team",
+        "estimated_woba_using_speedangle", "woba_value",
+    ]
+
+    acc: dict[tuple[int, str], dict] = {}
+
+    for pa in pa_chunks:
+        if pa.empty:
+            continue
+        sub = pa[[c for c in needed_cols if c in pa.columns]].copy()
+        sub = sub[sub["stand"].isin(["L", "R"])]
+        if sub.empty:
+            continue
+
+        relievers = _mark_reliever_pa(sub)
+        if relievers.empty:
+            continue
+
+        # Resolve pitching team abbreviation to team_id; drop unmapped teams.
+        relievers["team_id"] = relievers["pitch_team"].map(
+            lambda a: abbrev_to_id.get(a) if a else None
+        )
+        relievers = relievers[relievers["team_id"].notna()]
+        if relievers.empty:
+            continue
+        relievers["team_id"] = relievers["team_id"].astype("int64")
+
+        relievers["xwoba_num"] = _xwoba_num(relievers)
+        relievers["woba_value"] = _to_float64(relievers.get("woba_value"))
+        relievers["is_k"]   = relievers["events"].isin({"strikeout", "strikeout_double_play"}).astype(int)
+        relievers["is_hit"] = relievers["events"].isin(HIT_EVENTS).astype(int)
+        relievers["is_hr"]  = (relievers["events"] == "home_run").astype(int)
+
+        grp = relievers.groupby(["team_id", "stand"])
+        chunk_agg = grp.agg(
+            bf=("events", "count"),
+            k=("is_k", "sum"),
+            hits=("is_hit", "sum"),
+            hr=("is_hr", "sum"),
+            xwoba_num=("xwoba_num", "sum"),
+        )
+
+        for (team_id, stand), row in chunk_agg.iterrows():
+            key = (int(team_id), str(stand))
+            if key not in acc:
+                acc[key] = {"bf": 0, "k": 0, "hits": 0, "hr": 0, "xwoba_num": 0.0}
+            d = acc[key]
+            d["bf"]        += int(row["bf"])
+            d["k"]         += int(row["k"])
+            d["hits"]      += int(row["hits"])
+            d["hr"]        += int(row["hr"])
+            d["xwoba_num"] += float(row["xwoba_num"]) if not pd.isna(row["xwoba_num"]) else 0.0
+
+    rows: list[dict] = []
+    for (team_id, stand), d in acc.items():
+        bf = d["bf"]
+        rows.append({
+            "team_id":     team_id,
+            "vs_hand":     stand,
+            "bf":          bf,
+            "k_rate":      round(d["k"]    / bf, 4) if bf > 0 else None,
+            "hr_per_pa":   round(d["hr"]   / bf, 4) if bf > 0 else None,
+            "hits_per_pa": round(d["hits"] / bf, 4) if bf > 0 else None,
+        })
+    return rows
