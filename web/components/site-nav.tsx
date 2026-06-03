@@ -8,6 +8,7 @@ const NAV_LINKS = [
   { label: "Today's Board", href: '/' },
   { label: 'Best Lines', href: '/odds' },
   { label: 'Pitch Matchups', href: '/leaderboards/pitch-types' },
+  { label: 'Accuracy', href: '/accuracy' },
 ] as const
 
 export function SiteNav() {

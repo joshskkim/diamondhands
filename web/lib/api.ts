@@ -1,5 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import type {
+  AccuracyResponse,
   BestPlay,
   FlatBatterPick,
   GameOdds,
@@ -68,6 +69,11 @@ export function fetchBestPlays(date?: string, limit = 50): Promise<BestPlay[]> {
 
 export function fetchPitchTypes(): Promise<PitchTypeRef[]> {
   return apiGet<PitchTypeRef[]>('/api/leaderboards/pitch-types')
+}
+
+export function fetchAccuracy(days = 30): Promise<AccuracyResponse> {
+  const safeDays = Math.min(Math.max(days, 7), 180)
+  return apiGet<AccuracyResponse>(`/api/accuracy?days=${safeDays}`)
 }
 
 export function fetchPitchTypeLeaderboard(
@@ -139,6 +145,9 @@ export const queryKeys = {
     pitchType: (pitch: string, date?: string, limit = 20) =>
       ['leaderboards', 'pitch-type', pitch, date ?? 'today', limit] as const,
   },
+  accuracy: {
+    trend: (days: number) => ['accuracy', 'trend', days] as const,
+  },
 }
 
 // ── Query options (use with useQuery / prefetchQuery) ─────────────────────────
@@ -189,6 +198,13 @@ export function pitchTypesQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.leaderboards.pitchTypes(),
     queryFn: fetchPitchTypes,
+  })
+}
+
+export function accuracyQueryOptions(days = 30) {
+  return queryOptions({
+    queryKey: queryKeys.accuracy.trend(days),
+    queryFn: () => fetchAccuracy(days),
   })
 }
 

@@ -43,6 +43,7 @@ from ingester.commands.pitch_aggregations import (
     cmd_refresh_pitch_snapshots,
 )
 from ingester.commands.backtest import cmd_backtest
+from ingester.commands.accuracy import cmd_compute_accuracy
 from ingester.ml.dataset import cmd_build_training_data
 from ingester.ml.train import cmd_train_xgb, cmd_tune_blend
 from ingester.ml.perpa import cmd_train_pa
@@ -320,6 +321,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Load xgb/blend models from this dir (default models/)",
     )
 
+    p_accuracy = sub.add_parser(
+        "compute-accuracy",
+        help="Score one slate's projections vs actuals into daily_accuracy (per-market snapshot)",
+    )
+    p_accuracy.add_argument(
+        "--date", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+        help="Slate date to score (default: yesterday in US/Eastern — actuals exist by then)",
+    )
+
     sub.add_parser("smoke",        help="DB connectivity sanity check")
     sub.add_parser("smoke-skills", help="Print top batters/pitchers from skill tables")
     p_smoke_slate    = sub.add_parser("smoke-slate",    help="Print today's slate with weather and probables")
@@ -379,6 +389,7 @@ COMMANDS = {
     "daily":                    cmd_daily,
     "refresh-odds":             cmd_refresh_odds,
     "backtest":                 cmd_backtest,
+    "compute-accuracy":         cmd_compute_accuracy,
     "smoke":                    cmd_smoke,
     "smoke-skills":             cmd_smoke_skills,
     "smoke-slate":              cmd_smoke_slate,
