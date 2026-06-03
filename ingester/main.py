@@ -12,6 +12,7 @@ Subcommands:
     refresh-lineups  Pull today's confirmed batting orders (cron-friendly, idempotent)
     backfill-lineups Populate historical confirmed lineups for a date range (backtesting)
     refresh-weather  Attach weather snapshot to today's games
+    refresh-umpires  Capture home-plate umpire assignments + recompute tendencies
     refresh-skills   Recompute batter_skill and pitcher_skill aggregates
     project          Compute batter_projections for today's slate
     backtest         Run full backtesting suite comparing predictions to actuals
@@ -33,6 +34,7 @@ from ingester.commands.odds import cmd_refresh_odds
 from ingester.commands.lineups import cmd_backfill_lineups, cmd_refresh_lineups
 from ingester.commands.scores import cmd_backfill_scores
 from ingester.commands.refresh_weather import cmd_refresh_weather
+from ingester.commands.refresh_umpires import cmd_refresh_umpires
 from ingester.commands.refresh_skills import cmd_refresh_skills
 from ingester.commands.skill_snapshots import cmd_refresh_skill_snapshots
 from ingester.commands.pitch_aggregations import (
@@ -116,6 +118,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_slate   = sub.add_parser("daily-slate",     help="Fetch today's games + probable pitchers")
     p_lineups = sub.add_parser("refresh-lineups", help="Pull today's confirmed batting orders")
     p_weather = sub.add_parser("refresh-weather", help="Attach weather to today's games")
+
+    p_umpires = sub.add_parser(
+        "refresh-umpires",
+        help="Capture home-plate umpire assignments + recompute umpire tendencies",
+    )
+    p_umpires.add_argument(
+        "--start", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+        help="Backfill range start (use with --end; default is single --date)",
+    )
+    p_umpires.add_argument(
+        "--end", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+        help="Backfill range end (use with --start)",
+    )
 
     p_odds = sub.add_parser("refresh-odds", help="Pull sportsbook odds (game markets + player props)")
     p_odds.add_argument(
@@ -302,7 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Shared --date flag for date-scoped commands.
     # Default is None; each command resolves it to eastern_today() if absent.
-    for p in (p_slate, p_lineups, p_weather, p_odds, p_project, p_daily, p_smoke_slate, p_smoke_project):
+    for p in (p_slate, p_lineups, p_weather, p_umpires, p_odds, p_project, p_daily, p_smoke_slate, p_smoke_project):
         p.add_argument(
             "--date",
             metavar="YYYY-MM-DD",
@@ -338,6 +353,7 @@ COMMANDS = {
     "backfill-lineups":         cmd_backfill_lineups,
     "backfill-scores":          cmd_backfill_scores,
     "refresh-weather":          cmd_refresh_weather,
+    "refresh-umpires":          cmd_refresh_umpires,
     "refresh-skills":           cmd_refresh_skills,
     "refresh-skill-snapshots":  cmd_refresh_skill_snapshots,
     "refresh-pitch-aggregations": cmd_refresh_pitch_aggregations,
