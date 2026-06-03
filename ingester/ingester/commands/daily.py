@@ -12,9 +12,12 @@ failure so a half-built slate is obvious rather than silent.
 from __future__ import annotations
 
 import argparse
+import copy
 import time
+from datetime import timedelta
 
 from ingester.db import eastern_today
+from ingester.commands.accuracy import cmd_compute_accuracy
 from ingester.commands.daily_slate import cmd_daily_slate
 from ingester.commands.refresh_weather import cmd_refresh_weather
 from ingester.commands.refresh_skills import cmd_refresh_skills
@@ -25,6 +28,13 @@ from ingester.projection.runner import cmd_project
 
 def cmd_daily(args: argparse.Namespace) -> None:
     target = args.date if getattr(args, "date", None) is not None else eastern_today()
+
+    def _score_prior_slate(_args: argparse.Namespace) -> None:
+        """Score the PRIOR slate's accuracy: today's games have no actuals yet,
+        but yesterday's are final, so daily_accuracy stays one day behind."""
+        prior = copy.copy(_args)
+        prior.date = target - timedelta(days=1)
+        cmd_compute_accuracy(prior)
 
     # Build the ordered step list. --quick is the afternoon re-projection loop
     # (lineups trickle in, project clears+recomputes the slate); --skip-skills
@@ -43,6 +53,7 @@ def cmd_daily(args: argparse.Namespace) -> None:
             ("refresh-lineups", cmd_refresh_lineups),
             ("project", cmd_project),
             ("refresh-odds", cmd_refresh_odds),
+            ("compute-accuracy (prior slate)", _score_prior_slate),
         ]
         if getattr(args, "skip_skills", False):
             steps = [s for s in steps if s[0] != "refresh-skills"]
