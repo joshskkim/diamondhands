@@ -32,6 +32,8 @@ FEATURE_COLUMNS: tuple[str, ...] = (
     # context
     "lineup_position", "expected_pa", "is_home", "platoon_same", "park_hits", "park_hr",
 )
+# Note: recent-form (L7/L14) + days-rest features were tried and proved Brier-neutral on a
+# clean 2025-H2 holdout (the model already has L30 + season skill), so they were dropped.
 
 
 def effective_bat_side(bats: str, pitcher_throws: str) -> str:

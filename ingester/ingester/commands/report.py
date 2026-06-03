@@ -16,6 +16,8 @@ _MARKETS = [("hit1plus", "H>=1"), ("hit2plus", "H>=2"), ("hr", "HR"), ("k1plus",
 
 
 def _buckets(raw) -> dict:
+    if raw is None:
+        return {}
     return raw if isinstance(raw, dict) else json.loads(raw)
 
 
@@ -60,7 +62,11 @@ def cmd_compare_runs(args: argparse.Namespace) -> None:
         for r in runs:
             cb = _buckets(r[9])
             buckets = cb.get(mk, [])
-            brier = float(r[5 + [c for c, _ in _MARKETS].index(mk)])
+            bval = r[5 + [c for c, _ in _MARKETS].index(mk)]
+            if bval is None:
+                print(f"   #{r[0]} {r[1]:<22} (incomplete run)")
+                continue
+            brier = float(bval)
             base = _base_rate(buckets)
             naive = base * (1 - base) if base is not None else None
             ece = _ece(buckets)
