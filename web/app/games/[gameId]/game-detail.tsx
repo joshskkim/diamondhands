@@ -8,6 +8,7 @@ import { Fragment, useState } from 'react'
 import { api } from '@/lib/api'
 import type { BatterProjection, Adjustments } from '@/lib/types'
 import { cn, parseApiDate } from '@/lib/utils'
+import { OddsPanel } from './odds-panel'
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -515,6 +516,13 @@ export function GameDetail({ gameId }: { gameId: number }) {
           </div>
         </div>
       )}
+
+      {/* sportsbook odds + model edge */}
+      <OddsPanel
+        gameId={gameId}
+        homeAbbr={game?.home.abbr ?? data.home.teamAbbr}
+        awayAbbr={game?.away.abbr ?? data.away.teamAbbr}
+      />
 
       {/* empty state */}
       {data.home.batters.length === 0 && data.away.batters.length === 0 && (

@@ -158,6 +158,72 @@ export interface FlatBatterPick {
   lineupConfirmed: boolean
 }
 
+// ── Sportsbook odds ───────────────────────────────────────────────────────
+
+/** One bookmaker's price for a single line. */
+export interface BookPrice {
+  book: string
+  priceAmerican: number
+  priceDecimal: number
+  impliedProb: number
+}
+
+/**
+ * Best available price for one side of one line, plus every book's price and our
+ * model's view. modelProb/evPct are null for markets we don't model (pitcher props).
+ */
+export interface LineQuote {
+  side: string
+  line: number | null
+  bestBook: string | null
+  priceAmerican: number | null
+  priceDecimal: number | null
+  impliedProb: number | null
+  modelProb: number | null
+  evPct: number | null
+  books: BookPrice[]
+}
+
+export interface GameMarket {
+  /** moneyline | run_line | total */
+  market: string
+  quotes: LineQuote[]
+}
+
+export interface PropMarket {
+  player: BatterPlayer
+  /** hit | hr | pitcher_k | pitcher_outs */
+  market: string
+  line: number | null
+  over: LineQuote | null
+  under: LineQuote | null
+}
+
+/** GET /api/games/:gameId/odds */
+export interface GameOdds {
+  gameId: number
+  hasOdds: boolean
+  game: GameMarket[]
+  props: PropMarket[]
+}
+
+/** GET /api/odds/best — one model-edged selection on the Best Lines board. */
+export interface BestPlay {
+  gameId: number
+  matchup: string
+  market: string
+  selection: string
+  line: number | null
+  bestBook: string
+  priceAmerican: number
+  priceDecimal: number
+  modelProb: number
+  impliedProb: number
+  evPct: number
+  playerId: number | null
+  playerName: string | null
+}
+
 /** GET /api/players/:playerId */
 export interface PlayerDetail {
   id: number

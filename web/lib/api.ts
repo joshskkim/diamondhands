@@ -1,6 +1,8 @@
 import { queryOptions } from '@tanstack/react-query'
 import type {
+  BestPlay,
   FlatBatterPick,
+  GameOdds,
   GameProjections,
   PitchTypeLeaderboardEntry,
   PitchTypeRef,
@@ -52,6 +54,16 @@ export function fetchPlayerRecentStats(
   return apiGet<RecentStat[]>(
     `/api/players/${playerId}/recent?limit=${safeLimit}`,
   )
+}
+
+export function fetchGameOdds(gameId: number): Promise<GameOdds> {
+  return apiGet<GameOdds>(`/api/games/${gameId}/odds`)
+}
+
+export function fetchBestPlays(date?: string, limit = 50): Promise<BestPlay[]> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (date) params.set('date', date)
+  return apiGet<BestPlay[]>(`/api/odds/best?${params}`)
 }
 
 export function fetchPitchTypes(): Promise<PitchTypeRef[]> {
@@ -112,6 +124,10 @@ export const queryKeys = {
     today: () => [...queryKeys.games.all, 'today'] as const,
     projections: (gameId: number) =>
       ['game', 'projections', gameId] as const,
+    odds: (gameId: number) => ['game', 'odds', gameId] as const,
+  },
+  odds: {
+    best: (date?: string) => ['odds', 'best', date ?? 'today'] as const,
   },
   players: {
     detail: (playerId: number) => ['player', 'detail', playerId] as const,
@@ -138,6 +154,20 @@ export function gameProjectionsQueryOptions(gameId: number) {
   return queryOptions({
     queryKey: queryKeys.games.projections(gameId),
     queryFn: () => fetchGameProjections(gameId),
+  })
+}
+
+export function gameOddsQueryOptions(gameId: number) {
+  return queryOptions({
+    queryKey: queryKeys.games.odds(gameId),
+    queryFn: () => fetchGameOdds(gameId),
+  })
+}
+
+export function bestPlaysQueryOptions(date?: string, limit = 50) {
+  return queryOptions({
+    queryKey: queryKeys.odds.best(date),
+    queryFn: () => fetchBestPlays(date, limit),
   })
 }
 

@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 
 const NAV_LINKS = [
   { label: "Today's Board", href: '/' },
+  { label: 'Best Lines', href: '/odds' },
   { label: 'Pitch Matchups', href: '/leaderboards/pitch-types' },
 ] as const
 

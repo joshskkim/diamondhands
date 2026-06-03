@@ -1,0 +1,72 @@
+[
+  {
+    "id": "sample_evt_824024",
+    "commence_time": "2026-06-03T01:38:00Z",
+    "home_team": "Los Angeles Angels",
+    "away_team": "Colorado Rockies",
+    "bookmakers": [
+      {
+        "key": "draftkings",
+        "title": "DraftKings",
+        "last_update": "2026-06-03T18:30:00Z",
+        "markets": [
+          {
+            "key": "h2h",
+            "last_update": "2026-06-03T18:30:00Z",
+            "outcomes": [
+              { "name": "Los Angeles Angels", "price": -118 },
+              { "name": "Colorado Rockies", "price": 100 }
+            ]
+          },
+          {
+            "key": "spreads",
+            "last_update": "2026-06-03T18:30:00Z",
+            "outcomes": [
+              { "name": "Los Angeles Angels", "price": 150, "point": -1.5 },
+              { "name": "Colorado Rockies", "price": -175, "point": 1.5 }
+            ]
+          },
+          {
+            "key": "totals",
+            "last_update": "2026-06-03T18:30:00Z",
+            "outcomes": [
+              { "name": "Over", "price": -110, "point": 8.5 },
+              { "name": "Under", "price": -110, "point": 8.5 }
+            ]
+          }
+        ]
+      },
+      {
+        "key": "fanduel",
+        "title": "FanDuel",
+        "last_update": "2026-06-03T18:31:00Z",
+        "markets": [
+          {
+            "key": "h2h",
+            "last_update": "2026-06-03T18:31:00Z",
+            "outcomes": [
+              { "name": "Los Angeles Angels", "price": -122 },
+              { "name": "Colorado Rockies", "price": 104 }
+            ]
+          },
+          {
+            "key": "spreads",
+            "last_update": "2026-06-03T18:31:00Z",
+            "outcomes": [
+              { "name": "Los Angeles Angels", "price": 144, "point": -1.5 },
+              { "name": "Colorado Rockies", "price": -168, "point": 1.5 }
+            ]
+          },
+          {
+            "key": "totals",
+            "last_update": "2026-06-03T18:31:00Z",
+            "outcomes": [
+              { "name": "Over", "price": -105, "point": 8.5 },
+              { "name": "Under", "price": -115, "point": 8.5 }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]
