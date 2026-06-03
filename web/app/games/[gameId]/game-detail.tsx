@@ -6,7 +6,7 @@ import { ArrowLeft, ArrowUp, ChevronDown, ChevronRight, Info } from 'lucide-reac
 import Link from 'next/link'
 import { Fragment, useState } from 'react'
 import { api } from '@/lib/api'
-import type { BatterProjection, Adjustments, Probabilities } from '@/lib/types'
+import type { BatterProjection, Adjustments } from '@/lib/types'
 import { cn, parseApiDate } from '@/lib/utils'
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -120,6 +120,36 @@ function Chip({
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
+// Sortable column header. Hoisted to module scope so it isn't recreated each render.
+function ColHeader({
+  col,
+  label,
+  sortCol,
+  sortDir,
+  onSort,
+}: {
+  col: SortCol
+  label: string
+  sortCol: SortCol
+  sortDir: 'asc' | 'desc'
+  onSort: (col: SortCol) => void
+}) {
+  const active = sortCol === col
+  return (
+    <th
+      className={cn(
+        'px-2 py-2 text-right cursor-pointer select-none whitespace-nowrap transition-colors',
+        microLabel,
+        active ? 'text-cyan-400' : 'hover:text-zinc-300',
+      )}
+      onClick={() => onSort(col)}
+    >
+      {label}
+      {active && <span className="ml-0.5">{sortDir === 'desc' ? '↓' : '↑'}</span>}
+    </th>
+  )
+}
+
 // Expanded per-batter view: how the batter fares against each pitch the SP throws.
 function ArsenalDetail({ b }: { b: BatterProjection }) {
   const vs = b.batterVsArsenal ?? []
@@ -210,23 +240,6 @@ function BatterTable({
     return sortDir === 'desc' ? bv - av : av - bv
   })
 
-  function ColHeader({ col, label }: { col: SortCol; label: string }) {
-    const active = sortCol === col
-    return (
-      <th
-        className={cn(
-          'px-2 py-2 text-right cursor-pointer select-none whitespace-nowrap transition-colors',
-          microLabel,
-          active ? 'text-cyan-400' : 'hover:text-zinc-300',
-        )}
-        onClick={() => onSort(col)}
-      >
-        {label}
-        {active && <span className="ml-0.5">{sortDir === 'desc' ? '↓' : '↑'}</span>}
-      </th>
-    )
-  }
-
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -247,10 +260,10 @@ function BatterTable({
             )}
             <th className={cn('px-2 py-2 text-left', microLabel)}>Player</th>
             <th className={cn('px-2 py-2 text-right', microLabel)}>xPA</th>
-            <ColHeader col="hit1plus" label="P(H≥1)" />
-            <ColHeader col="hit2plus" label="P(H≥2)" />
-            <ColHeader col="hr" label="P(HR)" />
-            <ColHeader col="k1plus" label="P(K)" />
+            <ColHeader col="hit1plus" label="P(H≥1)" sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
+            <ColHeader col="hit2plus" label="P(H≥2)" sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
+            <ColHeader col="hr" label="P(HR)" sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
+            <ColHeader col="k1plus" label="P(K)" sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
             <th className={cn('px-2 py-2 text-right', microLabel)}>xH</th>
             <th className={cn('px-2 py-2 text-right', microLabel)}>xTB</th>
           </tr>

@@ -15,12 +15,68 @@ import {
 } from 'recharts'
 import { api, fetchPlayer } from '@/lib/api'
 import type { RecentStat } from '@/lib/types'
+import { cn } from '@/lib/utils'
+
+const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
+const chip =
+  'inline-flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5 bg-white/5 border border-white/10 text-zinc-300'
 
 function xwobaColor(v: number | null): string {
-  if (v == null) return 'text-zinc-400'
-  if (v >= 0.4) return 'text-green-600 font-medium'
-  if (v >= 0.32) return 'text-zinc-700'
-  return 'text-red-500'
+  if (v == null) return 'text-zinc-500'
+  if (v >= 0.4) return 'text-emerald-400 font-medium'
+  if (v >= 0.32) return 'text-zinc-300'
+  return 'text-rose-400'
+}
+
+function StatTile({
+  label,
+  value,
+  valueClass,
+}: {
+  label: string
+  value: string
+  valueClass?: string
+}) {
+  return (
+    <div className="bg-[#0e1015] border border-white/10 rounded-xl px-4 py-3">
+      <div className={microLabel}>{label}</div>
+      <div className={cn('mt-1 text-xl font-semibold font-mono tabular-nums text-zinc-100', valueClass)}>
+        {value}
+      </div>
+    </div>
+  )
+}
+
+function SummaryStrip({ stats }: { stats: RecentStat[] }) {
+  const pa = stats.reduce((s, g) => s + g.pa, 0)
+  const h = stats.reduce((s, g) => s + g.hits, 0)
+  const hr = stats.reduce((s, g) => s + g.hr, 0)
+  const k = stats.reduce((s, g) => s + g.k, 0)
+  const xw = stats.filter((g) => g.xwoba != null) as Array<RecentStat & { xwoba: number }>
+  const avgXwoba = xw.length > 0 ? xw.reduce((s, g) => s + g.xwoba, 0) / xw.length : null
+
+  return (
+    <div className="grid grid-cols-3 sm:grid-cols-5 gap-3 mb-6">
+      <StatTile label={`PA · last ${stats.length}`} value={String(pa)} />
+      <StatTile label="Hits" value={String(h)} />
+      <StatTile label="HR" value={String(hr)} />
+      <StatTile label="K" value={String(k)} />
+      <StatTile
+        label="Avg xwOBA"
+        value={avgXwoba != null ? avgXwoba.toFixed(3) : '—'}
+        valueClass={xwobaColor(avgXwoba)}
+      />
+    </div>
+  )
+}
+
+function HeaderSkeleton() {
+  return (
+    <div className="mb-6 space-y-2">
+      <div className="h-7 w-56 animate-pulse bg-white/5 rounded" />
+      <div className="h-4 w-72 animate-pulse bg-white/5 rounded" />
+    </div>
+  )
 }
 
 export function PlayerDetail({ playerId }: { playerId: number }) {
@@ -34,9 +90,6 @@ export function PlayerDetail({ playerId }: { playerId: number }) {
     queryFn: () => api.recentStats(playerId, 20),
   })
 
-  if (isPending) return <div className="p-8 text-zinc-400">Loading…</div>
-  if (isError) return <div className="p-8 text-red-500">Failed to load player stats.</div>
-
   const chartData = [...(stats ?? [])]
     .reverse()
     .filter((s) => s.xwoba != null)
@@ -44,20 +97,46 @@ export function PlayerDetail({ playerId }: { playerId: number }) {
 
   return (
     <main className="max-w-4xl mx-auto w-full px-4 py-8">
-      <Link href="/" className="inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-800 mb-6">
-        <ArrowLeft size={14} /> All Games
+      <Link
+        href="/"
+        className="inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-cyan-400 transition-colors mb-6"
+      >
+        <ArrowLeft size={14} /> Today&apos;s Board
       </Link>
 
-      <h1 className="text-2xl font-bold mb-1">
-        {player ? player.fullName : `Player #${playerId}`}
-      </h1>
-      {player && (
-        <p className="text-sm text-zinc-500 mb-1">
-          {[player.teamAbbr, player.position, `B/T: ${player.bats ?? '?'}/${player.throwsHand ?? '?'}`]
-            .filter(Boolean)
-            .join(' · ')}
-        </p>
+      {/* header */}
+      {player ? (
+        <div className="mb-6">
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-100 mb-2">
+            {player.fullName}
+          </h1>
+          <div className="flex flex-wrap gap-2">
+            {player.teamAbbr && <span className={chip}>{player.teamAbbr}</span>}
+            {player.position && <span className={chip}>{player.position}</span>}
+            <span className={chip}>
+              <span className={microLabel}>Bats</span>
+              <span className="text-zinc-200">{player.bats ?? '?'}</span>
+              <span className="text-zinc-600">·</span>
+              <span className={microLabel}>Throws</span>
+              <span className="text-zinc-200">{player.throwsHand ?? '?'}</span>
+            </span>
+          </div>
+        </div>
+      ) : (
+        <HeaderSkeleton />
       )}
+
+      {isPending && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-16 animate-pulse bg-white/5 rounded-xl" />
+            ))}
+          </div>
+          <div className="h-48 animate-pulse bg-white/5 rounded-xl" />
+        </div>
+      )}
+      {isError && <p className="text-rose-400">Failed to load player stats.</p>}
 
       {stats && stats.length === 0 && (
         <p className="text-zinc-500 mt-4">No recent activity.</p>
@@ -65,35 +144,47 @@ export function PlayerDetail({ playerId }: { playerId: number }) {
 
       {stats && stats.length > 0 && (
         <>
+          <SummaryStrip stats={stats} />
+
           {/* xwOBA chart */}
           {chartData.length > 1 && (
-            <div className="bg-white border border-zinc-200 rounded-xl p-4 mb-6">
-              <p className="text-xs text-zinc-500 mb-3">xwOBA — last {chartData.length} games</p>
+            <div className="bg-[#0e1015] border border-white/10 rounded-xl p-4 mb-6">
+              <p className={cn(microLabel, 'mb-3')}>
+                xwOBA — last {chartData.length} games
+              </p>
               <ResponsiveContainer width="100%" height={180}>
                 <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -16 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
                   <XAxis
                     dataKey="date"
-                    tick={{ fontSize: 10, fill: '#a1a1aa' }}
+                    tick={{ fontSize: 10, fill: '#71717a' }}
                     tickFormatter={(d) => format(parseISO(d), 'M/d')}
                     interval="preserveStartEnd"
                   />
                   <YAxis
                     domain={[0, 0.8]}
-                    tick={{ fontSize: 10, fill: '#a1a1aa' }}
+                    tick={{ fontSize: 10, fill: '#71717a' }}
                     tickFormatter={(v) => v.toFixed(2)}
                   />
                   <Tooltip
+                    contentStyle={{
+                      background: '#0e1015',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: 8,
+                      color: '#e4e4e7',
+                      fontSize: 12,
+                    }}
+                    labelStyle={{ color: '#a1a1aa' }}
                     formatter={(v) => [typeof v === 'number' ? v.toFixed(3) : v, 'xwOBA']}
                     labelFormatter={(d) => format(parseISO(d as string), 'MMM d')}
                   />
                   <Line
                     type="monotone"
                     dataKey="xwoba"
-                    stroke="#2563eb"
+                    stroke="#22d3ee"
                     strokeWidth={1.5}
                     dot={false}
-                    activeDot={{ r: 3 }}
+                    activeDot={{ r: 3, fill: '#22d3ee' }}
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -101,40 +192,40 @@ export function PlayerDetail({ playerId }: { playerId: number }) {
           )}
 
           {/* game log table */}
-          <div className="bg-white border border-zinc-200 rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-zinc-100 text-sm font-semibold">
+          <div className="bg-[#0e1015] border border-white/10 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-white/10 text-sm font-semibold tracking-tight text-zinc-100">
               Last {stats.length} Games
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-zinc-100 text-xs font-medium text-zinc-500">
-                    <th className="px-3 py-2 text-left">Date</th>
-                    <th className="px-3 py-2 text-left">Opp</th>
-                    <th className="px-3 py-2 text-left">H/A</th>
-                    <th className="px-3 py-2 text-right">PA</th>
-                    <th className="px-3 py-2 text-right">H</th>
-                    <th className="px-3 py-2 text-right">HR</th>
-                    <th className="px-3 py-2 text-right">K</th>
-                    <th className="px-3 py-2 text-right">xwOBA</th>
+                  <tr className={cn('border-b border-white/10', microLabel)}>
+                    <th className="px-3 py-2 text-left font-medium">Date</th>
+                    <th className="px-3 py-2 text-left font-medium">Opp</th>
+                    <th className="px-3 py-2 text-left font-medium">H/A</th>
+                    <th className="px-3 py-2 text-right font-medium">PA</th>
+                    <th className="px-3 py-2 text-right font-medium">H</th>
+                    <th className="px-3 py-2 text-right font-medium">HR</th>
+                    <th className="px-3 py-2 text-right font-medium">K</th>
+                    <th className="px-3 py-2 text-right font-medium">xwOBA</th>
                   </tr>
                 </thead>
                 <tbody>
                   {stats.map((s: RecentStat, i: number) => (
                     <tr
                       key={`${s.gameDate}-${i}`}
-                      className="border-b border-zinc-50 hover:bg-zinc-50"
+                      className="border-b border-white/5 hover:bg-white/[0.03] transition-colors"
                     >
-                      <td className="px-3 py-2 tabular-nums text-zinc-600">
+                      <td className="px-3 py-2 font-mono tabular-nums text-zinc-400">
                         {format(parseISO(s.gameDate), 'MMM d')}
                       </td>
-                      <td className="px-3 py-2 font-medium">{s.opp ?? '—'}</td>
+                      <td className="px-3 py-2 font-medium text-zinc-200">{s.opp ?? '—'}</td>
                       <td className="px-3 py-2 text-zinc-500">{s.isHome ? 'H' : 'A'}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{s.pa}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{s.hits}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{s.hr}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{s.k}</td>
-                      <td className={`px-3 py-2 text-right tabular-nums ${xwobaColor(s.xwoba)}`}>
+                      <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-300">{s.pa}</td>
+                      <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-300">{s.hits}</td>
+                      <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-300">{s.hr}</td>
+                      <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-300">{s.k}</td>
+                      <td className={cn('px-3 py-2 text-right font-mono tabular-nums', xwobaColor(s.xwoba))}>
                         {s.xwoba != null ? s.xwoba.toFixed(3) : '—'}
                       </td>
                     </tr>

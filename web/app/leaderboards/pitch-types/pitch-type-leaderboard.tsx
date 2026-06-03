@@ -7,15 +7,14 @@ import {
   pitchTypeLeaderboardQueryOptions,
   pitchTypesQueryOptions,
 } from '@/lib/api'
+import { cn } from '@/lib/utils'
 
-function cn(...parts: Array<string | false | null | undefined>) {
-  return parts.filter(Boolean).join(' ')
-}
+const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
 function edgeClass(edge: number) {
-  if (edge > 0.02) return 'text-green-600'
-  if (edge < -0.02) return 'text-red-500'
-  return 'text-zinc-500'
+  if (edge > 0.02) return 'text-emerald-400'
+  if (edge < -0.02) return 'text-rose-400'
+  return 'text-zinc-400'
 }
 
 export function PitchTypeLeaderboard() {
@@ -30,12 +29,18 @@ export function PitchTypeLeaderboard() {
 
   return (
     <main className="max-w-5xl mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold tracking-tight mb-1">Pitch-Type Matchups</h1>
-      <p className="text-sm text-zinc-500 mb-5">
-        Today&apos;s hitters with the biggest xwOBA edge against a pitch their opposing
-        starter throws often. Regressed to league by sample size.
+      <div className={microLabel}>Leaderboard</div>
+      <h1 className="text-2xl font-bold tracking-tight text-zinc-100 mt-1 mb-2">
+        Pitch Matchups
+      </h1>
+      <p className="text-sm text-zinc-400 mb-5 max-w-2xl">
+        Today&apos;s hitters with the biggest <span className="text-zinc-200">edge</span> against a
+        pitch their opposing starter throws often. <span className="text-zinc-200">Edge</span> = the
+        batter&apos;s regressed xwOBA on that pitch minus the league baseline — positive means the
+        hitter handles it better than average. Regressed to league by sample size.
       </p>
 
+      {/* segmented control */}
       <div className="flex flex-wrap gap-2 mb-6">
         {pitchTypes?.map((pt) => (
           <button
@@ -44,8 +49,8 @@ export function PitchTypeLeaderboard() {
             className={cn(
               'text-xs px-3 py-1.5 rounded border transition-colors',
               pt.code === active
-                ? 'bg-zinc-900 text-white border-zinc-900'
-                : 'bg-white text-zinc-600 border-zinc-300 hover:border-zinc-500',
+                ? 'bg-cyan-500 text-zinc-950 border-cyan-500 font-medium'
+                : 'bg-white/5 text-zinc-300 border-white/10 hover:border-cyan-400/40 hover:text-zinc-100',
             )}
           >
             {pt.name}
@@ -54,68 +59,76 @@ export function PitchTypeLeaderboard() {
       </div>
 
       {isPending && active ? (
-        <div className="p-8 text-zinc-400">Loading leaderboard…</div>
+        <div className="space-y-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="h-9 animate-pulse bg-white/5 rounded" />
+          ))}
+        </div>
       ) : isError ? (
-        <div className="p-8 text-red-500">Failed to load leaderboard.</div>
+        <div className="p-6 text-rose-400 text-sm bg-rose-400/10 border border-rose-400/30 rounded-xl">
+          Failed to load leaderboard.
+        </div>
       ) : !rows || rows.length === 0 ? (
-        <div className="p-8 text-zinc-400">
+        <div className="p-6 text-zinc-500 text-sm bg-[#0e1015] border border-white/10 rounded-xl">
           No qualifying batters today against this pitch type.
         </div>
       ) : (
-        <div className="bg-white border border-zinc-200 rounded-xl overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-zinc-200 text-xs font-medium text-zinc-500">
-                <th className="px-3 py-2 text-left">Batter</th>
-                <th className="px-3 py-2 text-left">vs Pitcher</th>
-                <th className="px-3 py-2 text-right">Uses</th>
-                <th className="px-3 py-2 text-right">Batter xwOBA</th>
-                <th className="px-3 py-2 text-right">League</th>
-                <th className="px-3 py-2 text-right">Edge</th>
-                <th className="px-3 py-2 text-right">Pitches</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr
-                  key={`${r.player.id}-${r.opposingPitcher.id}`}
-                  className="border-b border-zinc-100 hover:bg-zinc-50"
-                >
-                  <td className="px-3 py-2">
-                    <Link
-                      href={`/players/${r.player.id}`}
-                      className="font-medium text-zinc-900 hover:text-blue-600"
-                    >
-                      {r.player.name}
-                    </Link>
-                    <span className="text-zinc-400 text-xs ml-1">{r.player.teamAbbr}</span>
-                  </td>
-                  <td className="px-3 py-2 text-zinc-600">
-                    {r.opposingPitcher.name}
-                    <span className="text-zinc-400 text-xs ml-1">
-                      ({r.opposingPitcher.throws})
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {(r.pitchTypeUsage * 100).toFixed(0)}%
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {r.batterXwoba.toFixed(3)}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-zinc-400">
-                    {r.leagueXwoba.toFixed(3)}
-                  </td>
-                  <td className={cn('px-3 py-2 text-right tabular-nums font-medium', edgeClass(r.edge))}>
-                    {r.edge >= 0 ? '+' : ''}
-                    {r.edge.toFixed(3)}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-zinc-400">
-                    {r.pitchesSeen}
-                  </td>
+        <div className="bg-[#0e1015] border border-white/10 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className={cn('border-b border-white/10', microLabel)}>
+                  <th className="px-3 py-2 text-left font-medium">Batter</th>
+                  <th className="px-3 py-2 text-left font-medium">vs Pitcher</th>
+                  <th className="px-3 py-2 text-right font-medium">Uses</th>
+                  <th className="px-3 py-2 text-right font-medium">Batter xwOBA</th>
+                  <th className="px-3 py-2 text-right font-medium">League</th>
+                  <th className="px-3 py-2 text-right font-medium">Edge</th>
+                  <th className="px-3 py-2 text-right font-medium">Pitches</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr
+                    key={`${r.player.id}-${r.opposingPitcher.id}`}
+                    className="border-b border-white/5 hover:bg-white/[0.03] transition-colors"
+                  >
+                    <td className="px-3 py-2">
+                      <Link
+                        href={`/players/${r.player.id}`}
+                        className="font-medium text-zinc-100 hover:text-cyan-400 transition-colors"
+                      >
+                        {r.player.name}
+                      </Link>
+                      <span className="text-zinc-500 text-xs ml-1.5">{r.player.teamAbbr}</span>
+                    </td>
+                    <td className="px-3 py-2 text-zinc-400">
+                      {r.opposingPitcher.name}
+                      <span className="text-zinc-600 text-xs ml-1">
+                        ({r.opposingPitcher.throws})
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-300">
+                      {(r.pitchTypeUsage * 100).toFixed(0)}%
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-200">
+                      {r.batterXwoba.toFixed(3)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-500">
+                      {r.leagueXwoba.toFixed(3)}
+                    </td>
+                    <td className={cn('px-3 py-2 text-right font-mono tabular-nums font-medium', edgeClass(r.edge))}>
+                      {r.edge >= 0 ? '+' : ''}
+                      {r.edge.toFixed(3)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-500">
+                      {r.pitchesSeen}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </main>
