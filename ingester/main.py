@@ -122,6 +122,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--sample", action="store_true", default=False,
         help="Use bundled fixtures instead of the API (no key / no credit spend)",
     )
+    p_odds.add_argument(
+        "--force", action="store_true", default=False,
+        help="Bypass the input-hash cache gate and re-pull every slate game",
+    )
 
     p_bf_lineups = sub.add_parser(
         "backfill-lineups", help="Populate historical confirmed lineups for a date range"
