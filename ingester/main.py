@@ -28,6 +28,8 @@ from ingester.commands.load_static import cmd_load_static
 from ingester.commands.backfill_stats import cmd_backfill_stats
 from ingester.commands.backfill_games import cmd_backfill_games
 from ingester.commands.daily_slate import cmd_daily_slate
+from ingester.commands.daily import cmd_daily
+from ingester.commands.odds import cmd_refresh_odds
 from ingester.commands.lineups import cmd_backfill_lineups, cmd_refresh_lineups
 from ingester.commands.scores import cmd_backfill_scores
 from ingester.commands.refresh_weather import cmd_refresh_weather
@@ -114,6 +116,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_slate   = sub.add_parser("daily-slate",     help="Fetch today's games + probable pitchers")
     p_lineups = sub.add_parser("refresh-lineups", help="Pull today's confirmed batting orders")
     p_weather = sub.add_parser("refresh-weather", help="Attach weather to today's games")
+
+    p_odds = sub.add_parser("refresh-odds", help="Pull sportsbook odds (game markets + player props)")
+    p_odds.add_argument(
+        "--sample", action="store_true", default=False,
+        help="Use bundled fixtures instead of the API (no key / no credit spend)",
+    )
 
     p_bf_lineups = sub.add_parser(
         "backfill-lineups", help="Populate historical confirmed lineups for a date range"
@@ -246,6 +254,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_project      = sub.add_parser("project",      help="Compute projections for today's slate")
 
+    p_daily = sub.add_parser(
+        "daily",
+        help="Run the full daily workflow in sequence: "
+             "slate -> weather -> skills -> lineups -> project",
+    )
+    p_daily.add_argument("--season", type=int, default=2025, help="Season year for skills (default: 2025)")
+    p_daily.add_argument(
+        "--model", choices=["mechanistic", "xgb", "blend"], default="blend",
+        help="Probability source for project (default: blend)",
+    )
+    p_daily.add_argument(
+        "--skip-skills", action="store_true", default=False, dest="skip_skills",
+        help="Skip the ~1.5 min refresh-skills step (run it separately when needed)",
+    )
+    p_daily.add_argument(
+        "--quick", action="store_true", default=False,
+        help="Afternoon loop: only refresh-lineups then project",
+    )
+
     p_backtest = sub.add_parser("backtest", help="Run backtesting suite comparing predictions to actuals")
     p_backtest.add_argument(
         "--start", metavar="YYYY-MM-DD", type=_date_arg, required=True,
@@ -275,7 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Shared --date flag for date-scoped commands.
     # Default is None; each command resolves it to eastern_today() if absent.
-    for p in (p_slate, p_lineups, p_weather, p_project, p_smoke_slate, p_smoke_project):
+    for p in (p_slate, p_lineups, p_weather, p_odds, p_project, p_daily, p_smoke_slate, p_smoke_project):
         p.add_argument(
             "--date",
             metavar="YYYY-MM-DD",
@@ -322,6 +349,8 @@ COMMANDS = {
     "train-pa":                 cmd_train_pa,
     "simulate-eval":            cmd_simulate_eval,
     "project":                  cmd_project,
+    "daily":                    cmd_daily,
+    "refresh-odds":             cmd_refresh_odds,
     "backtest":                 cmd_backtest,
     "smoke":                    cmd_smoke,
     "smoke-skills":             cmd_smoke_skills,

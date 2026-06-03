@@ -1,6 +1,7 @@
 # Diamond — MLB Projection App
 
-Stats-first MLB batter projection tool. No betting lines.
+Stats-first MLB projection tool. Projections come first; sportsbook odds are pulled
+purely to compare books for the best line and to evaluate it against the model (EV%).
 
 ## Architecture
 
@@ -44,7 +45,7 @@ mvn spring-boot:run
 
 ```bash
 cd ingester
-cp .env.example .env   # fill in DATABASE_URL
+cp .env.example .env   # fill in DATABASE_URL (and optionally ODDS_API_KEY)
 uv sync
 
 # Subcommands
@@ -56,9 +57,16 @@ uv run python main.py backfill-lineups --start YYYY-MM-DD --end YYYY-MM-DD  # hi
 uv run python main.py refresh-weather    # attach weather to today's games
 uv run python main.py refresh-skills     # recompute batter_skill / pitcher_skill
 uv run python main.py project            # compute batter_projections for today
+uv run python main.py refresh-odds       # pull sportsbook odds (game markets + player props)
+uv run python main.py refresh-odds --sample  # ...from bundled fixtures (no API key needed)
+uv run python main.py daily              # run the whole daily workflow in one shot (see below)
 uv run python main.py backtest --start YYYY-MM-DD --end YYYY-MM-DD          # backtesting suite
 uv run python main.py smoke              # end-to-end sanity check
 ```
+
+`refresh-odds` uses [The Odds API](https://the-odds-api.com). Set `ODDS_API_KEY` in
+`.env` to pull live odds; without it the command is a no-op. Use `--sample` to load the
+bundled fixtures so the odds UI/API are exercisable without a key or request credits.
 
 ## Web
 
@@ -69,27 +77,34 @@ npm install
 npm run dev   # → http://localhost:3000
 ```
 
-## Typical daily workflow (manual)
+## Typical daily workflow
 
 ```bash
 # 1. Ensure infra is running
 docker compose up -d
 
-# 2. Pull today's slate (~9 AM)
-cd ingester && uv run python main.py daily-slate
+# 2. Run the full workflow in one shot:
+#    slate -> weather -> skills -> lineups -> project -> odds
+cd ingester && uv run python main.py daily
 
-# 3. Refresh weather (~1 hour before first pitch)
-uv run python main.py refresh-weather
-
-# 4. Recompute skills if needed
-uv run python main.py refresh-skills
-
-# 5. Pull confirmed lineups + project (re-run as lineups post)
-uv run python main.py refresh-lineups
-uv run python main.py project
-
-# 6. View in UI
+# 3. View in UI
 cd ../web && npm run dev
+```
+
+`daily` chains the individual steps and stops on the first failure. Flags:
+
+- `--skip-skills` — drop the ~1.5 min `refresh-skills` recompute when it isn't needed.
+- `--quick` — afternoon re-projection loop only: `refresh-lineups -> project -> refresh-odds`.
+
+The individual commands still exist if you want to run a single step:
+
+```bash
+uv run python main.py daily-slate      # ~9 AM: today's games + probables
+uv run python main.py refresh-weather  # ~1 h before first pitch
+uv run python main.py refresh-skills   # recompute skills if needed
+uv run python main.py refresh-lineups  # confirmed lineups (re-run as they post)
+uv run python main.py project          # recompute the slate's projections
+uv run python main.py refresh-odds     # sportsbook odds + best lines
 ```
 
 ## Lineups & re-projection cadence (cron — not installed)
