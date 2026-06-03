@@ -11,6 +11,7 @@ inside `daily`.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import unicodedata
@@ -19,6 +20,20 @@ from dotenv import load_dotenv
 
 from ingester.db import build_team_abbrev_map, eastern_today, get_connection
 from ingester import odds_api
+
+
+def odds_input_hash(inputs: tuple) -> str:
+    """sha256 of a game's odds-relevant inputs (pure; no DB).
+
+    `inputs` is a tuple of the values that, when changed, should trigger a fresh
+    odds pull: confirmed-lineup timestamps, weather (temp / wind speed / wind
+    direction / weather-fetched-at), and the two probable pitcher ids. We render
+    each element to a stable string ("" for None) joined by a separator that
+    cannot appear in the rendered values, then sha256 it. Returns the first 64
+    hex chars (a full sha256 digest is 64 chars, so this is the whole digest).
+    """
+    canonical = "|".join("" if v is None else str(v) for v in inputs)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:64]
 
 
 def _norm_name(name: str) -> str:
@@ -44,6 +59,35 @@ def _games_by_team_pair(conn, game_date) -> dict[tuple[int, int], int]:
     return {(home, away): gid for gid, home, away in rows}
 
 
+def _slate_hashes(conn, game_date) -> dict[int, str]:
+    """{game_id: freshly-computed odds_input_hash} for every game on the date.
+
+    The hash covers only inputs that should force a fresh odds pull when they
+    change: confirmed-lineup timestamps, weather, and probable pitcher ids.
+    """
+    rows = conn.execute(
+        """
+        SELECT id,
+               home_lineup_confirmed_at, away_lineup_confirmed_at,
+               temperature_f, wind_speed_mph, wind_direction_degrees, weather_fetched_at,
+               home_probable_pitcher_id, away_probable_pitcher_id
+        FROM games
+        WHERE game_date = %s
+        """,
+        (game_date,),
+    ).fetchall()
+    return {row[0]: odds_input_hash(tuple(row[1:])) for row in rows}
+
+
+def _stored_hashes(conn, game_date) -> dict[int, str | None]:
+    """{game_id: stored games.odds_input_hash} for every game on the date."""
+    rows = conn.execute(
+        "SELECT id, odds_input_hash FROM games WHERE game_date = %s",
+        (game_date,),
+    ).fetchall()
+    return {gid: h for gid, h in rows}
+
+
 def _game_roster(conn, game_id: int) -> dict[str, int]:
     """{normalized player name: player_id} for batters + probable pitchers in this game."""
     rows = conn.execute(
@@ -67,30 +111,52 @@ def cmd_refresh_odds(args: argparse.Namespace) -> None:
     load_dotenv()
     game_date = args.date if getattr(args, "date", None) is not None else eastern_today()
     use_sample = getattr(args, "sample", False)
+    force = getattr(args, "force", False)
     api_key = os.getenv("ODDS_API_KEY")
 
-    if use_sample:
-        print(f"[refresh-odds] {game_date}: SAMPLE mode (fixtures, no API calls)")
-        events = odds_api.load_sample_game_odds()
-        props_by_event = odds_api.load_sample_props()
-    elif not api_key:
+    if not use_sample and not api_key:
         print(
             "[refresh-odds] ODDS_API_KEY not set — skipping (no-op). "
             "Set it in ingester/.env or run with --sample to use fixtures."
         )
         return
-    else:
-        print(f"[refresh-odds] {game_date}: fetching game markets from The Odds API…")
-        events = odds_api.fetch_game_odds(api_key)
-        props_by_event = None  # fetched per-event below
 
     conn = get_connection()
     try:
         team_names = _team_name_map(conn)
         games = _games_by_team_pair(conn, game_date)
 
+        # ── Cache gate: compute fresh hashes from DB inputs, compare to stored ──
+        fresh_hashes = _slate_hashes(conn, game_date)
+        stored_hashes = _stored_hashes(conn, game_date)
+        # A game is "fresh" (skippable) only if it has been pulled before
+        # (stored hash non-NULL) AND its inputs are unchanged.
+        changed_game_ids = {
+            gid for gid, h in fresh_hashes.items()
+            if force or stored_hashes.get(gid) is None or stored_hashes[gid] != h
+        }
+
+        # Slate-wide saver: if nothing changed, never touch the API.
+        if not changed_game_ids:
+            print(
+                f"[refresh-odds] {game_date}: no slate games changed — "
+                f"skipped {len(fresh_hashes)} (inputs unchanged), no API call"
+            )
+            return
+
+        # ── Fetch the slate-wide game-markets payload (one API call) ──
+        if use_sample:
+            print(f"[refresh-odds] {game_date}: SAMPLE mode (fixtures, no API calls)")
+            events = odds_api.load_sample_game_odds()
+            props_by_event = odds_api.load_sample_props()
+        else:
+            print(f"[refresh-odds] {game_date}: fetching game markets from The Odds API…")
+            events = odds_api.fetch_game_odds(api_key)
+            props_by_event = None  # fetched per-event below
+
         matched = 0
         unmatched_events = 0
+        skipped = 0
         game_rows_total = 0
         prop_rows_total = 0
         unmatched_players = 0
@@ -101,6 +167,12 @@ def cmd_refresh_odds(args: argparse.Namespace) -> None:
             game_id = games.get((home_id, away_id)) if home_id and away_id else None
             if game_id is None:
                 unmatched_events += 1
+                continue
+
+            # Per-game gate: skip games whose inputs are unchanged. This also
+            # skips the per-event player-props API call for them.
+            if game_id not in changed_game_ids:
+                skipped += 1
                 continue
             matched += 1
             event_id = event.get("id")
@@ -138,33 +210,40 @@ def cmd_refresh_odds(args: argparse.Namespace) -> None:
                 prop_event = odds_api.fetch_event_props(api_key, event_id)
             else:
                 prop_event = None
-            if not prop_event:
-                continue
 
-            roster = _game_roster(conn, game_id)
-            for r in odds_api.parse_prop_markets(prop_event):
-                player_id = roster.get(_norm_name(r["player_name"]))
-                if player_id is None:
-                    unmatched_players += 1
-                    continue
-                if r["line"] is None:
-                    continue
-                american = r["price_american"]
-                conn.execute(
-                    """
-                    INSERT INTO player_prop_odds
-                        (game_id, player_id, player_name, market, side, line,
-                         price_american, price_decimal, implied_prob, bookmaker, last_update)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        game_id, player_id, r["player_name"], r["market"], r["side"],
-                        r["line"], american, odds_api.american_to_decimal(american),
-                        odds_api.implied_prob(american), r["bookmaker"], r["last_update"],
-                    ),
-                )
-                prop_rows_total += 1
+            if prop_event:
+                roster = _game_roster(conn, game_id)
+                for r in odds_api.parse_prop_markets(prop_event):
+                    player_id = roster.get(_norm_name(r["player_name"]))
+                    if player_id is None:
+                        unmatched_players += 1
+                        continue
+                    if r["line"] is None:
+                        continue
+                    american = r["price_american"]
+                    conn.execute(
+                        """
+                        INSERT INTO player_prop_odds
+                            (game_id, player_id, player_name, market, side, line,
+                             price_american, price_decimal, implied_prob, bookmaker, last_update)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            game_id, player_id, r["player_name"], r["market"], r["side"],
+                            r["line"], american, odds_api.american_to_decimal(american),
+                            odds_api.implied_prob(american), r["bookmaker"], r["last_update"],
+                        ),
+                    )
+                    prop_rows_total += 1
 
+            # Record the gate state for this game's successful pull.
+            conn.execute(
+                "UPDATE games SET odds_input_hash = %s, odds_pulled_at = NOW() WHERE id = %s",
+                (fresh_hashes[game_id], game_id),
+            )
+
+        # Any changed game that the provider did not return an event for stays
+        # un-pulled (its stored hash is unchanged), so the next run retries it.
         conn.commit()
     except Exception:
         conn.rollback()
@@ -173,8 +252,8 @@ def cmd_refresh_odds(args: argparse.Namespace) -> None:
         conn.close()
 
     print(
-        f"[refresh-odds] matched {matched} game(s) "
-        f"({unmatched_events} event(s) had no slate match); "
+        f"[refresh-odds] pulled {matched} game(s), skipped {skipped} (inputs unchanged); "
+        f"{unmatched_events} event(s) had no slate match; "
         f"{game_rows_total} game-odds rows, {prop_rows_total} prop rows"
         + (f", {unmatched_players} prop outcome(s) skipped (unmatched player)"
            if unmatched_players else "")

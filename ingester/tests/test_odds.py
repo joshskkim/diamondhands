@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 
 from ingester import odds_api
-from ingester.commands.odds import _norm_name
+from ingester.commands.odds import _norm_name, odds_input_hash
 
 
 class TestOddsMath:
@@ -87,3 +87,47 @@ class TestParsePropMarkets:
         assert {r["side"] for r in rows} == {"over", "under"}
         assert all(r["market"] == "hr" for r in rows)
         assert all(r["player_name"] == "Mike Trout" for r in rows)
+
+
+class TestOddsInputHash:
+    """The cache-gate hash is a pure function over a game's odds-relevant inputs."""
+
+    def _inputs(self):
+        # (home_lineup_at, away_lineup_at, temp, wind_spd, wind_dir, weather_at, home_pp, away_pp)
+        return ("2026-06-03T17:00:00+00:00", "2026-06-03T17:05:00+00:00",
+                72, 8, 180, "2026-06-03T16:30:00+00:00", 660271, 605483)
+
+    def test_deterministic(self):
+        assert odds_input_hash(self._inputs()) == odds_input_hash(self._inputs())
+
+    def test_is_64_hex_chars(self):
+        h = odds_input_hash(self._inputs())
+        assert len(h) == 64
+        assert all(c in "0123456789abcdef" for c in h)
+
+    def test_weather_change_flips_hash(self):
+        base = self._inputs()
+        mutated = (base[0], base[1], base[2] + 5, *base[3:])  # temperature_f changed
+        assert odds_input_hash(base) != odds_input_hash(mutated)
+
+    def test_lineup_timestamp_change_flips_hash(self):
+        base = self._inputs()
+        mutated = ("2026-06-03T18:00:00+00:00", *base[1:])  # home lineup confirmed later
+        assert odds_input_hash(base) != odds_input_hash(mutated)
+
+    def test_probable_pitcher_change_flips_hash(self):
+        base = self._inputs()
+        mutated = (*base[:6], 999999, base[7])  # home probable pitcher swapped
+        assert odds_input_hash(base) != odds_input_hash(mutated)
+
+    def test_none_values_are_stable_and_distinct_from_empty(self):
+        all_none = (None,) * 8
+        # All-None hashes deterministically and does not collide with a populated game.
+        assert odds_input_hash(all_none) == odds_input_hash((None,) * 8)
+        assert odds_input_hash(all_none) != odds_input_hash(self._inputs())
+
+    def test_field_order_matters(self):
+        # Same multiset of values in a different position must not collide.
+        a = (None, None, 1, 2, None, None, None, None)
+        b = (None, None, 2, 1, None, None, None, None)
+        assert odds_input_hash(a) != odds_input_hash(b)
