@@ -7,6 +7,9 @@ import unittest
 from scipy.stats import binom
 
 from ingester.projection.batter_model import (
+    AdjustedRates,
+    BatterProbabilities,
+    BatterProjection,
     BatterSkillInput,
     SkillBlends,
     adjusted_rates_from_factors,
@@ -14,6 +17,7 @@ from ingester.projection.batter_model import (
     blend_batter_skills,
     expected_team_runs,
     l30_blend_weight,
+    league_average_projection,
     project_batter,
 )
 from ingester.projection.constants import (
@@ -24,12 +28,15 @@ from ingester.projection.constants import (
     LEAGUE_HIT_PER_PA,
     LEAGUE_HR_PER_PA,
     LEAGUE_ISO,
+    LEAGUE_K_PER_PA,
     PITCHER_MULT_HR_CLAMP,
+    LEAGUE_PA_PER_GAME,
     LEAGUE_RUNS_PER_GAME_BASE,
     LEAGUE_XWOBA,
     PA_L30_BLEND_CAP,
     PA_L30_FULL_WEIGHT,
     PITCHER_MULT_HIT_CLAMP,
+    SHRINKAGE_ALPHA,
 )
 from ingester.projection.park_adj import ParkAdjustments
 from ingester.projection.pitcher_adj import (
@@ -75,13 +82,15 @@ class TestBatterModelHandComputed(unittest.TestCase):
         cls.BASE_HR = LEAGUE_HR_PER_PA * (cls.ISO_BLEND / LEAGUE_ISO)
         cls.BASE_K = cls.K_BLEND
 
-        cls.ADJ_HIT = (
-            cls.BASE_HIT * cls.PITCHER.hit * cls.PARK.hit * cls.ADJ_WEATHER_HIT
-        )
-        cls.ADJ_HR = (
-            cls.BASE_HR * cls.PITCHER.hr * cls.PARK.hr * cls.ADJ_WEATHER_HR
-        )
-        cls.ADJ_K = cls.BASE_K * cls.PITCHER.k
+        # Multiplicative adjustment chain, then the v1.5.3 shrinkage toward league
+        # means (shrink_rates: (1-α)·adjusted + α·league) that project_batter applies.
+        adj_hit = cls.BASE_HIT * cls.PITCHER.hit * cls.PARK.hit * cls.ADJ_WEATHER_HIT
+        adj_hr = cls.BASE_HR * cls.PITCHER.hr * cls.PARK.hr * cls.ADJ_WEATHER_HR
+        adj_k = cls.BASE_K * cls.PITCHER.k
+        a = SHRINKAGE_ALPHA
+        cls.ADJ_HIT = (1 - a) * adj_hit + a * LEAGUE_HIT_PER_PA
+        cls.ADJ_HR = (1 - a) * adj_hr + a * LEAGUE_HR_PER_PA
+        cls.ADJ_K = (1 - a) * adj_k + a * LEAGUE_K_PER_PA
 
         pa = EXPECTED_PA_PER_STARTER
         cls.EXP_P_HIT_1 = round(1 - (1 - cls.ADJ_HIT) ** pa, 4)
@@ -187,16 +196,50 @@ class TestPitcherMultiplierClamps(unittest.TestCase):
         self.assertGreater(0.06 / LEAGUE_HR_PER_PA, PITCHER_MULT_HR_CLAMP[1])
 
 
-class TestExpectedTeamRuns(unittest.TestCase):
-    def test_hand_computed_team_runs(self) -> None:
-        xwoba = 0.350
-        park = 1.05
-        weather = 1.02
-        scale = (xwoba / LEAGUE_XWOBA) ** 1.8
-        expected = LEAGUE_RUNS_PER_GAME_BASE * scale * park * weather
+def _proj_with_rates(hit_per_pa: float, hr_per_pa: float, pa: float) -> BatterProjection:
+    """Minimal BatterProjection carrying just the per-PA rates the run model reads."""
+    return BatterProjection(
+        expected_pa=pa,
+        adjusted=AdjustedRates(hit_per_pa=hit_per_pa, hr_per_pa=hr_per_pa, k_per_pa=0.22),
+        probabilities=BatterProbabilities(0.0, 0.0, 0.0, 0.0),
+        expected_hits=pa * hit_per_pa,
+        expected_total_bases=0.0,
+        xwoba_blend=0.0,
+        iso_blend=0.0,
+        adj_park_hit=1.0,
+        adj_pitcher_hit=1.0,
+        adj_weather_hit=1.0,
+        adj_weather_hr=1.0,
+    )
 
-        result = expected_team_runs([xwoba] * 9, park, weather)
-        self.assertAlmostEqual(result, expected, places=6)
+
+class TestExpectedTeamRuns(unittest.TestCase):
+    def test_league_average_lineup_hits_anchor(self) -> None:
+        # Nine league-average batters whose PA sums to exactly LEAGUE_PA_PER_GAME
+        # must score exactly the league run anchor (deviations are all zero).
+        pa_each = LEAGUE_PA_PER_GAME / 9.0
+        lineup = [league_average_projection(pa_each) for _ in range(9)]
+        self.assertAlmostEqual(
+            expected_team_runs(lineup), LEAGUE_RUNS_PER_GAME_BASE, places=6
+        )
+
+    def test_better_lineup_scores_above_anchor(self) -> None:
+        pa_each = LEAGUE_PA_PER_GAME / 9.0
+        strong = [_proj_with_rates(0.27, 0.05, pa_each) for _ in range(9)]
+        self.assertGreater(expected_team_runs(strong), LEAGUE_RUNS_PER_GAME_BASE)
+
+    def test_empty_lineup_is_zero(self) -> None:
+        self.assertEqual(expected_team_runs([]), 0.0)
+
+    def test_weaker_bullpen_blend_lowers_runs(self) -> None:
+        # Blending later PAs against a weaker-hitting matchup (lower rates) must pull
+        # the run estimate below the starter-only estimate.
+        pa_each = LEAGUE_PA_PER_GAME / 9.0
+        starters = [_proj_with_rates(0.27, 0.05, pa_each) for _ in range(9)]
+        weak_pen = [_proj_with_rates(0.20, 0.02, pa_each) for _ in range(9)]
+        starter_only = expected_team_runs(starters)
+        blended = expected_team_runs(starters, weak_pen)
+        self.assertLess(blended, starter_only)
 
 
 if __name__ == "__main__":

@@ -7,3 +7,5 @@ __pycache__/
 .pybaseball_cache/
 *.iml
 .idea/
+.claude/
+*.sqlite3

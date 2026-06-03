@@ -14,7 +14,7 @@ from __future__ import annotations
 # hit/K/HR rates (replacing the season blend). Note the full-season backtest found
 # this Brier-neutral-to-slightly-negative vs v2.0.0 — kept for an explainable
 # projection that matches the matchup surfaced in the UI (user decision).
-MODEL_VERSION: str = "v2.1.0"
+MODEL_VERSION: str = "v2.2.0"
 
 # ---------------------------------------------------------------------------
 # League-average reference (2025 MLB approximations)
@@ -181,11 +181,36 @@ AVG_BASES_PER_HIT_ISO_MULT: float = 3.0
 AVG_BASES_PER_HIT_CLAMP: tuple[float, float] = (1.0, 2.5)
 
 # ---------------------------------------------------------------------------
-# Team run expectation (v1 Pythagorean-ish proxy; weak — see PROJECTION_MODEL.md)
+# Team run expectation
 # ---------------------------------------------------------------------------
+# v2.2: lineup-driven linear weights on the deviation of each batter's
+# fully-adjusted (matchup + park + weather, plus a bullpen blend) projected
+# event rates from league average, anchored at LEAGUE_RUNS_PER_GAME_BASE.
+# Replaces the v1 Pythagorean proxy (xwOBA^EXPONENT), which double-counted park
+# and ignored the per-batter pitcher matchup. TEAM_RUNS_XWOBA_EXPONENT is retained
+# only for backward reference and is no longer used by the model.
 
 LEAGUE_RUNS_PER_GAME_BASE: float = 4.3
-TEAM_RUNS_XWOBA_EXPONENT: float = 1.4
+TEAM_RUNS_XWOBA_EXPONENT: float = 1.4  # deprecated (v1 proxy); unused by v2.2
+
+# A team bats ~38 PA in a 9-inning game; the run anchor scales with actual PA.
+LEAGUE_PA_PER_GAME: float = 38.0
+
+# Non-HR hits split into singles/doubles/triples by league shares (Statcast era).
+LEAGUE_1B_SHARE: float = 0.785
+LEAGUE_2B_SHARE: float = 0.200
+LEAGUE_3B_SHARE: float = 0.015
+
+# Linear weights — run value of each event relative to a generic PA (wOBA-style).
+LW_SINGLE: float = 0.47
+LW_DOUBLE: float = 0.77
+LW_TRIPLE: float = 1.04
+LW_HOMERUN: float = 1.40
+LW_WALK: float = 0.31
+
+# Fraction of a lineup's plate appearances that face the opposing STARTER; the
+# remainder face that team's bullpen (bullpen_skill). ~5.2 starter IP in 2024-25.
+STARTER_PA_SHARE: float = 0.60
 
 # ---------------------------------------------------------------------------
 # Probability output

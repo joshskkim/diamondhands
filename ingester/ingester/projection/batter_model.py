@@ -13,17 +13,27 @@ from ingester.projection.constants import (
     AVG_BASES_PER_HIT_CLAMP,
     AVG_BASES_PER_HIT_ISO_MULT,
     EXPECTED_PA_PER_STARTER,
+    LEAGUE_1B_SHARE,
+    LEAGUE_2B_SHARE,
+    LEAGUE_3B_SHARE,
+    LEAGUE_BB_PER_PA,
     LEAGUE_HIT_PER_PA,
     LEAGUE_HR_PER_PA,
     LEAGUE_ISO,
     LEAGUE_K_PER_PA,
+    LEAGUE_PA_PER_GAME,
     LEAGUE_RUNS_PER_GAME_BASE,
     LEAGUE_XWOBA,
+    LW_DOUBLE,
+    LW_HOMERUN,
+    LW_SINGLE,
+    LW_TRIPLE,
+    LW_WALK,
     PA_L30_BLEND_CAP,
     PA_L30_FULL_WEIGHT,
     PROB_DECIMAL_PLACES,
     SHRINKAGE_ALPHA,
-    TEAM_RUNS_XWOBA_EXPONENT,
+    STARTER_PA_SHARE,
 )
 from ingester.projection.park_adj import ParkAdjustments
 from ingester.projection.pitcher_adj import PitcherAdjustments
@@ -275,23 +285,97 @@ def project_batter(
     )
 
 
+def league_average_projection(expected_pa: float) -> BatterProjection:
+    """A league-average batter projection, used to pad confirmed lineups missing skill."""
+    rates = AdjustedRates(
+        hit_per_pa=LEAGUE_HIT_PER_PA,
+        hr_per_pa=LEAGUE_HR_PER_PA,
+        k_per_pa=LEAGUE_K_PER_PA,
+    )
+    return BatterProjection(
+        expected_pa=expected_pa,
+        adjusted=rates,
+        probabilities=BatterProbabilities(0.0, 0.0, 0.0, 0.0),
+        expected_hits=expected_pa * LEAGUE_HIT_PER_PA,
+        expected_total_bases=0.0,
+        xwoba_blend=LEAGUE_XWOBA,
+        iso_blend=LEAGUE_ISO,
+        adj_park_hit=1.0,
+        adj_pitcher_hit=1.0,
+        adj_weather_hit=1.0,
+        adj_weather_hr=1.0,
+    )
+
+
+def _blended_hit_hr(
+    starter: BatterProjection,
+    bullpen: BatterProjection | None,
+    starter_share: float,
+) -> tuple[float, float]:
+    """Per-PA (hit, HR) rates blending the starter- and bullpen-faced projections."""
+    s_hit = starter.adjusted.hit_per_pa
+    s_hr = starter.adjusted.hr_per_pa
+    if bullpen is None:
+        return s_hit, s_hr
+    b_hit = bullpen.adjusted.hit_per_pa
+    b_hr = bullpen.adjusted.hr_per_pa
+    return (
+        starter_share * s_hit + (1.0 - starter_share) * b_hit,
+        starter_share * s_hr + (1.0 - starter_share) * b_hr,
+    )
+
+
 def expected_team_runs(
-    starter_xwoba_blends: list[float],
-    park_factor_hits: float,
-    adj_weather_hit_avg: float,
+    starters: list[BatterProjection],
+    bullpen: list[BatterProjection] | None = None,
+    starter_share: float = STARTER_PA_SHARE,
 ) -> float:
     """
-    v1 team run proxy — weak; proper RE24 / base-out matrix is v2+.
+    Expected team runs (v2.2): linear weights on each batter's projected events.
 
-    Pythagorean-ish scaling on mean starter xwOBA, park hits, and mean weather hit adj.
+    For every starter we already have fully-adjusted per-PA rates (skill + matchup +
+    park + weather). When ``bullpen`` is supplied (aligned by lineup index, the same
+    hitters re-projected against the opposing team's relief staff), each batter's
+    hit/HR rates are blended ``starter_share`` vs the starter and the rest vs the
+    bullpen. We then turn rates into expected singles/doubles/triples/HR/BB counts,
+    and score the team's *deviation from league average at the same PA total* with
+    standard linear weights, anchored at ``LEAGUE_RUNS_PER_GAME_BASE``. A perfectly
+    league-average lineup yields the anchor (scaled by actual PA); park/weather/matchup
+    move it from there. No separate park/weather factor here — those are already baked
+    into the per-PA rates (the v1 proxy double-counted park).
     """
-    if not starter_xwoba_blends:
+    if not starters:
         return 0.0
-    team_xwoba_avg = sum(starter_xwoba_blends) / len(starter_xwoba_blends)
-    scale = (team_xwoba_avg / LEAGUE_XWOBA) ** TEAM_RUNS_XWOBA_EXPONENT
-    return (
-        LEAGUE_RUNS_PER_GAME_BASE
-        * scale
-        * park_factor_hits
-        * adj_weather_hit_avg
-    )
+
+    total_pa = 0.0
+    team_1b = team_2b = team_3b = team_hr = team_bb = 0.0
+    for i, starter in enumerate(starters):
+        pen = bullpen[i] if bullpen is not None and i < len(bullpen) else None
+        hit, hr = _blended_hit_hr(starter, pen, starter_share)
+        non_hr = max(hit - hr, 0.0)
+        pa = starter.expected_pa
+        total_pa += pa
+        team_hr += pa * hr
+        team_1b += pa * non_hr * LEAGUE_1B_SHARE
+        team_2b += pa * non_hr * LEAGUE_2B_SHARE
+        team_3b += pa * non_hr * LEAGUE_3B_SHARE
+        team_bb += pa * LEAGUE_BB_PER_PA  # flat league BB (per-batter BB is a later refinement)
+
+    if total_pa <= 0:
+        return 0.0
+
+    # League-average event counts at this PA total (the deviation baseline).
+    lg_non_hr = max(LEAGUE_HIT_PER_PA - LEAGUE_HR_PER_PA, 0.0)
+    lg_1b = total_pa * lg_non_hr * LEAGUE_1B_SHARE
+    lg_2b = total_pa * lg_non_hr * LEAGUE_2B_SHARE
+    lg_3b = total_pa * lg_non_hr * LEAGUE_3B_SHARE
+    lg_hr = total_pa * LEAGUE_HR_PER_PA
+    lg_bb = total_pa * LEAGUE_BB_PER_PA
+
+    runs = LEAGUE_RUNS_PER_GAME_BASE * (total_pa / LEAGUE_PA_PER_GAME)
+    runs += LW_SINGLE * (team_1b - lg_1b)
+    runs += LW_DOUBLE * (team_2b - lg_2b)
+    runs += LW_TRIPLE * (team_3b - lg_3b)
+    runs += LW_HOMERUN * (team_hr - lg_hr)
+    runs += LW_WALK * (team_bb - lg_bb)
+    return max(runs, 0.0)
