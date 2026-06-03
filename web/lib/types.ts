@@ -246,3 +246,36 @@ export interface RecentStat {
   k: number
   xwoba: number | null
 }
+
+/** One decile of a calibration curve: predicted bin vs realized rate. */
+export interface CalibrationBucket {
+  lo: number
+  hi: number
+  n: number
+  predictedMean: number
+  actualRate: number
+}
+
+/** One day's accuracy snapshot for a market (brier/baseline/ece null for total_runs). */
+export interface AccuracyPoint {
+  date: string
+  n: number
+  brier: number | null
+  baselineBrier: number | null
+  ece: number | null
+}
+
+/** Rolling accuracy for one market + its latest calibration curve. */
+export interface MarketAccuracy {
+  market: string
+  series: AccuracyPoint[]
+  calibration: CalibrationBucket[]
+  mae: number | null
+}
+
+/** GET /api/accuracy */
+export interface AccuracyResponse {
+  days: number
+  modelVersion: string | null
+  markets: MarketAccuracy[]
+}
