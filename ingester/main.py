@@ -50,6 +50,7 @@ from ingester.ml.train import cmd_train_xgb, cmd_tune_blend
 from ingester.ml.perpa import cmd_train_pa
 from ingester.commands.simulate_eval import cmd_simulate_eval
 from ingester.commands.report import cmd_compare_runs
+from ingester.commands.fit_calibration import cmd_fit_calibration
 from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
 from ingester.projection.runner import cmd_project, cmd_smoke_project
 
@@ -271,6 +272,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_compare = sub.add_parser("compare-runs", help="Side-by-side Brier + calibration across backtest runs")
     p_compare.add_argument("--runs", required=True, help="Comma-separated backtest_runs ids (e.g. 40,41,42)")
 
+    p_fit_cal = sub.add_parser(
+        "fit-calibration",
+        help="Fit per-market probability calibration (isotonic) from a backtest run → models/calibration.json",
+    )
+    p_fit_cal.add_argument("--run", type=int, required=True, help="backtest_runs.id to fit from")
+    p_fit_cal.add_argument("--models-dir", default=None, dest="models_dir",
+                           help="Write calibration.json to this dir (default models/)")
+
     p_train_pa = sub.add_parser(
         "train-pa", help="Per-PA multiclass outcome model spike; reports binary-market Brier vs XGB")
     p_train_pa.add_argument("--season", type=int, action="append", help="Season(s) (default 2023,2024,2025)")
@@ -328,6 +337,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--models-dir", default=None, dest="models_dir",
         help="Load xgb/blend models from this dir (default models/)",
     )
+    p_backtest.add_argument(
+        "--calibrate", action="store_true", default=False,
+        help="Apply models/calibration.json per-market probability calibration (S3)",
+    )
 
     p_accuracy = sub.add_parser(
         "compute-accuracy",
@@ -368,6 +381,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Probability source for live projections: blend (default; per-market "
              "w*mech+(1-w)*xgb, falls back to mechanistic if models missing), xgb, or mechanistic",
     )
+    p_project.add_argument(
+        "--no-calibrate", action="store_true", default=False, dest="no_calibrate",
+        help="Disable the per-market probability calibration that project applies by "
+             "default when models/calibration.json exists (S3 accuracy feedback loop)",
+    )
+    p_project.add_argument(
+        "--models-dir", default=None, dest="models_dir",
+        help="Load calibration.json / xgb models from this dir (default models/)",
+    )
 
     return parser
 
@@ -392,6 +414,7 @@ COMMANDS = {
     "train-xgb":                cmd_train_xgb,
     "tune-blend":               cmd_tune_blend,
     "compare-runs":             cmd_compare_runs,
+    "fit-calibration":          cmd_fit_calibration,
     "train-pa":                 cmd_train_pa,
     "simulate-eval":            cmd_simulate_eval,
     "project":                  cmd_project,
