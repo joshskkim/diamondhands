@@ -24,8 +24,12 @@ from ingester.projection.constants import (
     EXPECTED_PA_PER_STARTER,
     LINEUP_SIZE_HITTERS,
     LINEUP_STARTERS,
+    MIN_PLATOON_PA,
     MODEL_VERSION,
     PA_BY_ORDER,
+    PLATOON_ENABLED,
+    PLATOON_FULL_WEIGHT_PA,
+    PLATOON_WEIGHT_CAP,
 )
 from ingester.projection.matchup import MatchupResult, compute_matchup
 from ingester.projection.park_adj import ParkAdjustments, ParkFactors, compute_park_adjustments
@@ -367,6 +371,11 @@ def _resolve_matchup(
     (quality='fallback_overall') when arsenal or pitch-type data is too thin.
     """
     overall = blend_batter_skills(skill)
+    ov_xwoba, ov_k, ov_iso = overall.xwoba, overall.k_rate, overall.iso
+    if PLATOON_ENABLED:
+        ov_xwoba, ov_k, ov_iso = _platoon_adjust(
+            conn, batter_id, season, pitcher_throws, ov_xwoba, ov_k, ov_iso
+        )
     return compute_matchup(
         conn,
         batter_id=batter_id,
@@ -375,10 +384,45 @@ def _resolve_matchup(
         pitcher_hand=pitcher_throws,
         as_of_date=as_of_date,
         season=season,
-        overall_xwoba=overall.xwoba,
-        overall_k_rate=overall.k_rate,
-        overall_iso=overall.iso,
+        overall_xwoba=ov_xwoba,
+        overall_k_rate=ov_k,
+        overall_iso=ov_iso,
     )
+
+
+def _platoon_adjust(
+    conn: psycopg.Connection,
+    batter_id: int,
+    season: int,
+    pitcher_throws: str,
+    xwoba: float,
+    k_rate: float,
+    iso: float,
+) -> tuple[float, float, float]:
+    """Blend a batter's overall skill toward their split vs the pitcher's throwing hand.
+
+    Weight scales with the split's PA up to PLATOON_WEIGHT_CAP. Returns the inputs
+    unchanged when the split is missing or too thin. (Season-aggregate table; not
+    point-in-time, so this leaks in backtest — used only as a leak-optimistic screen.)
+    """
+    if pitcher_throws not in ("L", "R"):
+        return xwoba, k_rate, iso
+    row = conn.execute(
+        """
+        SELECT pa, xwoba, k_rate, iso FROM batter_platoon_skill
+        WHERE player_id = %s AND season = %s AND vs_hand = %s
+        """,
+        (batter_id, season, pitcher_throws),
+    ).fetchone()
+    if row is None or row[0] is None or row[0] < MIN_PLATOON_PA:
+        return xwoba, k_rate, iso
+    pa, p_xwoba, p_k, p_iso = int(row[0]), row[1], row[2], row[3]
+    w = min(pa / PLATOON_FULL_WEIGHT_PA, PLATOON_WEIGHT_CAP)
+
+    def _blend(base: float, split) -> float:
+        return base if split is None else (1.0 - w) * base + w * float(split)
+
+    return _blend(xwoba, p_xwoba), _blend(k_rate, p_k), _blend(iso, p_iso)
 
 
 def _game_ready(game: SlateGame) -> str | None:
