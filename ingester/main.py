@@ -37,6 +37,7 @@ from ingester.commands.refresh_weather import cmd_refresh_weather
 from ingester.commands.refresh_umpires import cmd_refresh_umpires
 from ingester.commands.refresh_skills import cmd_refresh_skills
 from ingester.commands.refresh_bullpen import cmd_refresh_bullpen
+from ingester.commands.refresh_batted_ball import cmd_refresh_batted_ball
 from ingester.commands.skill_snapshots import cmd_refresh_skill_snapshots
 from ingester.commands.pitch_aggregations import (
     cmd_refresh_pitch_aggregations,
@@ -163,6 +164,12 @@ def build_parser() -> argparse.ArgumentParser:
         "refresh-bullpen", help="Aggregate per-team relief-pitching skill into bullpen_skill"
     )
     p_bullpen.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
+
+    p_batted = sub.add_parser(
+        "refresh-batted-ball",
+        help="Aggregate per-batter spray / batted-ball profiles from Statcast into batter_batted_ball",
+    )
+    p_batted.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
 
     p_snapshots = sub.add_parser(
         "refresh-skill-snapshots",
@@ -376,6 +383,7 @@ COMMANDS = {
     "refresh-umpires":          cmd_refresh_umpires,
     "refresh-skills":           cmd_refresh_skills,
     "refresh-bullpen":          cmd_refresh_bullpen,
+    "refresh-batted-ball":      cmd_refresh_batted_ball,
     "refresh-skill-snapshots":  cmd_refresh_skill_snapshots,
     "refresh-pitch-aggregations": cmd_refresh_pitch_aggregations,
     "refresh-pitch-snapshots":  cmd_refresh_pitch_snapshots,
