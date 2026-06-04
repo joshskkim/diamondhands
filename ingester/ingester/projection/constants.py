@@ -213,6 +213,20 @@ LW_WALK: float = 0.31
 STARTER_PA_SHARE: float = 0.60
 
 # ---------------------------------------------------------------------------
+# S2 — batter platoon split (experimental; OFF by default)
+# ---------------------------------------------------------------------------
+# Blend the batter's season/L30 skill toward their split vs the opposing pitcher's
+# throwing hand (batter_platoon_skill) before it feeds the pitch-mix matchup. Kept
+# OFF: the leak-aware backtest screen found it Brier-neutral (the matchup layer,
+# already computed vs the pitcher's hand, captures the platoon signal). The wiring
+# is retained, gated, so the decision is reproducible — flip PLATOON_ENABLED to
+# re-measure with point-in-time platoon snapshots when those exist.
+PLATOON_ENABLED: bool = False
+MIN_PLATOON_PA: int = 25            # ignore splits thinner than this
+PLATOON_FULL_WEIGHT_PA: int = 200   # PA at which the split reaches its max blend weight
+PLATOON_WEIGHT_CAP: float = 0.50    # split never more than half the blended skill
+
+# ---------------------------------------------------------------------------
 # Probability output
 # ---------------------------------------------------------------------------
 
