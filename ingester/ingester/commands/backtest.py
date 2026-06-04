@@ -20,9 +20,11 @@ from ingester.metrics import (
     baseline_brier,
     brier_score,
     calibration_buckets,
+    mae,
     mae_per_game,
+    pearson,
 )
-from ingester.projection.constants import MODEL_VERSION
+from ingester.projection.constants import LEAGUE_RUNS_PER_GAME_BASE, MODEL_VERSION
 from ingester.projection.runner import run_backtest_projections
 
 
@@ -89,6 +91,8 @@ def _update_backtest_run(
     brier_k: float,
     mae: float,
     cal_json: str,
+    run_corr: float = float("nan"),
+    run_mae_baseline: float = float("nan"),
 ) -> None:
     conn.execute(
         """
@@ -101,6 +105,8 @@ def _update_backtest_run(
             brier_hr             = %s,
             brier_k1plus         = %s,
             mae_total_runs       = %s,
+            run_corr             = %s,
+            run_mae_baseline     = %s,
             calibration_buckets  = %s::jsonb
         WHERE id = %s
         """,
@@ -111,6 +117,8 @@ def _update_backtest_run(
             None if brier_hr != brier_hr else round(brier_hr, 5),
             None if brier_k != brier_k  else round(brier_k,  5),
             None if mae != mae           else round(mae, 2),
+            None if run_corr != run_corr else round(run_corr, 3),
+            None if run_mae_baseline != run_mae_baseline else round(run_mae_baseline, 2),
             cal_json,
             run_id,
         ),
@@ -240,6 +248,25 @@ def _cal_flag(bucket: dict) -> str:
     return "⚠ underconfident" if diff > 0 else "⚠ overconfident"
 
 
+def _load_run_totals(
+    conn: psycopg.Connection, run_id: int
+) -> tuple[list[float], list[float]]:
+    """(predicted, actual) game-total runs for games in this run that have a final score."""
+    rows = conn.execute(
+        """
+        SELECT bgr.expected_total_runs, (g.home_score + g.away_score)
+        FROM backtest_game_runs bgr
+        JOIN games g ON g.id = bgr.game_id
+        WHERE bgr.backtest_run_id = %s
+          AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL
+        """,
+        (run_id,),
+    ).fetchall()
+    preds = [float(r[0]) for r in rows]
+    actuals = [float(r[1]) for r in rows]
+    return preds, actuals
+
+
 def _print_results(
     run_id: int,
     start: date,
@@ -362,7 +389,17 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         base_hr = baseline_brier(out.a_hr)
         base_k  = baseline_brier(out.a_k)
 
-        mae = mae_per_game(out.game_hits)
+        mae_hits = mae_per_game(out.game_hits)  # legacy hits proxy (printed for continuity)
+
+        # Real run-total scoring: predicted game total vs actual final score, plus a
+        # naive "always predict the league mean total" baseline and the correlation.
+        run_pred, run_act = _load_run_totals(conn, run_id)
+        run_mae = mae(run_pred, run_act)
+        run_corr = pearson(run_pred, run_act)
+        baseline_total = 2 * LEAGUE_RUNS_PER_GAME_BASE
+        run_mae_baseline = (
+            mae([baseline_total] * len(run_act), run_act) if run_act else float("nan")
+        )
 
         cal = {
             "hit1plus": calibration_buckets(out.p_hit1, out.a_hit1),
@@ -371,12 +408,14 @@ def cmd_backtest(args: argparse.Namespace) -> None:
             "k1plus":   calibration_buckets(out.p_k,    out.a_k),
         }
 
-        # Step e: persist metrics.
+        # Step e: persist metrics (mae_total_runs now holds the REAL run MAE).
         _update_backtest_run(
             conn, run_id,
             out.n_games, out.n_projections,
-            b_h1, b_h2, b_hr, b_k, mae,
+            b_h1, b_h2, b_hr, b_k, run_mae,
             json.dumps(cal),
+            run_corr=run_corr,
+            run_mae_baseline=run_mae_baseline,
         )
 
     except Exception:
@@ -390,8 +429,14 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         run_id, start, end, out,
         b_h1, b_h2, b_hr, b_k,
         base_h1, base_h2, base_hr, base_k,
-        mae, cal,
+        mae_hits, cal,
     )
+
+    # Real run-total accuracy (V19): predicted game total vs final score.
+    print(f"\nGame run totals ({len(run_pred)} scored games):")
+    print(f"  run MAE:            {run_mae:.3f}")
+    print(f"  league-mean MAE:    {run_mae_baseline:.3f}  (always {2 * LEAGUE_RUNS_PER_GAME_BASE:.1f})")
+    print(f"  corr(pred, actual): {run_corr:+.3f}")
 
     # Step g: optional CSV.
     if want_csv and out.csv_rows:

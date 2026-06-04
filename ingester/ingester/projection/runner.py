@@ -1095,6 +1095,17 @@ def _project_game_backtest(
         summary.skip_reasons.append(f"game {game.game_id}: incomplete team projection")
         return False
 
+    # Persist the predicted game total so the harness can score run accuracy vs the
+    # final score (backtest_game_runs). Per-batter rows already went to backtest_projections.
+    conn.execute(
+        """
+        INSERT INTO backtest_game_runs (backtest_run_id, game_id, expected_total_runs)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (backtest_run_id, game_id)
+            DO UPDATE SET expected_total_runs = EXCLUDED.expected_total_runs
+        """,
+        (backtest_run_id, game.game_id, round(home_runs + away_runs, 2)),
+    )
     return True
 
 
