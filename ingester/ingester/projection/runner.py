@@ -39,10 +39,26 @@ from ingester.projection.pitcher_adj import (
     resolve_pitcher_skill,
 )
 from ingester.projection.weather_adj import compute_weather_adjustments
+from ingester.projection.calibration import Calibrator
 
 log = logging.getLogger(__name__)
 
 _PITCHER_POSITIONS = frozenset({"P", "SP", "RP", "CP", "TWP"})
+
+# S3: optional per-market probability calibration, applied as a final post-process to
+# every projection. Set by cmd_project/cmd_backtest (--calibrate); None = no-op.
+_CALIBRATOR: Calibrator | None = None
+
+
+def set_calibrator(calibrator: Calibrator | None) -> None:
+    """Install (or clear) the process-wide projection calibrator."""
+    global _CALIBRATOR
+    _CALIBRATOR = calibrator
+
+
+def _maybe_calibrate(proj):
+    """Recalibrate a projection's market probabilities if a calibrator is installed."""
+    return _CALIBRATOR.apply(proj) if _CALIBRATOR is not None else proj
 
 
 @dataclass
@@ -656,6 +672,7 @@ def _project_team_side(
                 pitcher_throws=pitcher_throws, is_home=is_home, park=park,
                 as_of_date=summary.game_date, season=season, bundle=bundle, proj=proj,
             )
+        proj = _maybe_calibrate(proj)
         _upsert_batter_projection(
             conn,
             game.game_id,
@@ -1140,6 +1157,7 @@ def _project_team_side_backtest(
                 pitcher_throws=pitcher_throws, is_home=is_home, park=park,
                 as_of_date=as_of_date, season=season, bundle=bundle, proj=proj,
             )
+        proj = _maybe_calibrate(proj)
         _upsert_backtest_projection(
             conn, backtest_run_id, game.game_id, hitter.player_id, as_of_date, proj,
             matchup.xwoba, matchup.quality,
@@ -1288,6 +1306,14 @@ def cmd_project(args: argparse.Namespace) -> None:
             print(f"[project] WARNING: --model {model} requested but models/weights missing "
                   f"(run {need}); falling back to mechanistic.")
             model = "mechanistic"
+
+    # S3: close the accuracy loop — apply per-market calibration by default when a
+    # fitted map exists (safe no-op if missing). --no-calibrate opts out.
+    if not getattr(args, "no_calibrate", False):
+        cal = Calibrator.load(getattr(args, "models_dir", None) and f"{args.models_dir}/calibration.json")
+        if cal is not None:
+            set_calibrator(cal)
+            print("[project] Calibration: ON (models/calibration.json)")
 
     if as_of_date is not None:
         print(

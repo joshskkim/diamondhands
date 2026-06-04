@@ -340,6 +340,15 @@ def cmd_backtest(args: argparse.Namespace) -> None:
             sys.exit(1)
         model_version = f"{MODEL_VERSION}-{model}"
 
+    if getattr(args, "calibrate", False):
+        from ingester.projection.runner import set_calibrator
+        from ingester.projection.calibration import Calibrator
+        from ingester.ml.train import resolve_models_dir
+        cal = Calibrator.load(f"{resolve_models_dir(getattr(args, 'models_dir', None))}/calibration.json")
+        set_calibrator(cal)
+        model_version = f"{model_version}-cal"
+        print(f"[backtest] Calibration: {'ON' if cal else 'requested but calibration.json missing'}")
+
     print(f"[backtest] Range {start} → {end}  |  Model {model_version}")
 
     conn = get_connection()
