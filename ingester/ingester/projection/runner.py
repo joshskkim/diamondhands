@@ -997,14 +997,12 @@ def _backtest_weather_skipped(game: SlateGame, game_date: date) -> bool:
     """
     Decide whether to skip weather adjustments for a backtested game.
 
-    Historical games never had a live weather snapshot taken (refresh-weather only
-    runs against today's slate), so the stored temperature/wind are absent or stale.
-    Skip weather when there is no snapshot, or the game is more than a day in the
-    past. Backtest then reflects park + pitcher + skill adjustments only.
+    Skip weather only when the game has no stored snapshot at all. Backfilled games
+    carry ACTUAL historical conditions (backfill-weather, Open-Meteo archive), so the
+    old "more than a day in the past" guard — meant for stale live forecasts — no longer
+    applies: real archive weather is exactly what happened and should be scored.
     """
-    if game.weather_fetched_at is None:
-        return True
-    return (eastern_today() - game_date).days > 1
+    return game.weather_fetched_at is None
 
 
 def _xgb_apply(
