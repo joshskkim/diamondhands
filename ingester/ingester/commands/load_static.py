@@ -116,9 +116,11 @@ def cmd_load_static(args: argparse.Namespace) -> None:
                         id, name, team_id, city,
                         latitude, longitude, altitude_feet,
                         is_dome, is_retractable, cf_bearing_degrees,
-                        park_factor_hits, park_factor_hr_lhb, park_factor_hr_rhb
+                        park_factor_hits, park_factor_hr_lhb, park_factor_hr_rhb,
+                        lf_line_ft, cf_ft, rf_line_ft, lf_wall_ft, cf_wall_ft, rf_wall_ft
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO UPDATE
                         SET name               = EXCLUDED.name,
                             team_id            = EXCLUDED.team_id,
@@ -131,7 +133,13 @@ def cmd_load_static(args: argparse.Namespace) -> None:
                             cf_bearing_degrees = EXCLUDED.cf_bearing_degrees,
                             park_factor_hits   = EXCLUDED.park_factor_hits,
                             park_factor_hr_lhb = EXCLUDED.park_factor_hr_lhb,
-                            park_factor_hr_rhb = EXCLUDED.park_factor_hr_rhb
+                            park_factor_hr_rhb = EXCLUDED.park_factor_hr_rhb,
+                            lf_line_ft         = EXCLUDED.lf_line_ft,
+                            cf_ft              = EXCLUDED.cf_ft,
+                            rf_line_ft         = EXCLUDED.rf_line_ft,
+                            lf_wall_ft         = EXCLUDED.lf_wall_ft,
+                            cf_wall_ft         = EXCLUDED.cf_wall_ft,
+                            rf_wall_ft         = EXCLUDED.rf_wall_ft
                     """,
                     (
                         team["id"],
@@ -147,6 +155,12 @@ def cmd_load_static(args: argparse.Namespace) -> None:
                         s["park_factor_hits"],
                         s["park_factor_hr_lhb"],
                         s["park_factor_hr_rhb"],
+                        s.get("lf_line_ft"),
+                        s.get("cf_ft"),
+                        s.get("rf_line_ft"),
+                        s.get("lf_wall_ft"),
+                        s.get("cf_wall_ft"),
+                        s.get("rf_wall_ft"),
                     ),
                 )
 
