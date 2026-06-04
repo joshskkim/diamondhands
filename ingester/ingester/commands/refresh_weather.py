@@ -69,6 +69,8 @@ def cmd_refresh_weather(args: argparse.Namespace) -> None:
                 SET temperature_f          = %s,
                     wind_speed_mph         = %s,
                     wind_direction_degrees = %s,
+                    relative_humidity_pct  = NULL,
+                    surface_pressure_hpa   = NULL,
                     weather_fetched_at     = NOW()
                 WHERE id = %s
                 """,
@@ -88,10 +90,15 @@ def cmd_refresh_weather(args: argparse.Namespace) -> None:
                 SET temperature_f          = %s,
                     wind_speed_mph         = %s,
                     wind_direction_degrees = %s,
+                    relative_humidity_pct  = %s,
+                    surface_pressure_hpa   = %s,
                     weather_fetched_at     = NOW()
                 WHERE id = %s
                 """,
-                (w["temperature_f"], w["wind_speed_mph"], w["wind_direction_degrees"], game_id),
+                (
+                    w["temperature_f"], w["wind_speed_mph"], w["wind_direction_degrees"],
+                    w.get("relative_humidity_pct"), w.get("surface_pressure_hpa"), game_id,
+                ),
             )
             api_fetched += 1
         updated += 1

@@ -84,7 +84,7 @@ function BatterRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <Link
-            href={`/players/${b.player.id}`}
+            href={`/mlb/players/${b.player.id}`}
             className="font-medium text-zinc-100 hover:text-cyan-400 transition-colors truncate"
           >
             {b.player.name}
@@ -238,7 +238,7 @@ function GameRow({
 }) {
   return (
     <Link
-      href={`/games/${game.gameId}`}
+      href={`/mlb/games/${game.gameId}`}
       className="flex items-center gap-3 px-4 py-2 hover:bg-white/[0.03] transition-colors"
     >
       <Rank n={rank} />

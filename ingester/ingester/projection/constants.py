@@ -14,7 +14,7 @@ from __future__ import annotations
 # hit/K/HR rates (replacing the season blend). Note the full-season backtest found
 # this Brier-neutral-to-slightly-negative vs v2.0.0 — kept for an explainable
 # projection that matches the matchup surfaced in the UI (user decision).
-MODEL_VERSION: str = "v2.2.0"
+MODEL_VERSION: str = "v2.3.0"
 
 # ---------------------------------------------------------------------------
 # League-average reference (2025 MLB approximations)
@@ -153,6 +153,29 @@ WIND_HR_CLAMP: tuple[float, float] = (0.70, 1.40)
 
 # Dome / closed roof: no weather effect on hit or HR.
 DOME_WEATHER_ADJ: float = 1.0
+
+# ---------------------------------------------------------------------------
+# Air density HR adjustment (v2.3) — BallparkPal-style weather refinement
+# ---------------------------------------------------------------------------
+# When real humidity + barometric pressure are available, replace the temp-only HR
+# term with a physical air-density model: a batted ball carries farther in thinner
+# air (~4% distance per 10% density drop). Density falls with heat, humidity (water
+# vapor is lighter than dry air), and low pressure / altitude.
+#
+# We score TODAY's density against the PARK's baseline density (same altitude, 70°F,
+# 50% RH) so the day-to-day weather deviation is captured WITHOUT double-counting the
+# park's altitude — that is already baked into park_factor_hr (3-yr Statcast factors).
+#
+# Specific gas constants (J/(kg·K)) for dry air and water vapor.
+AIR_GAS_CONST_DRY: float = 287.058
+AIR_GAS_CONST_VAPOR: float = 461.495
+SEA_LEVEL_PRESSURE_HPA: float = 1013.25
+WEATHER_BASELINE_HUMIDITY_PCT: float = 50.0  # park-baseline relative humidity
+# HR factor = (baseline_density / today_density) ** exponent. Exponent ~2.6 calibrated
+# so a 70°F→90°F sea-level day gives ~+10% HR, matching the prior temp-only model at
+# that point; humidity/pressure then add on top. Clamp keeps a single day bounded.
+DENSITY_HR_EXPONENT: float = 2.6
+DENSITY_HR_CLAMP: tuple[float, float] = (0.82, 1.25)
 
 # ---------------------------------------------------------------------------
 # Per-PA rate and derived-count clamps

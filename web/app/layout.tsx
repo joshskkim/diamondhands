@@ -43,7 +43,7 @@ export default function RootLayout({
       lang="en"
       className={`${inter.variable} ${spaceGrotesk.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-[#08090d] text-zinc-100">
+      <body className="font-sans min-h-full flex flex-col bg-[#08090d] text-zinc-100">
         <Providers>
           <SiteNav />
           {children}
