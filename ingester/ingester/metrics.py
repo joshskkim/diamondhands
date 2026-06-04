@@ -78,3 +78,25 @@ def mae_per_game(game_hits: dict[int, tuple[float, float]]) -> float:
         return float("nan")
     errors = [abs(exp - act) for exp, act in game_hits.values()]
     return sum(errors) / len(errors)
+
+
+def mae(predicted: list[float], actual: list[float]) -> float:
+    """Mean absolute error between paired predictions and actuals."""
+    if not predicted:
+        return float("nan")
+    return sum(abs(p - a) for p, a in zip(predicted, actual)) / len(predicted)
+
+
+def pearson(xs: list[float], ys: list[float]) -> float:
+    """Pearson correlation; NaN when undefined (n<2 or zero variance on a side)."""
+    n = len(xs)
+    if n < 2:
+        return float("nan")
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    vx = sum((x - mx) ** 2 for x in xs) ** 0.5
+    vy = sum((y - my) ** 2 for y in ys) ** 0.5
+    if vx == 0 or vy == 0:
+        return float("nan")
+    return cov / (vx * vy)
