@@ -50,7 +50,7 @@ export function GameCard({ game }: { game: TodayGame }) {
 
   return (
     <Link
-      href={`/games/${game.gameId}`}
+      href={`/mlb/games/${game.gameId}`}
       className="block bg-[#0e1015] border border-white/10 rounded-xl p-5 hover:border-cyan-400/40 hover:shadow-[0_0_0_1px_rgba(34,211,238,0.15)] transition-colors"
     >
       <div className="flex items-center justify-between mb-1">
