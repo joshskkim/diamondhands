@@ -50,7 +50,10 @@ def fetch_weather_at(lat: float, lon: float, target_utc: datetime) -> dict[str, 
         params={
             "latitude": lat,
             "longitude": lon,
-            "hourly": "temperature_2m,wind_speed_10m,wind_direction_10m",
+            "hourly": (
+                "temperature_2m,wind_speed_10m,wind_direction_10m,"
+                "relative_humidity_2m,surface_pressure"
+            ),
             "temperature_unit": "fahrenheit",
             "wind_speed_unit": "mph",
             "forecast_days": 3,
@@ -65,6 +68,8 @@ def fetch_weather_at(lat: float, lon: float, target_utc: datetime) -> dict[str, 
     temps  = hourly["temperature_2m"]
     winds  = hourly["wind_speed_10m"]
     dirs   = hourly["wind_direction_10m"]
+    hums   = hourly.get("relative_humidity_2m") or []
+    press  = hourly.get("surface_pressure") or []
 
     best_idx = min(
         range(len(times)),
@@ -74,8 +79,14 @@ def fetch_weather_at(lat: float, lon: float, target_utc: datetime) -> dict[str, 
         ),
     )
 
+    def _at(seq):
+        v = seq[best_idx] if best_idx < len(seq) else None
+        return round(v, 1) if v is not None else None
+
     return {
         "temperature_f": round(temps[best_idx]),
         "wind_speed_mph": round(winds[best_idx]),
         "wind_direction_degrees": round(dirs[best_idx]),
+        "relative_humidity_pct": _at(hums),     # %, may be None if unavailable
+        "surface_pressure_hpa": _at(press),     # hPa (station pressure, altitude-aware)
     }

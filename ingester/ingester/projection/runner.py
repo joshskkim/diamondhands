@@ -65,10 +65,13 @@ class SlateGame:
     temperature_f: float | None
     wind_speed_mph: float | None
     wind_from_degrees: float | None
+    relative_humidity_pct: float | None
+    surface_pressure_hpa: float | None
     weather_fetched_at: datetime | None
     is_dome: bool
     is_retractable: bool
     cf_bearing_degrees: float
+    altitude_feet: float | None
     park_factor_hits: float
     park_factor_hr_lhb: float
     park_factor_hr_rhb: float
@@ -121,7 +124,10 @@ def _load_slate_games(conn: psycopg.Connection, game_date: date) -> list[SlateGa
             s.cf_bearing_degrees,
             COALESCE(s.park_factor_hits, 1.0),
             COALESCE(s.park_factor_hr_lhb, 1.0),
-            COALESCE(s.park_factor_hr_rhb, 1.0)
+            COALESCE(s.park_factor_hr_rhb, 1.0),
+            g.relative_humidity_pct,
+            g.surface_pressure_hpa,
+            s.altitude_feet
         FROM games g
         JOIN stadiums s ON s.id = g.stadium_id
         WHERE g.game_date = %s
@@ -143,10 +149,13 @@ def _load_slate_games(conn: psycopg.Connection, game_date: date) -> list[SlateGa
                 temperature_f=_as_float(row[5]),
                 wind_speed_mph=_as_float(row[6]),
                 wind_from_degrees=_as_float(row[7]),
+                relative_humidity_pct=_as_float(row[15]),
+                surface_pressure_hpa=_as_float(row[16]),
                 weather_fetched_at=row[8],
                 is_dome=bool(row[9]),
                 is_retractable=bool(row[10]),
                 cf_bearing_degrees=float(row[11]),
+                altitude_feet=_as_float(row[17]),
                 park_factor_hits=float(row[12]),
                 park_factor_hr_lhb=float(row[13]),
                 park_factor_hr_rhb=float(row[14]),
@@ -625,6 +634,9 @@ def _project_team_side(
             pitcher_throws=pitcher_throws,
             is_dome=game.is_dome,
             is_retractable_open=is_retractable_open,
+            humidity_pct=game.relative_humidity_pct,
+            surface_pressure_hpa=game.surface_pressure_hpa,
+            altitude_ft=game.altitude_feet,
         )
 
         # v2.1: the matchup drives the batter's hit/K/HR rates and is stored for audit/UI.
@@ -1110,6 +1122,9 @@ def _project_team_side_backtest(
                 pitcher_throws=pitcher_throws,
                 is_dome=game.is_dome,
                 is_retractable_open=is_retractable_open,
+                humidity_pct=game.relative_humidity_pct,
+                surface_pressure_hpa=game.surface_pressure_hpa,
+                altitude_ft=game.altitude_feet,
             )
 
         # v2.1: the matchup drives the projection; store it so the backtest is auditable.
