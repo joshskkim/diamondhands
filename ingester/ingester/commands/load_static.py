@@ -114,17 +114,18 @@ def cmd_load_static(args: argparse.Namespace) -> None:
                     """
                     INSERT INTO stadiums (
                         id, name, team_id, city,
-                        latitude, longitude,
+                        latitude, longitude, altitude_feet,
                         is_dome, is_retractable, cf_bearing_degrees,
                         park_factor_hits, park_factor_hr_lhb, park_factor_hr_rhb
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO UPDATE
                         SET name               = EXCLUDED.name,
                             team_id            = EXCLUDED.team_id,
                             city               = EXCLUDED.city,
                             latitude           = EXCLUDED.latitude,
                             longitude          = EXCLUDED.longitude,
+                            altitude_feet      = EXCLUDED.altitude_feet,
                             is_dome            = EXCLUDED.is_dome,
                             is_retractable     = EXCLUDED.is_retractable,
                             cf_bearing_degrees = EXCLUDED.cf_bearing_degrees,
@@ -139,6 +140,7 @@ def cmd_load_static(args: argparse.Namespace) -> None:
                         s["city"],
                         s["latitude"],
                         s["longitude"],
+                        s.get("altitude_feet"),
                         s["is_dome"],
                         s.get("is_retractable", False),
                         s["cf_bearing_degrees"],
