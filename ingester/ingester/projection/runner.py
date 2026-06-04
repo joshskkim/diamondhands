@@ -13,14 +13,15 @@ import psycopg
 from ingester.db import eastern_today, get_connection
 from ingester.projection.batter_model import (
     BatterProbabilities,
+    BatterProjection,
     BatterSkillInput,
     blend_batter_skills,
     expected_team_runs,
+    league_average_projection,
     project_batter,
 )
 from ingester.projection.constants import (
     EXPECTED_PA_PER_STARTER,
-    LEAGUE_XWOBA,
     LINEUP_SIZE_HITTERS,
     LINEUP_STARTERS,
     MODEL_VERSION,
@@ -294,6 +295,38 @@ def _load_pitcher_splits(
     return splits
 
 
+def _load_bullpen_splits(
+    conn: psycopg.Connection, team_id: int, season: int
+) -> list[PitcherHandSplit]:
+    """Load a team's relief-pitching skill (bullpen_skill) as pitcher splits by hand.
+
+    Reuses PitcherHandSplit so the same resolve/adjust path serves starter and bullpen.
+    The opposing team's bullpen faces a hitter's later PAs (see expected_team_runs).
+    """
+    rows = conn.execute(
+        """
+        SELECT vs_hand, bf, hits_per_pa, hr_per_pa, k_rate
+        FROM bullpen_skill
+        WHERE team_id = %s AND season = %s
+        """,
+        (team_id, season),
+    ).fetchall()
+    splits: list[PitcherHandSplit] = []
+    for r in rows:
+        if r[2] is None or r[3] is None or r[4] is None:
+            continue
+        splits.append(
+            PitcherHandSplit(
+                vs_handedness=str(r[0]),
+                batters_faced=int(r[1]),
+                hits_per_pa=float(r[2]),
+                hr_per_pa=float(r[3]),
+                k_rate=float(r[4]),
+            )
+        )
+    return splits
+
+
 def _load_pitcher_throws(conn: psycopg.Connection, pitcher_id: int) -> str:
     row = conn.execute(
         "SELECT throws FROM players WHERE id = %s",
@@ -444,28 +477,32 @@ def _upsert_batter_projection(
     )
 
 
-def _pad_confirmed_starters(
-    starter_xwobas: list[float],
-    weather_hits: list[float],
+def _pad_confirmed_projs(
+    starter_projs: list[BatterProjection],
     lineup_confirmed: bool,
+    bullpen_projs: list[BatterProjection] | None = None,
 ) -> None:
     """
     Backfill the team-run inputs to nine slots for a confirmed lineup (in place).
 
     A confirmed lineup is exactly nine batters; if one lacks batter_skill we still want
-    a run projection rather than dropping the whole game. Pad the missing slots with
-    league-average xwOBA (and the mean weather adjustment) so ``expected_team_runs`` sees
-    nine inputs. Individual batter rows are unaffected — only batters we could actually
-    project were written. No-op for the projected fallback, which has bench-depth slack.
+    a run projection rather than dropping the whole game. Pad the missing slots with a
+    league-average projection so ``expected_team_runs`` sees nine batters. Individual
+    batter rows are unaffected — only batters we could actually project were written.
+    No-op for the projected fallback, which has bench-depth slack.
     """
     if not lineup_confirmed:
         return
-    if not (0 < len(starter_xwobas) < LINEUP_STARTERS):
+    if not (0 < len(starter_projs) < LINEUP_STARTERS):
         return
-    pad = LINEUP_STARTERS - len(starter_xwobas)
-    starter_xwobas.extend([LEAGUE_XWOBA] * pad)
-    mean_weather = sum(weather_hits) / len(weather_hits)
-    weather_hits.extend([mean_weather] * pad)
+    pad = LINEUP_STARTERS - len(starter_projs)
+    starter_projs.extend(
+        league_average_projection(EXPECTED_PA_PER_STARTER) for _ in range(pad)
+    )
+    if bullpen_projs is not None:
+        bullpen_projs.extend(
+            league_average_projection(EXPECTED_PA_PER_STARTER) for _ in range(pad)
+        )
 
 
 def _project_team_side(
@@ -474,6 +511,7 @@ def _project_team_side(
     game: SlateGame,
     team_id: int,
     opposing_pitcher_id: int,
+    opposing_team_id: int,
     is_home: bool,
     season: int,
     park: ParkFactors,
@@ -506,11 +544,16 @@ def _project_team_side(
             opposing_pitcher_id,
         )
 
+    # v2.2: the opposing team's bullpen faces a hitter's later PAs (blended in
+    # expected_team_runs). Empty → resolve_pitcher_skill yields the league-average
+    # pitcher, so the bullpen-faced leg simply regresses the matchup toward league.
+    bullpen_splits = _load_bullpen_splits(conn, opposing_team_id, season)
+
     # v1: retractable domes assumed closed (no open/closed flag on games yet).
     is_retractable_open = False
 
-    starter_xwobas: list[float] = []
-    weather_hits: list[float] = []
+    starter_projs: list[BatterProjection] = []
+    bullpen_projs: list[BatterProjection] = []
 
     for hitter in hitters:
         skill = _load_batter_skill(conn, hitter.player_id)
@@ -584,28 +627,41 @@ def _project_team_side(
         )
         summary.batter_rows += 1
 
-        if len(starter_xwobas) < LINEUP_STARTERS:
-            starter_xwobas.append(proj.xwoba_blend)
-            weather_hits.append(adj_weather_hit)
+        if len(starter_projs) < LINEUP_STARTERS:
+            starter_projs.append(proj)
+            # Same batter (matchup-based skill), re-projected against the opposing
+            # bullpen's pitcher quality — only the pitcher adjustment changes.
+            pen_split, _pen_quality = resolve_pitcher_skill(
+                bullpen_splits, hitter.bats, pitcher_throws
+            )
+            pen_adj = compute_pitcher_adjustments(pen_split)
+            bullpen_projs.append(
+                project_batter(
+                    skill,
+                    pen_adj,
+                    park_adj,
+                    adj_weather_hit,
+                    adj_weather_hr,
+                    expected_pa=hitter.expected_pa,
+                    matchup_xwoba=matchup.xwoba,
+                    matchup_k_rate=matchup.k_rate,
+                    matchup_iso=matchup.iso,
+                )
+            )
 
-    _pad_confirmed_starters(starter_xwobas, weather_hits, lineup_confirmed)
+    _pad_confirmed_projs(starter_projs, lineup_confirmed, bullpen_projs)
 
-    if len(starter_xwobas) < LINEUP_STARTERS:
+    if len(starter_projs) < LINEUP_STARTERS:
         log.warning(
             "game %s team %s: only %d batters projected (need %d for team runs)",
             game.game_id,
             team_id,
-            len(starter_xwobas),
+            len(starter_projs),
             LINEUP_STARTERS,
         )
         return None
 
-    adj_weather_hit_avg = sum(weather_hits) / len(weather_hits)
-    return expected_team_runs(
-        starter_xwobas,
-        park.park_factor_hits,
-        adj_weather_hit_avg,
-    )
+    return expected_team_runs(starter_projs, bullpen_projs)
 
 
 def _project_game(
@@ -631,6 +687,7 @@ def _project_game(
         game=game,
         team_id=game.home_team_id,
         opposing_pitcher_id=game.away_probable_pitcher_id,
+        opposing_team_id=game.away_team_id,
         is_home=True,
         season=season,
         park=park,
@@ -642,6 +699,7 @@ def _project_game(
         game=game,
         team_id=game.away_team_id,
         opposing_pitcher_id=game.home_probable_pitcher_id,
+        opposing_team_id=game.home_team_id,
         is_home=False,
         season=season,
         park=park,
@@ -974,8 +1032,10 @@ def _project_team_side_backtest(
     splits = _load_pitcher_splits_snapshot(conn, opposing_pitcher_id, season, as_of_date)
 
     is_retractable_open = False
-    starter_xwobas: list[float] = []
-    weather_hits: list[float] = []
+    starter_projs: list[BatterProjection] = []
+    # No bullpen leg in backtest: bullpen_skill is a full-season aggregate, so using
+    # it for a historical game would leak future data. The team-run formula change
+    # (linear weights vs the v1 Pythagorean) is what this backtest measures.
 
     # Historical/stale games have no usable weather snapshot — neutralize weather so
     # the backtest measures only park + pitcher + skill. Decided once per game side.
@@ -1042,21 +1102,19 @@ def _project_team_side_backtest(
         )
         summary.batter_rows += 1
 
-        if len(starter_xwobas) < LINEUP_STARTERS:
-            starter_xwobas.append(proj.xwoba_blend)
-            weather_hits.append(adj_weather_hit)
+        if len(starter_projs) < LINEUP_STARTERS:
+            starter_projs.append(proj)
 
-    _pad_confirmed_starters(starter_xwobas, weather_hits, lineup_confirmed)
+    _pad_confirmed_projs(starter_projs, lineup_confirmed)
 
-    if len(starter_xwobas) < LINEUP_STARTERS:
+    if len(starter_projs) < LINEUP_STARTERS:
         log.warning(
             "game %s team %s: only %d batters projected (need %d for team runs)",
-            game.game_id, team_id, len(starter_xwobas), LINEUP_STARTERS,
+            game.game_id, team_id, len(starter_projs), LINEUP_STARTERS,
         )
         return None
 
-    adj_weather_hit_avg = sum(weather_hits) / len(weather_hits)
-    return expected_team_runs(starter_xwobas, park.park_factor_hits, adj_weather_hit_avg)
+    return expected_team_runs(starter_projs)
 
 
 def _project_game_backtest(
