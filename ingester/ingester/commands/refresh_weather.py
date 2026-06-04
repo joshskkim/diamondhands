@@ -58,6 +58,7 @@ def cmd_refresh_weather(args: argparse.Namespace) -> None:
     updated = 0
     dome_sentinel = 0
     api_fetched = 0
+    failed = 0
 
     for game_id, start_utc, lat, lon, is_dome in rows:
         if is_dome:
@@ -77,7 +78,12 @@ def cmd_refresh_weather(args: argparse.Namespace) -> None:
             )
             dome_sentinel += 1
         else:
-            w = fetch_weather_at(float(lat), float(lon), start_utc)
+            try:
+                w = fetch_weather_at(float(lat), float(lon), start_utc)
+            except Exception as exc:  # noqa: BLE001 — one flaky fetch must not abort the slate
+                print(f"  game {game_id}: weather fetch failed after retries ({exc}); skipping")
+                failed += 1
+                continue
             conn.execute(
                 """
                 UPDATE games
@@ -100,7 +106,10 @@ def cmd_refresh_weather(args: argparse.Namespace) -> None:
     conn.commit()
     conn.close()
 
-    print(f"[refresh-weather] Updated {updated} game(s) ({dome_sentinel} dome sentinel, {api_fetched} Open-Meteo).")
+    print(
+        f"[refresh-weather] Updated {updated} game(s) ({dome_sentinel} dome sentinel, "
+        f"{api_fetched} Open-Meteo)" + (f"; {failed} skipped after fetch failures" if failed else "") + "."
+    )
     print(
         "  Note: Open-Meteo is free for non-commercial use — no API key required.\n"
         "  Wind direction = meteorological 'from' direction (0=from N, 90=from E, …).\n"

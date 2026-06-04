@@ -228,12 +228,12 @@ def _resolve_lineup(
     """
     Resolve the batting order to project for one team side.
 
-    Confirmed lineup (game_lineups holds all nine slots): project those nine in order,
-    weighting expected PA by lineup position (``PA_BY_ORDER``).
-
-    Otherwise fall back to the v1 proxy — top hitters by L30 PA, each at the flat
-    ``EXPECTED_PA_PER_STARTER`` — marked unconfirmed. Re-running ``project`` once the
-    lineup posts (the cron does this naturally) replaces these with the real slots.
+    Project ONLY a confirmed lineup (game_lineups holds all nine slots), in order, with
+    expected PA weighted by lineup position (``PA_BY_ORDER``). If the lineup is not yet
+    confirmed, return [] so the caller skips this side: the old L30 "likely hitters" proxy
+    guessed both the roster and the order and was unreliable (off-roster names, scrambled
+    order), and a wrong projection is worse than none. The afternoon ``daily --quick`` loop
+    re-projects as real lineups post.
     """
     rows = conn.execute(
         """
@@ -258,16 +258,7 @@ def _resolve_lineup(
             for order_pid_bats in rows
         ]
 
-    return [
-        LineupHitter(
-            player_id=c.player_id,
-            bats=c.bats,
-            expected_pa=EXPECTED_PA_PER_STARTER,
-            lineup_position=None,
-            lineup_confirmed=False,
-        )
-        for c in _likely_hitters(conn, team_id, as_of)
-    ]
+    return []
 
 
 def _load_batter_skill(

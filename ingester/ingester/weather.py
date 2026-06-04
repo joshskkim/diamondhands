@@ -19,6 +19,7 @@ determine whether wind is blowing toward or away from the plate:
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 import requests
@@ -82,6 +83,34 @@ def fetch_weather_archive(lat: float, lon: float, target_utc: datetime) -> dict:
     resp.raise_for_status()
     return _select_hour(resp.json()["hourly"], target_utc)
 
+# Open-Meteo occasionally returns transient 5xx / times out; one flaky response should
+# not abort a whole slate refresh, so retry with a short backoff before giving up.
+_RETRY_ATTEMPTS = 3
+_RETRY_BACKOFF_S = 1.5
+
+
+def _get_json(url: str, params: dict, timeout: int = 15) -> dict:
+    """GET with retry on transient errors (5xx / connection / timeout)."""
+    last_exc: Exception | None = None
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            resp = requests.get(url, params=params, timeout=timeout)
+            # Retry server-side errors; raise client errors (4xx) immediately.
+            if resp.status_code >= 500:
+                resp.raise_for_status()
+            resp.raise_for_status()
+            return resp.json()
+        except (requests.exceptions.RequestException,) as exc:
+            last_exc = exc
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            # Don't retry client errors (4xx) — they won't fix themselves.
+            if status is not None and 400 <= status < 500:
+                raise
+            if attempt < _RETRY_ATTEMPTS - 1:
+                time.sleep(_RETRY_BACKOFF_S * (attempt + 1))
+    assert last_exc is not None
+    raise last_exc
+
 
 def fetch_weather_at(lat: float, lon: float, target_utc: datetime) -> dict[str, int]:
     """
@@ -102,9 +131,9 @@ def fetch_weather_at(lat: float, lon: float, target_utc: datetime) -> dict[str, 
     if target_utc.tzinfo is None:
         target_utc = target_utc.replace(tzinfo=timezone.utc)
 
-    resp = requests.get(
+    data = _get_json(
         OPEN_METEO_URL,
-        params={
+        {
             "latitude": lat,
             "longitude": lon,
             "hourly": _HOURLY_FIELDS,
@@ -112,7 +141,6 @@ def fetch_weather_at(lat: float, lon: float, target_utc: datetime) -> dict[str, 
             "wind_speed_unit": "mph",
             "forecast_days": 3,
         },
-        timeout=15,
     )
     resp.raise_for_status()
     return _select_hour(resp.json()["hourly"], target_utc)
