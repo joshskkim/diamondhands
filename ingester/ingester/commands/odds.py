@@ -194,6 +194,7 @@ def cmd_refresh_odds(args: argparse.Namespace) -> None:
                         (game_id, bookmaker, market, side, line,
                          price_american, price_decimal, implied_prob, last_update)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (game_id, bookmaker, market, side, line) DO NOTHING
                     """,
                     (
                         game_id, r["bookmaker"], r["market"], r["side"], r["line"],
@@ -227,6 +228,8 @@ def cmd_refresh_odds(args: argparse.Namespace) -> None:
                             (game_id, player_id, player_name, market, side, line,
                              price_american, price_decimal, implied_prob, bookmaker, last_update)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (game_id, player_id, market, side, line, bookmaker)
+                            DO NOTHING
                         """,
                         (
                             game_id, player_id, r["player_name"], r["market"], r["side"],
