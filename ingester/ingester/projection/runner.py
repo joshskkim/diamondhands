@@ -20,6 +20,7 @@ from ingester.projection.batter_model import (
     league_average_projection,
     pitcher_line_from_lineup,
     project_batter,
+    yrfi_probability,
 )
 from ingester.projection.constants import (
     EXPECTED_PA_PER_STARTER,
@@ -819,17 +820,20 @@ def _project_game(
         )
         return False
 
+    p_yrfi, efir = yrfi_probability(home_runs, away_runs)
     conn.execute(
         """
         INSERT INTO game_projections (
             game_id, expected_home_runs, expected_away_runs,
-            expected_total_runs, computed_at
+            expected_total_runs, p_yrfi, expected_first_inning_runs, computed_at
         )
-        VALUES (%s, %s, %s, %s, NOW())
+        VALUES (%s, %s, %s, %s, %s, %s, NOW())
         ON CONFLICT (game_id) DO UPDATE SET
             expected_home_runs  = EXCLUDED.expected_home_runs,
             expected_away_runs  = EXCLUDED.expected_away_runs,
             expected_total_runs = EXCLUDED.expected_total_runs,
+            p_yrfi              = EXCLUDED.p_yrfi,
+            expected_first_inning_runs = EXCLUDED.expected_first_inning_runs,
             computed_at         = NOW()
         """,
         (
@@ -837,6 +841,8 @@ def _project_game(
             round(home_runs, 2),
             round(away_runs, 2),
             round(home_runs + away_runs, 2),
+            round(p_yrfi, 3),
+            round(efir, 2),
         ),
     )
     conn.execute(
