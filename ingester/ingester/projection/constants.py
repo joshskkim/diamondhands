@@ -236,6 +236,16 @@ LW_WALK: float = 0.31
 STARTER_PA_SHARE: float = 0.60
 
 # ---------------------------------------------------------------------------
+# First-inning run model (NRFI / YRFI)
+# ---------------------------------------------------------------------------
+# A team's first inning is led off by the top of the order, so it scores a bit more
+# than an average inning: first-inning run expectancy ≈ full-game runs × this share
+# (1.15/9 ≈ slightly above an even 1/9). The expected-runs → P(score) mapping is
+# calibrated so a league-average matchup (4.3 R/team) gives ~0.50 YRFI.
+FIRST_INNING_RUN_SHARE: float = 0.128
+NRFI_PROB_COEFF: float = 0.63
+
+# ---------------------------------------------------------------------------
 # S2 — batter platoon split (experimental; OFF by default)
 # ---------------------------------------------------------------------------
 # Blend the batter's season/L30 skill toward their split vs the opposing pitcher's

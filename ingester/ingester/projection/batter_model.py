@@ -13,6 +13,7 @@ from ingester.projection.constants import (
     AVG_BASES_PER_HIT_CLAMP,
     AVG_BASES_PER_HIT_ISO_MULT,
     EXPECTED_PA_PER_STARTER,
+    FIRST_INNING_RUN_SHARE,
     LEAGUE_1B_SHARE,
     LEAGUE_2B_SHARE,
     LEAGUE_3B_SHARE,
@@ -29,6 +30,7 @@ from ingester.projection.constants import (
     LW_SINGLE,
     LW_TRIPLE,
     LW_WALK,
+    NRFI_PROB_COEFF,
     PA_L30_BLEND_CAP,
     PA_L30_FULL_WEIGHT,
     PROB_DECIMAL_PLACES,
@@ -428,3 +430,30 @@ def pitcher_line_from_lineup(
         expected_bb=bb,
         expected_runs=runs,
     )
+
+
+def yrfi_probability(
+    home_full_runs: float,
+    away_full_runs: float,
+) -> tuple[float, float]:
+    """
+    First-inning run model (NRFI/YRFI) from each team's projected full-game runs.
+
+    A team's first inning scores a bit more than an average inning (the top of the order
+    leads off), so first-inning run expectancy ≈ full-game runs × FIRST_INNING_RUN_SHARE.
+    P(team scores in T1) = 1 − exp(−NRFI_PROB_COEFF · λ), calibrated so a league-average
+    matchup (~4.3 R/team) gives ~0.50 YRFI. Returns (p_yrfi, expected_first_inning_runs);
+    nrfi probability is 1 − p_yrfi.
+
+    (v1 uses team full-game runs as the first-inning proxy — already lineup-quality aware.
+    A top-of-order/pitcher-specific first-inning model is a future refinement.)
+    """
+    def _p_score(team_runs: float) -> float:
+        lam = max(team_runs, 0.0) * FIRST_INNING_RUN_SHARE
+        return 1.0 - math.exp(-NRFI_PROB_COEFF * lam)
+
+    p_home = _p_score(home_full_runs)
+    p_away = _p_score(away_full_runs)
+    p_yrfi = 1.0 - (1.0 - p_home) * (1.0 - p_away)
+    efir = (max(home_full_runs, 0.0) + max(away_full_runs, 0.0)) * FIRST_INNING_RUN_SHARE
+    return p_yrfi, efir
