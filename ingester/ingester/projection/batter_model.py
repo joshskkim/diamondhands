@@ -379,3 +379,52 @@ def expected_team_runs(
     runs += LW_HOMERUN * (team_hr - lg_hr)
     runs += LW_WALK * (team_bb - lg_bb)
     return max(runs, 0.0)
+
+
+@dataclass(frozen=True)
+class PitcherLine:
+    """A probable starter's projected line, aggregated from the opposing lineup."""
+
+    expected_bf: float
+    expected_outs: float
+    expected_ip: float
+    expected_k: float
+    expected_h: float
+    expected_hr: float
+    expected_bb: float
+    expected_runs: float
+
+
+def pitcher_line_from_lineup(
+    opposing_starters: list[BatterProjection],
+    starter_share: float = STARTER_PA_SHARE,
+) -> PitcherLine:
+    """
+    Project the starter's line by aggregating the opposing lineup he faces.
+
+    Each opposing batter's fully-adjusted per-PA rates (the same matchup/park/weather
+    projection used for their props) are summed over the batters the starter is expected
+    to face — ``starter_share`` of each batter's plate appearances (~60%, the rest go to
+    the bullpen). Outs ≈ BF − hits − walks; runs allowed ≈ the starter's PA-share of the
+    lineup's starter-only expected team runs.
+    """
+    bf = k = h = hr = bb = 0.0
+    for proj in opposing_starters:
+        faced = starter_share * proj.expected_pa
+        bf += faced
+        k += faced * proj.adjusted.k_per_pa
+        h += faced * proj.adjusted.hit_per_pa
+        hr += faced * proj.adjusted.hr_per_pa
+        bb += faced * LEAGUE_BB_PER_PA
+    outs = max(bf - h - bb, 0.0)
+    runs = starter_share * expected_team_runs(opposing_starters)
+    return PitcherLine(
+        expected_bf=bf,
+        expected_outs=outs,
+        expected_ip=outs / 3.0,
+        expected_k=k,
+        expected_h=h,
+        expected_hr=hr,
+        expected_bb=bb,
+        expected_runs=runs,
+    )

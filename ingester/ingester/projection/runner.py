@@ -18,6 +18,7 @@ from ingester.projection.batter_model import (
     blend_batter_skills,
     expected_team_runs,
     league_average_projection,
+    pitcher_line_from_lineup,
     project_batter,
 )
 from ingester.projection.constants import (
@@ -444,13 +445,10 @@ def _platoon_adjust(
 def _game_ready(game: SlateGame) -> str | None:
     if game.home_probable_pitcher_id is None or game.away_probable_pitcher_id is None:
         return "missing probable pitcher"
-    if not game.is_dome or game.is_retractable:
-        if (
-            game.temperature_f is None
-            or game.wind_speed_mph is None
-            or game.wind_from_degrees is None
-        ):
-            return "missing weather"
+    # Weather is an optional refinement, not a requirement: when temp/wind are absent the
+    # projector neutralizes them (70°F, no wind). A flaky weather API must NOT zero out the
+    # whole slate (this previously returned "missing weather" and skipped every open-air game).
+    # Matches _game_ready_backtest, which already gates only on probable pitchers.
     return None
 
 
@@ -725,7 +723,52 @@ def _project_team_side(
         )
         return None
 
+    # The opposing starter's projected line is the aggregate of this lineup vs him.
+    # His team is the other side, so is_home flips.
+    _upsert_pitcher_projection(
+        conn,
+        game.game_id,
+        opposing_pitcher_id,
+        not is_home,
+        pitcher_line_from_lineup(starter_projs),
+    )
+
     return expected_team_runs(starter_projs, bullpen_projs)
+
+
+def _upsert_pitcher_projection(
+    conn: psycopg.Connection,
+    game_id: int,
+    pitcher_id: int,
+    is_home: bool,
+    line,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO pitcher_projections (
+            game_id, pitcher_id, is_home, expected_bf, expected_outs, expected_ip,
+            expected_k, expected_h, expected_hr, expected_bb, expected_runs, computed_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        ON CONFLICT (game_id, pitcher_id) DO UPDATE SET
+            is_home       = EXCLUDED.is_home,
+            expected_bf   = EXCLUDED.expected_bf,
+            expected_outs = EXCLUDED.expected_outs,
+            expected_ip   = EXCLUDED.expected_ip,
+            expected_k    = EXCLUDED.expected_k,
+            expected_h    = EXCLUDED.expected_h,
+            expected_hr   = EXCLUDED.expected_hr,
+            expected_bb   = EXCLUDED.expected_bb,
+            expected_runs = EXCLUDED.expected_runs,
+            computed_at   = NOW()
+        """,
+        (
+            game_id, pitcher_id, is_home,
+            round(line.expected_bf, 2), round(line.expected_outs, 2), round(line.expected_ip, 2),
+            round(line.expected_k, 2), round(line.expected_h, 2), round(line.expected_hr, 2),
+            round(line.expected_bb, 2), round(line.expected_runs, 2),
+        ),
+    )
 
 
 def _project_game(
@@ -830,6 +873,13 @@ def _clear_slate_projections(conn: psycopg.Connection, game_date: date) -> int:
     conn.execute(
         """
         DELETE FROM game_projections
+        WHERE game_id IN (SELECT id FROM games WHERE game_date <= %s)
+        """,
+        (game_date,),
+    )
+    conn.execute(
+        """
+        DELETE FROM pitcher_projections
         WHERE game_id IN (SELECT id FROM games WHERE game_date <= %s)
         """,
         (game_date,),
