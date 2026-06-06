@@ -78,6 +78,24 @@ export interface PitchArsenal {
   pitchType: string
   usageRate: number | null
   leagueXwoba: number | null
+  // Optional pitcher-own results — populated once the pitcher-stats API lands
+  // (already stored in pitcher_arsenal: xwoba_against, whiff_rate, avg_velocity).
+  xwobaAgainst?: number | null
+  whiffRate?: number | null
+  avgVelocity?: number | null
+}
+
+/**
+ * A pitcher's season skill split by opposing batter handedness. Sourced from the
+ * (not-yet-exposed) pitcher_skill table; optional until the API serves it.
+ */
+export interface PitcherSkillSplit {
+  vsHand: string // 'L' | 'R'
+  kRate: number | null
+  bbRate: number | null
+  xwobaAgainst: number | null
+  hrPerPa: number | null
+  battersFaced: number | null
 }
 
 /** The batter's regressed xwOBA vs one of the pitcher's pitch types, with signed edge. */

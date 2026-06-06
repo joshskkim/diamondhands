@@ -22,10 +22,26 @@ export function PitchTypeLeaderboard() {
   const [pitch, setPitch] = useState<string | null>(null)
   const active = pitch ?? pitchTypes?.[0]?.code ?? null
 
-  const { data: rows, isPending, isError } = useQuery({
-    ...pitchTypeLeaderboardQueryOptions(active ?? '', undefined, 20),
+  // Fetch extra rows then dedupe: the API can return the same batter/pitcher
+  // pair more than once (two seasons share an as_of_date — see plan §8), so we
+  // over-fetch, collapse by player+pitcher, and show the top 20 unique rows.
+  const { data: rawRows, isPending, isError } = useQuery({
+    ...pitchTypeLeaderboardQueryOptions(active ?? '', undefined, 40),
     enabled: Boolean(active),
   })
+
+  const rows = (() => {
+    if (!rawRows) return rawRows
+    const seen = new Set<string>()
+    const out: typeof rawRows = []
+    for (const r of rawRows) {
+      const key = `${r.player.id}-${r.opposingPitcher.id}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(r)
+    }
+    return out.slice(0, 20)
+  })()
 
   return (
     <main className="max-w-5xl mx-auto px-4 py-8">
