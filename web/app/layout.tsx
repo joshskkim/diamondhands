@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import { Inter, Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
-import { SiteNav } from "@/components/site-nav";
+import { AuthProvider } from "@/components/auth-provider";
+import { AppShell } from "@/components/app-shell";
 
 // Body text — Inter is exceptionally legible at small sizes / in dense tables.
 const inter = Inter({
@@ -43,10 +44,11 @@ export default function RootLayout({
       lang="en"
       className={`${inter.variable} ${spaceGrotesk.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-[#08090d] text-zinc-100">
+      <body className="min-h-screen bg-[#08090d] text-zinc-100">
         <Providers>
-          <SiteNav />
-          {children}
+          <AuthProvider>
+            <AppShell>{children}</AppShell>
+          </AuthProvider>
         </Providers>
       </body>
     </html>

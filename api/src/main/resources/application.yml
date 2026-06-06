@@ -24,3 +24,11 @@ spring:
 
 server:
   port: 8080
+
+app:
+  auth:
+    # HS256 signing key for session JWTs. MUST be overridden in prod (>= 32 bytes).
+    jwt-secret: ${AUTH_JWT_SECRET:dev-insecure-change-me-please-32-bytes-minimum-secret-key-0001}
+    session-ttl: ${AUTH_SESSION_TTL:7d}
+    # Secure cookie requires HTTPS; false for local http dev, true in prod.
+    cookie-secure: ${AUTH_COOKIE_SECURE:false}
