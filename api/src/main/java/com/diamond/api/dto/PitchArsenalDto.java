@@ -4,5 +4,8 @@ package com.diamond.api.dto;
 public record PitchArsenalDto(
     String pitchType,
     Double usageRate,
-    Double leagueXwoba
+    Double leagueXwoba,
+    Double xwobaAgainst,
+    Double whiffRate,
+    Double avgVelocity
 ) {}
