@@ -127,5 +127,54 @@ class TestSimulateGame(unittest.TestCase):
         self.assertAlmostEqual(prob_over(runs, 4.0), 1.0)
 
 
+class TestPeriodMarkets(unittest.TestCase):
+    def test_all_periods_present(self) -> None:
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=1000, seed=8)
+        self.assertEqual(set(sim.periods), {1, 3, 5, 7, 9})
+
+    def test_period_totals_monotonic(self) -> None:
+        # Cumulative runs only grow, so expected period totals must be non-decreasing.
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=4000, seed=9)
+        totals = [sim.periods[p].expected_total for p in (1, 3, 5, 7, 9)]
+        for a, b in zip(totals, totals[1:]):
+            self.assertLessEqual(a, b + 1e-9)
+
+    def test_full_period_matches_convenience(self) -> None:
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=2000, seed=10)
+        self.assertEqual(sim.expected_total, sim.periods[9].expected_total)
+        self.assertTrue((sim.home_runs == sim.periods[9].home_runs).all())
+
+    def test_f5_total_is_about_half(self) -> None:
+        # ~5/9 of a game; F5 total should be a bit over half the full-game total.
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=6000, seed=11)
+        ratio = sim.f5.expected_total / sim.full.expected_total
+        self.assertGreater(ratio, 0.45)
+        self.assertLess(ratio, 0.65)
+
+    def test_period_moneyline_probs_sum_to_one(self) -> None:
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=4000, seed=12)
+        f5 = sim.f5
+        self.assertAlmostEqual(f5.p_home_lead + f5.p_away_lead + f5.p_tie, 1.0, places=6)
+        # symmetric lineups -> F5 lead probs roughly equal
+        self.assertAlmostEqual(f5.p_home_lead, f5.p_away_lead, delta=0.05)
+
+    def test_f5_tie_more_likely_than_full_game(self) -> None:
+        # Fewer innings -> more pushes (ties).
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=8000, seed=13)
+        self.assertGreater(sim.f5.p_tie, sim.full.p_tie)
+
+    def test_yrfi_equals_period1_over_zero(self) -> None:
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=4000, seed=14)
+        self.assertEqual(sim.p_yrfi, sim.periods[1].prob_over(0))
+        self.assertGreater(sim.p_yrfi, 0.30)
+        self.assertLess(sim.p_yrfi, 0.70)
+
+    def test_total_hist_sums_to_nsims(self) -> None:
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=3000, seed=15)
+        hist = sim.f5.total_hist(15)
+        self.assertEqual(sum(hist), 3000)
+        self.assertEqual(len(hist), 16)
+
+
 if __name__ == "__main__":
     unittest.main()
