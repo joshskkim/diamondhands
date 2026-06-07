@@ -5,6 +5,7 @@ import type {
   FlatBatterPick,
   GameOdds,
   GameProjections,
+  PitcherSkillSplit,
   PitchTypeLeaderboardEntry,
   PitchTypeRef,
   PlayerDetail,
@@ -59,6 +60,10 @@ export function fetchPlayerRecentStats(
 
 export function fetchGameOdds(gameId: number): Promise<GameOdds> {
   return apiGet<GameOdds>(`/api/games/${gameId}/odds`)
+}
+
+export function fetchPitcherSkill(pitcherId: number): Promise<PitcherSkillSplit[]> {
+  return apiGet<PitcherSkillSplit[]>(`/api/pitchers/${pitcherId}/skill`)
 }
 
 export function fetchBestPlays(date?: string, limit = 50): Promise<BestPlay[]> {
@@ -140,6 +145,9 @@ export const queryKeys = {
     recent: (playerId: number, limit = 20) =>
       ['player', 'recent', playerId, limit] as const,
   },
+  pitchers: {
+    skill: (pitcherId: number) => ['pitcher', 'skill', pitcherId] as const,
+  },
   leaderboards: {
     pitchTypes: () => ['leaderboards', 'pitch-types'] as const,
     pitchType: (pitch: string, date?: string, limit = 20) =>
@@ -170,6 +178,14 @@ export function gameOddsQueryOptions(gameId: number) {
   return queryOptions({
     queryKey: queryKeys.games.odds(gameId),
     queryFn: () => fetchGameOdds(gameId),
+  })
+}
+
+export function pitcherSkillQueryOptions(pitcherId: number) {
+  return queryOptions({
+    queryKey: queryKeys.pitchers.skill(pitcherId),
+    queryFn: () => fetchPitcherSkill(pitcherId),
+    enabled: pitcherId > 0,
   })
 }
 
