@@ -29,9 +29,49 @@ export class ApiError extends Error {
 }
 
 async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`)
+  // credentials:'include' so the session cookie rides along (no-op for server fetches).
+  const res = await fetch(`${API_BASE}${path}`, { credentials: 'include' })
   if (!res.ok) throw new ApiError(res.status, path)
   return res.json() as Promise<T>
+}
+
+async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new ApiError(res.status, path)
+  return (res.status === 204 ? undefined : await res.json()) as T
+}
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+export type AuthUser = { id: number; email: string; handle: string }
+
+/** Current user, or null when not signed in (API returns 401). */
+export async function fetchMe(): Promise<AuthUser | null> {
+  const res = await fetch(`${API_BASE}/api/auth/me`, { credentials: 'include' })
+  if (res.status === 401) return null
+  if (!res.ok) throw new ApiError(res.status, '/api/auth/me')
+  return res.json() as Promise<AuthUser>
+}
+
+export function signUp(input: {
+  email: string
+  handle: string
+  password: string
+}): Promise<AuthUser> {
+  return apiPost<AuthUser>('/api/auth/signup', input)
+}
+
+export function signIn(input: { email: string; password: string }): Promise<AuthUser> {
+  return apiPost<AuthUser>('/api/auth/signin', input)
+}
+
+export function signOut(): Promise<void> {
+  return apiPost<void>('/api/auth/signout', {})
 }
 
 // ── Fetchers (usable from Server Components and queryFn) ─────────────────────
