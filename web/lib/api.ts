@@ -6,6 +6,7 @@ import type {
   GameOdds,
   GameProjections,
   MostLikely,
+  PitcherSkillSplit,
   PitchTypeLeaderboardEntry,
   PitchTypeRef,
   PlayerDetail,
@@ -29,9 +30,49 @@ export class ApiError extends Error {
 }
 
 async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`)
+  // credentials:'include' so the session cookie rides along (no-op for server fetches).
+  const res = await fetch(`${API_BASE}${path}`, { credentials: 'include' })
   if (!res.ok) throw new ApiError(res.status, path)
   return res.json() as Promise<T>
+}
+
+async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new ApiError(res.status, path)
+  return (res.status === 204 ? undefined : await res.json()) as T
+}
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+export type AuthUser = { id: number; email: string; handle: string }
+
+/** Current user, or null when not signed in (API returns 401). */
+export async function fetchMe(): Promise<AuthUser | null> {
+  const res = await fetch(`${API_BASE}/api/auth/me`, { credentials: 'include' })
+  if (res.status === 401) return null
+  if (!res.ok) throw new ApiError(res.status, '/api/auth/me')
+  return res.json() as Promise<AuthUser>
+}
+
+export function signUp(input: {
+  email: string
+  handle: string
+  password: string
+}): Promise<AuthUser> {
+  return apiPost<AuthUser>('/api/auth/signup', input)
+}
+
+export function signIn(input: { email: string; password: string }): Promise<AuthUser> {
+  return apiPost<AuthUser>('/api/auth/signin', input)
+}
+
+export function signOut(): Promise<void> {
+  return apiPost<void>('/api/auth/signout', {})
 }
 
 // ── Fetchers (usable from Server Components and queryFn) ─────────────────────
@@ -60,6 +101,10 @@ export function fetchPlayerRecentStats(
 
 export function fetchGameOdds(gameId: number): Promise<GameOdds> {
   return apiGet<GameOdds>(`/api/games/${gameId}/odds`)
+}
+
+export function fetchPitcherSkill(pitcherId: number): Promise<PitcherSkillSplit[]> {
+  return apiGet<PitcherSkillSplit[]>(`/api/pitchers/${pitcherId}/skill`)
 }
 
 export function fetchBestPlays(date?: string, limit = 50): Promise<BestPlay[]> {
@@ -149,6 +194,9 @@ export const queryKeys = {
     recent: (playerId: number, limit = 20) =>
       ['player', 'recent', playerId, limit] as const,
   },
+  pitchers: {
+    skill: (pitcherId: number) => ['pitcher', 'skill', pitcherId] as const,
+  },
   leaderboards: {
     pitchTypes: () => ['leaderboards', 'pitch-types'] as const,
     pitchType: (pitch: string, date?: string, limit = 20) =>
@@ -179,6 +227,14 @@ export function gameOddsQueryOptions(gameId: number) {
   return queryOptions({
     queryKey: queryKeys.games.odds(gameId),
     queryFn: () => fetchGameOdds(gameId),
+  })
+}
+
+export function pitcherSkillQueryOptions(pitcherId: number) {
+  return queryOptions({
+    queryKey: queryKeys.pitchers.skill(pitcherId),
+    queryFn: () => fetchPitcherSkill(pitcherId),
+    enabled: pitcherId > 0,
   })
 }
 

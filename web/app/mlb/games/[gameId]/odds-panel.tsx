@@ -62,7 +62,7 @@ function QuoteRow({ label, q }: { label: string; q: LineQuote }) {
         <span className="font-mono tabular-nums text-zinc-100">{amer(q.priceAmerican)}</span>{' '}
         <span className="text-zinc-500 text-xs">{q.bestBook}</span>
       </td>
-      <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-400">{pct(q.impliedProb)}</td>
+      <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-400">{pct(q.fairProb)}</td>
       <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-300">{pct(q.modelProb)}</td>
       <td className={cn('px-3 py-2 text-right font-mono tabular-nums', evClass(q.evPct))}>{evText(q.evPct)}</td>
     </tr>
@@ -84,7 +84,7 @@ function GameMarketsTable({
         <tr className={microLabel}>
           <th className="px-3 py-2 text-left font-medium">Market</th>
           <th className="px-3 py-2 text-right font-medium">Best line</th>
-          <th className="px-3 py-2 text-right font-medium">Implied</th>
+          <th className="px-3 py-2 text-right font-medium" title="No-vig market probability">Fair</th>
           <th className="px-3 py-2 text-right font-medium">Model</th>
           <th className="px-3 py-2 text-right font-medium">EV</th>
         </tr>
@@ -117,13 +117,18 @@ function PropLabel({ p }: { p: PropMarket }) {
   )
 }
 
-/** One over/under price cell: american odds + EV underneath. */
+/** One over/under price cell: american odds, no-vig fair %, and EV underneath. */
 function PropCell({ q }: { q: LineQuote | null }) {
   if (!q) return <td className="px-3 py-2 text-right text-zinc-600">—</td>
   return (
     <td className="px-3 py-2 text-right">
       <div className="font-mono tabular-nums text-zinc-100">{amer(q.priceAmerican)}</div>
       <div className="text-[10px] text-zinc-500">{q.bestBook}</div>
+      {q.fairProb != null && (
+        <div className="text-[10px] font-mono tabular-nums text-zinc-500" title="No-vig fair probability">
+          fair {pct(q.fairProb)}
+        </div>
+      )}
       <div className={cn('text-xs font-mono tabular-nums', evClass(q.evPct))}>{evText(q.evPct)}</div>
     </td>
   )
@@ -184,7 +189,7 @@ export function OddsPanel({
     <div className="mb-8">
       <div className="flex items-baseline justify-between mb-3">
         <h2 className="text-lg font-semibold tracking-tight text-zinc-100">Odds &amp; Edges</h2>
-        <span className={microLabel}>EV = best line vs. model</span>
+        <span className={microLabel}>Fair = no-vig line · EV = model vs. best price</span>
       </div>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <div className="bg-[#0e1015] border border-white/10 rounded-xl overflow-hidden">

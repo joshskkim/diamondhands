@@ -78,6 +78,24 @@ export interface PitchArsenal {
   pitchType: string
   usageRate: number | null
   leagueXwoba: number | null
+  // Optional pitcher-own results — populated once the pitcher-stats API lands
+  // (already stored in pitcher_arsenal: xwoba_against, whiff_rate, avg_velocity).
+  xwobaAgainst?: number | null
+  whiffRate?: number | null
+  avgVelocity?: number | null
+}
+
+/**
+ * A pitcher's season skill split by opposing batter handedness. Sourced from the
+ * (not-yet-exposed) pitcher_skill table; optional until the API serves it.
+ */
+export interface PitcherSkillSplit {
+  vsHand: string // 'L' | 'R'
+  kRate: number | null
+  bbRate: number | null
+  xwobaAgainst: number | null
+  hrPerPa: number | null
+  battersFaced: number | null
 }
 
 /** The batter's regressed xwOBA vs one of the pitcher's pitch types, with signed edge. */
@@ -179,6 +197,8 @@ export interface LineQuote {
   priceAmerican: number | null
   priceDecimal: number | null
   impliedProb: number | null
+  /** No-vig market probability for this side, or null if the market couldn't be de-vigged. */
+  fairProb: number | null
   modelProb: number | null
   evPct: number | null
   books: BookPrice[]
@@ -212,6 +232,8 @@ export interface BestPlay {
   gameId: number
   matchup: string
   market: string
+  /** Raw side token: over/under for props & totals; home/away for moneyline/run line. */
+  side: string
   selection: string
   line: number | null
   bestBook: string
@@ -219,6 +241,8 @@ export interface BestPlay {
   priceDecimal: number
   modelProb: number
   impliedProb: number
+  /** No-vig market probability for this side; null if not de-vigged. */
+  fairProb: number | null
   evPct: number
   playerId: number | null
   playerName: string | null

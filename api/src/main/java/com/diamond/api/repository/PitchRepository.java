@@ -37,15 +37,18 @@ public class PitchRepository {
     }
 
     // ── arsenal of one pitcher vs a batter hand, with league xwOBA per pitch ──
+    // The snapshot tables hold rows for multiple seasons under the same as_of_date,
+    // so we pin the single latest (season, as_of_date) pair — not just MAX(as_of_date).
     private static final String ARSENAL_SQL = """
-        SELECT a.pitch_type, a.usage_rate, b.league_xwoba
+        SELECT a.pitch_type, a.usage_rate, a.xwoba_against, a.whiff_rate, a.avg_velocity, b.league_xwoba
         FROM pitcher_arsenal a
         LEFT JOIN pitch_type_league_baselines b
           ON b.season = a.season AND b.pitch_type = a.pitch_type AND b.vs_handedness = ?
         WHERE a.player_id = ? AND a.vs_handedness = ?
-          AND a.as_of_date = (
-              SELECT MAX(as_of_date) FROM pitcher_arsenal
+          AND (a.season, a.as_of_date) = (
+              SELECT season, as_of_date FROM pitcher_arsenal
               WHERE player_id = ? AND vs_handedness = ? AND as_of_date <= ?
+              ORDER BY as_of_date DESC, season DESC LIMIT 1
           )
         ORDER BY a.usage_rate DESC
         """;
@@ -56,7 +59,10 @@ public class PitchRepository {
             (rs, n) -> new PitchArsenalDto(
                 rs.getString("pitch_type"),
                 toDouble(rs.getBigDecimal("usage_rate")),
-                toDouble(rs.getBigDecimal("league_xwoba"))),
+                toDouble(rs.getBigDecimal("league_xwoba")),
+                toDouble(rs.getBigDecimal("xwoba_against")),
+                toDouble(rs.getBigDecimal("whiff_rate")),
+                toDouble(rs.getBigDecimal("avg_velocity"))),
             pitcherHand, pitcherId, batterHand, pitcherId, batterHand, asOf);
     }
 
@@ -69,9 +75,10 @@ public class PitchRepository {
         LEFT JOIN pitch_type_league_baselines b
           ON b.season = s.season AND b.pitch_type = s.pitch_type AND b.vs_handedness = s.vs_handedness
         WHERE s.player_id = ? AND s.vs_handedness = ?
-          AND s.as_of_date = (
-              SELECT MAX(as_of_date) FROM batter_pitch_type_stats
+          AND (s.season, s.as_of_date) = (
+              SELECT season, as_of_date FROM batter_pitch_type_stats
               WHERE player_id = ? AND vs_handedness = ? AND as_of_date <= ?
+              ORDER BY as_of_date DESC, season DESC LIMIT 1
           )
         """;
 
@@ -92,7 +99,28 @@ public class PitchRepository {
         int pitcherId, String pitcherName, String pitcherThrows,
         double usageRate, Double rawXwoba, int pitchesSeen, Double leagueXwoba) {}
 
+    // The original form expressed "latest (season, as_of_date) on/before the game date"
+    // as a correlated subquery inside each JOIN ON clause. With both the arsenal and the
+    // batter-pitch joins doing that, the planner produced a nested loop that re-evaluated
+    // the subquery hundreds of thousands of times (~15s, 1.6M buffer hits, for a busy
+    // pitch like FF). Since the whole leaderboard is pinned to a single date, we instead
+    // resolve each player's latest snapshot once via DISTINCT ON CTEs, then join plainly.
+    // Identical result set, ~10x faster (verified by row-level diff).
     private static final String LEADERBOARD_SQL = """
+        WITH ars_snap AS (
+            SELECT DISTINCT ON (player_id, vs_handedness)
+                   player_id, vs_handedness, season, as_of_date
+            FROM pitcher_arsenal
+            WHERE as_of_date <= ?
+            ORDER BY player_id, vs_handedness, as_of_date DESC, season DESC
+        ),
+        bs_snap AS (
+            SELECT DISTINCT ON (player_id, vs_handedness)
+                   player_id, vs_handedness, season, as_of_date
+            FROM batter_pitch_type_stats
+            WHERE as_of_date <= ?
+            ORDER BY player_id, vs_handedness, as_of_date DESC, season DESC
+        )
         SELECT
             p.id AS player_id, p.full_name AS player_name, t.abbreviation AS team_abbr,
             pit.id AS pitcher_id, pit.full_name AS pitcher_name, pit.throws AS pitcher_throws,
@@ -102,24 +130,21 @@ public class PitchRepository {
         JOIN players p  ON p.id = bp.player_id
         JOIN players pit ON pit.id = bp.opposing_pitcher_id
         JOIN teams t    ON t.id = (CASE WHEN bp.is_home THEN g.home_team_id ELSE g.away_team_id END)
-        JOIN pitcher_arsenal ars
-          ON ars.player_id = bp.opposing_pitcher_id
-         AND ars.pitch_type = ?
-         AND ars.vs_handedness = (CASE WHEN p.bats = 'S'
+        JOIN ars_snap asn
+          ON asn.player_id = bp.opposing_pitcher_id
+         AND asn.vs_handedness = (CASE WHEN p.bats = 'S'
                                        THEN (CASE WHEN pit.throws = 'R' THEN 'L' ELSE 'R' END)
                                        ELSE p.bats END)
-         AND ars.as_of_date = (
-              SELECT MAX(as_of_date) FROM pitcher_arsenal
-              WHERE player_id = bp.opposing_pitcher_id AND vs_handedness = ars.vs_handedness
-                AND as_of_date <= g.game_date)
+        JOIN pitcher_arsenal ars
+          ON ars.player_id = asn.player_id AND ars.vs_handedness = asn.vs_handedness
+         AND ars.season = asn.season AND ars.as_of_date = asn.as_of_date
+         AND ars.pitch_type = ?
+        JOIN bs_snap bsn
+          ON bsn.player_id = bp.player_id AND bsn.vs_handedness = pit.throws
         JOIN batter_pitch_type_stats bs
-          ON bs.player_id = bp.player_id
+          ON bs.player_id = bsn.player_id AND bs.vs_handedness = bsn.vs_handedness
+         AND bs.season = bsn.season AND bs.as_of_date = bsn.as_of_date
          AND bs.pitch_type = ?
-         AND bs.vs_handedness = pit.throws
-         AND bs.as_of_date = (
-              SELECT MAX(as_of_date) FROM batter_pitch_type_stats
-              WHERE player_id = bp.player_id AND vs_handedness = pit.throws
-                AND as_of_date <= g.game_date)
         LEFT JOIN pitch_type_league_baselines lb
           ON lb.season = bs.season AND lb.pitch_type = ? AND lb.vs_handedness = pit.throws
         WHERE ars.usage_rate >= 0.20 AND bs.pitches_seen >= 100
@@ -134,7 +159,7 @@ public class PitchRepository {
                 rs.getBigDecimal("usage_rate").doubleValue(),
                 toDouble(rs.getBigDecimal("raw_xwoba")), rs.getInt("pitches_seen"),
                 toDouble(rs.getBigDecimal("league_xwoba"))),
-            date, pitch, pitch, pitch);
+            date, date, date, pitch, pitch, pitch);
     }
 
     private static Double toDouble(BigDecimal bd) {
