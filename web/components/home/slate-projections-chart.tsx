@@ -50,7 +50,7 @@ export function SlateProjectionsChart({ games }: { games: TodayGame[] }) {
         return (
           <Link
             key={r.gameId}
-            href={`/games/${r.gameId}`}
+            href={`/mlb/games/${r.gameId}`}
             className="group flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-white/5 transition-colors"
           >
             <div

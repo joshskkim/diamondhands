@@ -63,7 +63,7 @@ export function GameSelectorBar({ activeGameId }: { activeGameId?: number }) {
             <Link
               key={g.gameId}
               ref={active ? activeRef : undefined}
-              href={`/games/${g.gameId}`}
+              href={`/mlb/games/${g.gameId}`}
               className={cn(
                 'shrink-0 rounded-lg border px-3 py-1.5 transition-colors',
                 active

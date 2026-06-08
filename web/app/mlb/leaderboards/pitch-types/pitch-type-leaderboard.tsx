@@ -95,7 +95,7 @@ export function PitchTypeLeaderboard() {
                   >
                     <td className="px-3 py-2">
                       <Link
-                        href={`/players/${r.player.id}`}
+                        href={`/mlb/players/${r.player.id}`}
                         className="font-medium text-zinc-100 hover:text-cyan-400 transition-colors"
                       >
                         {r.player.name}
