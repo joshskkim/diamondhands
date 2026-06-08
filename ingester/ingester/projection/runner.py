@@ -22,6 +22,7 @@ from ingester.projection.batter_model import (
     project_batter,
     yrfi_probability,
 )
+from ingester.projection.game_sim import GameSim, simulate_game
 from ingester.projection.constants import (
     EXPECTED_PA_PER_STARTER,
     LINEUP_SIZE_HITTERS,
@@ -46,6 +47,20 @@ from ingester.projection.calibration import Calibrator
 log = logging.getLogger(__name__)
 
 _PITCHER_POSITIONS = frozenset({"P", "SP", "RP", "CP", "TWP"})
+
+# Monte-Carlo game simulator (game_sim.py) settings for the per-game sim run.
+SIM_N_SIMS = 4000
+SIM_FULL_HIST_MAX = 25   # combined-run histogram upper bin for the full game
+SIM_F5_HIST_MAX = 15     # combined-run histogram upper bin for first five innings
+
+
+@dataclass
+class TeamSideProjection:
+    """Result of projecting one team's hitters: expected runs plus the lineups the
+    game simulator needs (same batters vs the opposing starter and vs the bullpen)."""
+    expected_runs: float
+    starter_projs: list[BatterProjection]
+    bullpen_projs: list[BatterProjection]
 
 # S3: optional per-market probability calibration, applied as a final post-process to
 # every projection. Set by cmd_project/cmd_backtest (--calibrate); None = no-op.
@@ -576,8 +591,8 @@ def _project_team_side(
     park: ParkFactors,
     summary: ProjectSummary,
     bundle=None,
-) -> float | None:
-    """Project hitters for one team; return expected_team_runs or None if insufficient data."""
+) -> TeamSideProjection | None:
+    """Project hitters for one team; return expected runs + lineups, or None if insufficient data."""
     hitters = _resolve_lineup(
         conn, game_id=game.game_id, team_id=team_id, is_home=is_home, as_of=summary.game_date
     )
@@ -734,7 +749,11 @@ def _project_team_side(
         pitcher_line_from_lineup(starter_projs),
     )
 
-    return expected_team_runs(starter_projs, bullpen_projs)
+    return TeamSideProjection(
+        expected_runs=expected_team_runs(starter_projs, bullpen_projs),
+        starter_projs=starter_projs,
+        bullpen_projs=bullpen_projs,
+    )
 
 
 def _upsert_pitcher_projection(
@@ -790,7 +809,7 @@ def _project_game(
         park_factor_hr_rhb=game.park_factor_hr_rhb,
     )
 
-    home_runs = _project_team_side(
+    home = _project_team_side(
         conn,
         game=game,
         team_id=game.home_team_id,
@@ -802,7 +821,7 @@ def _project_game(
         summary=summary,
         bundle=bundle,
     )
-    away_runs = _project_team_side(
+    away = _project_team_side(
         conn,
         game=game,
         team_id=game.away_team_id,
@@ -814,12 +833,14 @@ def _project_game(
         summary=summary,
         bundle=bundle,
     )
-    if home_runs is None or away_runs is None:
+    if home is None or away is None:
         summary.skip_reasons.append(
             f"game {game.game_id}: incomplete team projection"
         )
         return False
 
+    home_runs = home.expected_runs
+    away_runs = away.expected_runs
     p_yrfi, efir = yrfi_probability(home_runs, away_runs)
     conn.execute(
         """
@@ -845,11 +866,77 @@ def _project_game(
             round(efir, 2),
         ),
     )
+
+    # Unified Monte-Carlo sim: full-game (starter -> bullpen after the 5th) plus the
+    # starter-driven first-N-innings markets (F1/F5). Seeded by game_id for repeatability.
+    sim = simulate_game(
+        home.starter_projs,
+        away.starter_projs,
+        n_sims=SIM_N_SIMS,
+        seed=int(game.game_id),
+        home_bullpen=home.bullpen_projs,
+        away_bullpen=away.bullpen_projs,
+    )
+    _upsert_game_sim_projection(conn, game.game_id, sim)
+
     conn.execute(
         "UPDATE games SET projected_at = NOW() WHERE id = %s",
         (game.game_id,),
     )
     return True
+
+
+def _upsert_game_sim_projection(
+    conn: psycopg.Connection, game_id: int, sim: GameSim
+) -> None:
+    """Persist the Monte-Carlo sim's distributional outputs for one game."""
+    full = sim.full
+    f5 = sim.f5
+    conn.execute(
+        """
+        INSERT INTO game_sim_projections (
+            game_id, n_sims,
+            expected_home_runs, expected_away_runs, expected_total, p_home_win, total_hist,
+            f5_expected_home, f5_expected_away, f5_expected_total,
+            f5_p_home_lead, f5_p_away_lead, f5_p_tie, f5_total_hist,
+            p_yrfi, computed_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        ON CONFLICT (game_id) DO UPDATE SET
+            n_sims             = EXCLUDED.n_sims,
+            expected_home_runs = EXCLUDED.expected_home_runs,
+            expected_away_runs = EXCLUDED.expected_away_runs,
+            expected_total     = EXCLUDED.expected_total,
+            p_home_win         = EXCLUDED.p_home_win,
+            total_hist         = EXCLUDED.total_hist,
+            f5_expected_home   = EXCLUDED.f5_expected_home,
+            f5_expected_away   = EXCLUDED.f5_expected_away,
+            f5_expected_total  = EXCLUDED.f5_expected_total,
+            f5_p_home_lead     = EXCLUDED.f5_p_home_lead,
+            f5_p_away_lead     = EXCLUDED.f5_p_away_lead,
+            f5_p_tie           = EXCLUDED.f5_p_tie,
+            f5_total_hist      = EXCLUDED.f5_total_hist,
+            p_yrfi             = EXCLUDED.p_yrfi,
+            computed_at        = NOW()
+        """,
+        (
+            game_id,
+            sim.n_sims,
+            round(full.expected_home, 2),
+            round(full.expected_away, 2),
+            round(full.expected_total, 2),
+            round(sim.p_home_win, 3),
+            full.total_hist(SIM_FULL_HIST_MAX),
+            round(f5.expected_home, 2),
+            round(f5.expected_away, 2),
+            round(f5.expected_total, 2),
+            round(f5.p_home_lead, 3),
+            round(f5.p_away_lead, 3),
+            round(f5.p_tie, 3),
+            f5.total_hist(SIM_F5_HIST_MAX),
+            round(sim.p_yrfi, 3),
+        ),
+    )
 
 
 def _clear_slate_projections(conn: psycopg.Connection, game_date: date) -> int:
@@ -886,6 +973,13 @@ def _clear_slate_projections(conn: psycopg.Connection, game_date: date) -> int:
     conn.execute(
         """
         DELETE FROM pitcher_projections
+        WHERE game_id IN (SELECT id FROM games WHERE game_date <= %s)
+        """,
+        (game_date,),
+    )
+    conn.execute(
+        """
+        DELETE FROM game_sim_projections
         WHERE game_id IN (SELECT id FROM games WHERE game_date <= %s)
         """,
         (game_date,),

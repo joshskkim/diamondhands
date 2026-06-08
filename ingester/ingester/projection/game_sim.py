@@ -85,9 +85,18 @@ def _sim_team(
     rng: np.random.Generator,
     innings: int = 9,
     periods: tuple[int, ...] = PERIODS,
+    bullpen_probs: np.ndarray | None = None,
+    starter_innings: int = 5,
 ) -> TeamSim:
-    """Simulate one team's offense `n_sims` times; track runs, per-period runs, per-slot events."""
-    cum = np.cumsum(probs, axis=1)
+    """Simulate one team's offense `n_sims` times; track runs, per-period runs, per-slot events.
+
+    If `bullpen_probs` is given, the starter's rates (`probs`) are faced for the first
+    `starter_innings` innings and the bullpen's rates thereafter. This keeps the
+    first-N-innings (F1/F3/F5) markets purely starter-driven while making the full-game
+    output bullpen-aware. Default (None) faces the starter all game.
+    """
+    cum_starter = np.cumsum(probs, axis=1)
+    cum_bullpen = np.cumsum(bullpen_probs, axis=1) if bullpen_probs is not None else None
     runs = np.zeros(n_sims, dtype=np.int32)
     period_runs: dict[int, np.ndarray] = {}
     period_set = {p for p in periods if p <= innings}
@@ -98,6 +107,7 @@ def _sim_team(
     bptr = np.zeros(n_sims, dtype=np.int32)
 
     for inning in range(innings):
+        cum = cum_bullpen if (cum_bullpen is not None and inning >= starter_innings) else cum_starter
         outs = np.zeros(n_sims, dtype=np.int32)
         b1 = np.zeros(n_sims, bool); b2 = np.zeros(n_sims, bool); b3 = np.zeros(n_sims, bool)
         while (outs < 3).any():
@@ -305,11 +315,25 @@ def simulate_game(
     away_lineup: list[BatterProjection],
     n_sims: int = 1000,
     seed: int = 0,
+    home_bullpen: list[BatterProjection] | None = None,
+    away_bullpen: list[BatterProjection] | None = None,
+    starter_innings: int = 5,
 ) -> GameSim:
-    """Simulate a full game n_sims times; derive per-period markets and props."""
-    rng = np.random.default_rng(seed)
-    home = _sim_team(lineup_probs(home_lineup), n_sims, rng)
-    away = _sim_team(lineup_probs(away_lineup), n_sims, rng)
+    """Simulate a full game n_sims times; derive per-period markets and props.
+
+    `home_bullpen`/`away_bullpen` are the same lineups re-projected against the opposing
+    bullpen; when given, the bullpen is faced after `starter_innings` innings so the
+    full-game output is bullpen-aware while F1/F3/F5 stay starter-driven.
+    """
+    # Independent RNG streams per team so one team's late innings (bullpen) can't shift
+    # the other team's draws — this keeps F1/F5 invariant to the bullpen inputs.
+    rng_home, rng_away = (np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(2))
+    home_pen = lineup_probs(home_bullpen) if home_bullpen is not None else None
+    away_pen = lineup_probs(away_bullpen) if away_bullpen is not None else None
+    home = _sim_team(lineup_probs(home_lineup), n_sims, rng_home,
+                     bullpen_probs=home_pen, starter_innings=starter_innings)
+    away = _sim_team(lineup_probs(away_lineup), n_sims, rng_away,
+                     bullpen_probs=away_pen, starter_innings=starter_innings)
 
     periods = {
         p: PeriodMarket(innings=p, home_runs=home.period_runs[p], away_runs=away.period_runs[p])

@@ -176,5 +176,26 @@ class TestPeriodMarkets(unittest.TestCase):
         self.assertEqual(len(hist), 16)
 
 
+class TestBullpenTransition(unittest.TestCase):
+    def test_f5_identical_with_or_without_bullpen(self) -> None:
+        # Same seed: the first 5 innings face the starter either way, so F5 is identical.
+        league = _league_lineup()
+        weak_pen = [_proj(0.180, 0.010, 0.30, pid=i) for i in range(9)]
+        a = simulate_game(league, league, n_sims=4000, seed=20)
+        b = simulate_game(league, league, n_sims=4000, seed=20,
+                          home_bullpen=weak_pen, away_bullpen=weak_pen)
+        self.assertEqual(a.f5.expected_total, b.f5.expected_total)
+        self.assertTrue((a.f5.home_runs == b.f5.home_runs).all())
+
+    def test_weaker_bullpen_lowers_full_game_total(self) -> None:
+        league = _league_lineup()
+        weak_pen = [_proj(0.150, 0.005, 0.32, pid=i) for i in range(9)]
+        base = simulate_game(league, league, n_sims=6000, seed=21)
+        withpen = simulate_game(league, league, n_sims=6000, seed=21,
+                                home_bullpen=weak_pen, away_bullpen=weak_pen)
+        # Stingier bullpen in innings 6-9 -> fewer full-game runs, F5 unchanged.
+        self.assertLess(withpen.full.expected_total, base.full.expected_total)
+
+
 if __name__ == "__main__":
     unittest.main()
