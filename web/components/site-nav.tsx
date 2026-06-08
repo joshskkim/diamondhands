@@ -8,6 +8,7 @@ import { SportSwitcher, type SportSwitcherItem } from './sport-switcher'
 
 const MLB_ITEMS: readonly SportSwitcherItem[] = [
   { label: "Today's Board", href: '/mlb' },
+  { label: 'Most Likely', href: '/mlb/most-likely' },
   { label: 'Best Lines', href: '/mlb/odds' },
   { label: 'Pitch Matchups', href: '/mlb/leaderboards/pitch-types' },
   { label: 'Accuracy', href: '/mlb/accuracy' },

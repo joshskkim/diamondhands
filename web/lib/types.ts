@@ -279,3 +279,64 @@ export interface AccuracyResponse {
   modelVersion: string | null
   markets: MarketAccuracy[]
 }
+
+// ── Most Likely board (GET /api/most-likely) ─────────────────────────────────
+
+/** Full-game total vs the consensus book line. */
+export interface MostLikelyTotal {
+  gameId: number
+  matchup: string
+  simTotal: number
+  bookLine: number | null
+  edge: number | null
+  pOver: number | null
+  lean: 'over' | 'under' | 'even' | null
+}
+
+/** First-inning run market (NRFI / YRFI). */
+export interface MostLikelyNrfi {
+  gameId: number
+  matchup: string
+  pYrfi: number
+  pNrfi: number
+  lean: 'NRFI' | 'YRFI'
+  leanProb: number
+}
+
+/** First-five-innings (F5) market. */
+export interface MostLikelyF5 {
+  gameId: number
+  matchup: string
+  f5Total: number
+  bookLine: number | null
+  edge: number | null
+  pOver: number | null
+  favorite: string
+  favoriteProb: number
+  pTie: number
+}
+
+/** One player's entry on a prop leaderboard (value = probability or expected count). */
+export interface PropLeader {
+  playerId: number
+  player: string
+  team: string
+  matchup: string
+  value: number
+}
+
+export interface PropLeaders {
+  hits: PropLeader[]
+  homeRuns: PropLeader[]
+  totalBases: PropLeader[]
+  strikeouts: PropLeader[]
+}
+
+/** GET /api/most-likely */
+export interface MostLikely {
+  date: string
+  totals: MostLikelyTotal[]
+  nrfi: MostLikelyNrfi[]
+  f5: MostLikelyF5[]
+  props: PropLeaders
+}
