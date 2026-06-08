@@ -69,7 +69,7 @@ export function BatterDetail({ b, teamAbbr }: { b: BatterProjection; teamAbbr: s
       {/* header */}
       <div className="flex flex-wrap items-baseline gap-2">
         <Link
-          href={`/players/${b.player.id}`}
+          href={`/mlb/players/${b.player.id}`}
           className="text-lg font-semibold tracking-tight text-zinc-100 hover:text-cyan-400 transition-colors"
         >
           {b.player.name}

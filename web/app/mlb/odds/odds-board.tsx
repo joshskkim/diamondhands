@@ -168,17 +168,17 @@ export function OddsBoard() {
                     >
                       <td className="px-3 py-2 text-zinc-100 whitespace-nowrap">
                         {r.playerId ? (
-                          <Link href={`/players/${r.playerId}`} className="hover:text-cyan-400 transition-colors">
+                          <Link href={`/mlb/players/${r.playerId}`} className="hover:text-cyan-400 transition-colors">
                             {subject(r)}
                           </Link>
                         ) : (
-                          <Link href={`/games/${r.gameId}`} className="hover:text-cyan-400 transition-colors">
+                          <Link href={`/mlb/games/${r.gameId}`} className="hover:text-cyan-400 transition-colors">
                             {subject(r)}
                           </Link>
                         )}
                         {r.playerName && (
                           <Link
-                            href={`/games/${r.gameId}`}
+                            href={`/mlb/games/${r.gameId}`}
                             className="text-zinc-500 hover:text-cyan-400 transition-colors font-mono text-xs ml-1.5"
                           >
                             {r.matchup}

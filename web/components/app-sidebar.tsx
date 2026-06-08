@@ -10,9 +10,9 @@ import { useAuth } from '@/components/auth-provider'
 const NAV_LINKS: { label: string; href: string; icon: LucideIcon }[] = [
   { label: "Today's Board", href: '/', icon: LayoutGrid },
   { label: 'Most Likely', href: '/mlb/most-likely', icon: Sparkles },
-  { label: 'Best Lines', href: '/odds', icon: TrendingUp },
-  { label: 'Pitch Matchups', href: '/leaderboards/pitch-types', icon: Target },
-  { label: 'Accuracy', href: '/accuracy', icon: LineChart },
+  { label: 'Best Lines', href: '/mlb/odds', icon: TrendingUp },
+  { label: 'Pitch Matchups', href: '/mlb/leaderboards/pitch-types', icon: Target },
+  { label: 'Accuracy', href: '/mlb/accuracy', icon: LineChart },
 ]
 
 /**
