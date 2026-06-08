@@ -41,40 +41,53 @@ def cmd_daily(args: argparse.Namespace) -> None:
     # Build the ordered step list. --quick is the afternoon re-projection loop
     # (lineups trickle in, project clears+recomputes the slate); --skip-skills
     # drops the slow ~1.5 min skills recompute when it isn't needed yet.
+    # Each step is (name, fn, fatal). Only the core path (get the slate, project it) is
+    # fatal; enhancement steps (weather, umpires, bullpen, odds, accuracy) warn and continue
+    # so one flaky external API can't block the day's projections.
     if getattr(args, "quick", False):
         steps = [
-            ("refresh-lineups", cmd_refresh_lineups),
-            ("project", cmd_project),
-            ("refresh-odds", cmd_refresh_odds),
+            ("refresh-lineups", cmd_refresh_lineups, False),
+            ("project", cmd_project, True),
+            ("refresh-odds", cmd_refresh_odds, False),
         ]
     else:
         steps = [
-            ("daily-slate", cmd_daily_slate),
-            ("refresh-weather", cmd_refresh_weather),
-            ("refresh-umpires", cmd_refresh_umpires),
-            ("refresh-skills", cmd_refresh_skills),
-            ("refresh-bullpen", cmd_refresh_bullpen),
-            ("refresh-lineups", cmd_refresh_lineups),
-            ("project", cmd_project),
-            ("refresh-odds", cmd_refresh_odds),
-            ("compute-accuracy (prior slate)", _score_prior_slate),
+            ("daily-slate", cmd_daily_slate, True),
+            ("refresh-weather", cmd_refresh_weather, False),
+            ("refresh-umpires", cmd_refresh_umpires, False),
+            ("refresh-skills", cmd_refresh_skills, False),
+            ("refresh-bullpen", cmd_refresh_bullpen, False),
+            ("refresh-lineups", cmd_refresh_lineups, False),
+            ("project", cmd_project, True),
+            ("refresh-odds", cmd_refresh_odds, False),
+            ("compute-accuracy (prior slate)", _score_prior_slate, False),
         ]
         if getattr(args, "skip_skills", False):
             # Both skills and bullpen do the slow Statcast-cache re-aggregation.
             steps = [s for s in steps if s[0] not in ("refresh-skills", "refresh-bullpen")]
 
-    names = " -> ".join(name for name, _ in steps)
+    names = " -> ".join(name for name, _, _ in steps)
     print(f"[daily] {target}: {names}\n")
 
     overall_start = time.monotonic()
-    for i, (name, fn) in enumerate(steps, 1):
+    warnings: list[str] = []
+    for i, (name, fn, fatal) in enumerate(steps, 1):
         print(f"[daily] ({i}/{len(steps)}) {name} …")
         step_start = time.monotonic()
         try:
             fn(args)
-        except Exception as exc:  # noqa: BLE001 — surface which step failed, then re-raise
-            print(f"\n[daily] FAILED at step {i}/{len(steps)} ({name}): {exc}")
-            raise
+        except Exception as exc:  # noqa: BLE001
+            if fatal:
+                print(f"\n[daily] FAILED at step {i}/{len(steps)} ({name}): {exc}")
+                raise
+            print(f"[daily] ⚠ {name} failed (non-fatal): {exc} — continuing\n")
+            warnings.append(name)
+            continue
         print(f"[daily] ✓ {name} ({time.monotonic() - step_start:.1f}s)\n")
 
-    print(f"[daily] done — {len(steps)} steps in {time.monotonic() - overall_start:.1f}s")
+    elapsed = time.monotonic() - overall_start
+    if warnings:
+        print(f"[daily] done with {len(warnings)} warning(s) [{', '.join(warnings)}] "
+              f"— {len(steps)} steps in {elapsed:.1f}s")
+    else:
+        print(f"[daily] done — {len(steps)} steps in {elapsed:.1f}s")

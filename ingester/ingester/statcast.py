@@ -513,3 +513,108 @@ def agg_bullpen_vs_handedness(
             "hits_per_pa": round(d["hits"] / bf, 4) if bf > 0 else None,
         })
     return rows
+
+
+# ── Batter batted-ball / spray profile (BallparkPal-style batter inputs) ───────
+
+# Statcast hit-coordinate origin (home plate) for the spray-angle conversion.
+_HC_X_HOME = 125.42
+_HC_Y_HOME = 198.27
+# Balls within this many degrees of dead center count as "center", not pull/oppo.
+_SPRAY_CENTER_BAND_DEG = 15.0
+
+
+def _spray_angle_deg(hc_x: pd.Series, hc_y: pd.Series) -> pd.Series:
+    """Spray angle (deg), catcher's view: negative = left-field side, positive = right-field."""
+    return np.degrees(np.arctan2(hc_x - _HC_X_HOME, _HC_Y_HOME - hc_y))
+
+
+def agg_batter_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
+    """
+    Aggregate a season's batted-ball / spray profile per batter from Statcast chunks.
+
+    Uses balls in play (rows with launch_speed + hit coordinates). Spray angle is
+    handedness-adjusted into pull/center/oppo (pull = LHB→RF / RHB→LF), bb_type into
+    GB/LD/FB/PU, and contact quality via avg EV / launch angle, hard-hit (EV≥95) and
+    Statcast barrels (launch_speed_angle == 6). One dict per batter.
+    """
+    needed = ["batter", "stand", "launch_speed", "launch_angle",
+              "hc_x", "hc_y", "bb_type", "launch_speed_angle"]
+    acc: dict[int, dict] = {}
+    sum_keys = ("bip", "pull", "center", "oppo", "gb", "ld", "fb", "pu",
+                "ev_sum", "la_sum", "ev_cnt", "la_cnt", "hard", "barrel")
+
+    for df in chunks:
+        if df is None or df.empty:
+            continue
+        sub = df[[c for c in needed if c in df.columns]].copy()
+        for col in ("launch_speed", "launch_angle", "hc_x", "hc_y", "launch_speed_angle"):
+            if col not in sub.columns:
+                sub[col] = np.nan
+        if "stand" not in sub.columns or "bb_type" not in sub.columns:
+            continue
+        sub = sub[sub["stand"].isin(["L", "R"])]
+        ev = _to_float64(sub["launch_speed"])
+        hx = _to_float64(sub["hc_x"])
+        hy = _to_float64(sub["hc_y"])
+        keep = ev.notna() & hx.notna() & hy.notna() & sub["bb_type"].notna()
+        sub = sub[keep]
+        if sub.empty:
+            continue
+        sub["batter"] = pd.to_numeric(sub["batter"], errors="coerce")
+        sub = sub[sub["batter"].notna()]
+        if sub.empty:
+            continue
+
+        ev = _to_float64(sub["launch_speed"])
+        la = _to_float64(sub["launch_angle"])
+        spray = _spray_angle_deg(_to_float64(sub["hc_x"]), _to_float64(sub["hc_y"]))
+        is_r = sub["stand"].eq("R").to_numpy()
+        band = _SPRAY_CENTER_BAND_DEG
+        pull = (is_r & (spray < -band)) | (~is_r & (spray > band))
+        oppo = (is_r & (spray > band)) | (~is_r & (spray < -band))
+        center = ~(pull | oppo)
+        bb = sub["bb_type"].astype(str)
+        lsa = _to_float64(sub["launch_speed_angle"])
+
+        per = pd.DataFrame({
+            "batter": sub["batter"].astype("int64").to_numpy(),
+            "pull": pull.astype(int), "center": center.astype(int), "oppo": oppo.astype(int),
+            "gb": bb.eq("ground_ball").astype(int).to_numpy(),
+            "ld": bb.eq("line_drive").astype(int).to_numpy(),
+            "fb": bb.eq("fly_ball").astype(int).to_numpy(),
+            "pu": bb.eq("popup").astype(int).to_numpy(),
+            "ev_sum": ev.fillna(0.0).to_numpy(), "ev_cnt": ev.notna().astype(int).to_numpy(),
+            "la_sum": la.fillna(0.0).to_numpy(), "la_cnt": la.notna().astype(int).to_numpy(),
+            "hard": (ev >= 95).fillna(False).astype(int).to_numpy(),
+            "barrel": (lsa == 6).fillna(False).astype(int).to_numpy(),
+        })
+        per["bip"] = 1
+        grp = per.groupby("batter").sum()
+        for bid, row in grp.iterrows():
+            d = acc.setdefault(int(bid), {k: 0.0 for k in sum_keys})
+            for k in sum_keys:
+                d[k] += float(row[k])
+
+    def _pct(num: float, den: float) -> float | None:
+        return round(num / den, 4) if den > 0 else None
+
+    rows: list[dict] = []
+    for bid, d in acc.items():
+        bip = int(d["bip"])
+        rows.append({
+            "player_id": bid,
+            "bip": bip,
+            "pull_pct": _pct(d["pull"], bip),
+            "center_pct": _pct(d["center"], bip),
+            "oppo_pct": _pct(d["oppo"], bip),
+            "gb_pct": _pct(d["gb"], bip),
+            "ld_pct": _pct(d["ld"], bip),
+            "fb_pct": _pct(d["fb"], bip),
+            "pu_pct": _pct(d["pu"], bip),
+            "avg_launch_speed": round(d["ev_sum"] / d["ev_cnt"], 2) if d["ev_cnt"] > 0 else None,
+            "avg_launch_angle": round(d["la_sum"] / d["la_cnt"], 2) if d["la_cnt"] > 0 else None,
+            "hard_hit_pct": _pct(d["hard"], bip),
+            "barrel_pct": _pct(d["barrel"], bip),
+        })
+    return rows

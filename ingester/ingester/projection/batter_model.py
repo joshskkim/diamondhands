@@ -13,6 +13,7 @@ from ingester.projection.constants import (
     AVG_BASES_PER_HIT_CLAMP,
     AVG_BASES_PER_HIT_ISO_MULT,
     EXPECTED_PA_PER_STARTER,
+    FIRST_INNING_RUN_SHARE,
     LEAGUE_1B_SHARE,
     LEAGUE_2B_SHARE,
     LEAGUE_3B_SHARE,
@@ -29,6 +30,7 @@ from ingester.projection.constants import (
     LW_SINGLE,
     LW_TRIPLE,
     LW_WALK,
+    NRFI_PROB_COEFF,
     PA_L30_BLEND_CAP,
     PA_L30_FULL_WEIGHT,
     PROB_DECIMAL_PLACES,
@@ -379,3 +381,79 @@ def expected_team_runs(
     runs += LW_HOMERUN * (team_hr - lg_hr)
     runs += LW_WALK * (team_bb - lg_bb)
     return max(runs, 0.0)
+
+
+@dataclass(frozen=True)
+class PitcherLine:
+    """A probable starter's projected line, aggregated from the opposing lineup."""
+
+    expected_bf: float
+    expected_outs: float
+    expected_ip: float
+    expected_k: float
+    expected_h: float
+    expected_hr: float
+    expected_bb: float
+    expected_runs: float
+
+
+def pitcher_line_from_lineup(
+    opposing_starters: list[BatterProjection],
+    starter_share: float = STARTER_PA_SHARE,
+) -> PitcherLine:
+    """
+    Project the starter's line by aggregating the opposing lineup he faces.
+
+    Each opposing batter's fully-adjusted per-PA rates (the same matchup/park/weather
+    projection used for their props) are summed over the batters the starter is expected
+    to face — ``starter_share`` of each batter's plate appearances (~60%, the rest go to
+    the bullpen). Outs ≈ BF − hits − walks; runs allowed ≈ the starter's PA-share of the
+    lineup's starter-only expected team runs.
+    """
+    bf = k = h = hr = bb = 0.0
+    for proj in opposing_starters:
+        faced = starter_share * proj.expected_pa
+        bf += faced
+        k += faced * proj.adjusted.k_per_pa
+        h += faced * proj.adjusted.hit_per_pa
+        hr += faced * proj.adjusted.hr_per_pa
+        bb += faced * LEAGUE_BB_PER_PA
+    outs = max(bf - h - bb, 0.0)
+    runs = starter_share * expected_team_runs(opposing_starters)
+    return PitcherLine(
+        expected_bf=bf,
+        expected_outs=outs,
+        expected_ip=outs / 3.0,
+        expected_k=k,
+        expected_h=h,
+        expected_hr=hr,
+        expected_bb=bb,
+        expected_runs=runs,
+    )
+
+
+def yrfi_probability(
+    home_full_runs: float,
+    away_full_runs: float,
+) -> tuple[float, float]:
+    """
+    First-inning run model (NRFI/YRFI) from each team's projected full-game runs.
+
+    A team's first inning scores a bit more than an average inning (the top of the order
+    leads off), so first-inning run expectancy ≈ full-game runs × FIRST_INNING_RUN_SHARE.
+    P(team scores in T1) = 1 − exp(−NRFI_PROB_COEFF · λ), calibrated so a league-average
+    matchup (~4.3 R/team) gives ~0.50 YRFI. Returns (p_yrfi, expected_first_inning_runs);
+    nrfi probability is 1 − p_yrfi.
+
+    (v1 uses team full-game runs as the first-inning proxy — already lineup-quality aware.
+    A top-of-order/pitcher-specific first-inning model is a future refinement.)
+    """
+    def _p_score(team_runs: float) -> float:
+        lam = max(team_runs, 0.0) * FIRST_INNING_RUN_SHARE
+        return 1.0 - math.exp(-NRFI_PROB_COEFF * lam)
+
+    p_home = _p_score(home_full_runs)
+    p_away = _p_score(away_full_runs)
+    p_yrfi = 1.0 - (1.0 - p_home) * (1.0 - p_away)
+    efir = (max(home_full_runs, 0.0) + max(away_full_runs, 0.0)) * FIRST_INNING_RUN_SHARE
+    return p_yrfi, efir

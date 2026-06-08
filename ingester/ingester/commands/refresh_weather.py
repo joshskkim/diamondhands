@@ -58,6 +58,7 @@ def cmd_refresh_weather(args: argparse.Namespace) -> None:
     updated = 0
     dome_sentinel = 0
     api_fetched = 0
+    failed = 0
 
     for game_id, start_utc, lat, lon, is_dome in rows:
         if is_dome:
@@ -68,6 +69,8 @@ def cmd_refresh_weather(args: argparse.Namespace) -> None:
                 SET temperature_f          = %s,
                     wind_speed_mph         = %s,
                     wind_direction_degrees = %s,
+                    relative_humidity_pct  = NULL,
+                    surface_pressure_hpa   = NULL,
                     weather_fetched_at     = NOW()
                 WHERE id = %s
                 """,
@@ -75,17 +78,27 @@ def cmd_refresh_weather(args: argparse.Namespace) -> None:
             )
             dome_sentinel += 1
         else:
-            w = fetch_weather_at(float(lat), float(lon), start_utc)
+            try:
+                w = fetch_weather_at(float(lat), float(lon), start_utc)
+            except Exception as exc:  # noqa: BLE001 — one flaky fetch must not abort the slate
+                print(f"  game {game_id}: weather fetch failed after retries ({exc}); skipping")
+                failed += 1
+                continue
             conn.execute(
                 """
                 UPDATE games
                 SET temperature_f          = %s,
                     wind_speed_mph         = %s,
                     wind_direction_degrees = %s,
+                    relative_humidity_pct  = %s,
+                    surface_pressure_hpa   = %s,
                     weather_fetched_at     = NOW()
                 WHERE id = %s
                 """,
-                (w["temperature_f"], w["wind_speed_mph"], w["wind_direction_degrees"], game_id),
+                (
+                    w["temperature_f"], w["wind_speed_mph"], w["wind_direction_degrees"],
+                    w.get("relative_humidity_pct"), w.get("surface_pressure_hpa"), game_id,
+                ),
             )
             api_fetched += 1
         updated += 1
@@ -93,7 +106,10 @@ def cmd_refresh_weather(args: argparse.Namespace) -> None:
     conn.commit()
     conn.close()
 
-    print(f"[refresh-weather] Updated {updated} game(s) ({dome_sentinel} dome sentinel, {api_fetched} Open-Meteo).")
+    print(
+        f"[refresh-weather] Updated {updated} game(s) ({dome_sentinel} dome sentinel, "
+        f"{api_fetched} Open-Meteo)" + (f"; {failed} skipped after fetch failures" if failed else "") + "."
+    )
     print(
         "  Note: Open-Meteo is free for non-commercial use — no API key required.\n"
         "  Wind direction = meteorological 'from' direction (0=from N, 90=from E, …).\n"

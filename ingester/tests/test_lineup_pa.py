@@ -95,36 +95,22 @@ class TestResolveLineup:
         assert hitters[0].expected_pa == 4.62
         assert hitters[-1].expected_pa == 3.80
 
-    def test_no_lineup_falls_back_to_proxy(self, monkeypatch):
-        candidates = [
-            runner.HitterCandidate(player_id=500 + i, bats="R", pa_l30=200 - i)
-            for i in range(13)
-        ]
-        monkeypatch.setattr(
-            runner, "_likely_hitters", lambda conn, team_id, as_of: candidates
-        )
-        conn = _FakeConn([])  # no confirmed slots
+    def test_no_lineup_returns_empty(self):
+        # No confirmed slots → no projection for this side (we don't guess the lineup).
+        conn = _FakeConn([])
 
         hitters = runner._resolve_lineup(
             conn, game_id=1, team_id=2, is_home=False, as_of=_AS_OF
         )
 
-        assert len(hitters) == 13
-        assert all(not h.lineup_confirmed for h in hitters)
-        assert all(h.lineup_position is None for h in hitters)
-        assert all(h.expected_pa == EXPECTED_PA_PER_STARTER for h in hitters)
-        assert hitters[0].player_id == 500
+        assert hitters == []
 
-    def test_partial_lineup_falls_back(self, monkeypatch):
-        # Fewer than nine posted slots is not a confirmation — use the proxy.
-        proxy = [runner.HitterCandidate(player_id=42, bats="L", pa_l30=120)] * 9
-        monkeypatch.setattr(runner, "_likely_hitters", lambda *a, **k: proxy)
+    def test_partial_lineup_returns_empty(self):
+        # Fewer than nine posted slots is not a confirmation → no projection (no proxy guess).
         conn = _FakeConn([(order, 1000 + order, "R") for order in range(1, 6)])  # 5 slots
 
         hitters = runner._resolve_lineup(
             conn, game_id=1, team_id=2, is_home=True, as_of=_AS_OF
         )
 
-        assert len(hitters) == 9
-        assert all(not h.lineup_confirmed for h in hitters)
-        assert all(h.expected_pa == EXPECTED_PA_PER_STARTER for h in hitters)
+        assert hitters == []

@@ -14,7 +14,7 @@ from __future__ import annotations
 # hit/K/HR rates (replacing the season blend). Note the full-season backtest found
 # this Brier-neutral-to-slightly-negative vs v2.0.0 — kept for an explainable
 # projection that matches the matchup surfaced in the UI (user decision).
-MODEL_VERSION: str = "v2.2.0"
+MODEL_VERSION: str = "v2.3.0"
 
 # ---------------------------------------------------------------------------
 # League-average reference (2025 MLB approximations)
@@ -155,6 +155,29 @@ WIND_HR_CLAMP: tuple[float, float] = (0.70, 1.40)
 DOME_WEATHER_ADJ: float = 1.0
 
 # ---------------------------------------------------------------------------
+# Air density HR adjustment (v2.3) — BallparkPal-style weather refinement
+# ---------------------------------------------------------------------------
+# When real humidity + barometric pressure are available, replace the temp-only HR
+# term with a physical air-density model: a batted ball carries farther in thinner
+# air (~4% distance per 10% density drop). Density falls with heat, humidity (water
+# vapor is lighter than dry air), and low pressure / altitude.
+#
+# We score TODAY's density against the PARK's baseline density (same altitude, 70°F,
+# 50% RH) so the day-to-day weather deviation is captured WITHOUT double-counting the
+# park's altitude — that is already baked into park_factor_hr (3-yr Statcast factors).
+#
+# Specific gas constants (J/(kg·K)) for dry air and water vapor.
+AIR_GAS_CONST_DRY: float = 287.058
+AIR_GAS_CONST_VAPOR: float = 461.495
+SEA_LEVEL_PRESSURE_HPA: float = 1013.25
+WEATHER_BASELINE_HUMIDITY_PCT: float = 50.0  # park-baseline relative humidity
+# HR factor = (baseline_density / today_density) ** exponent. Exponent ~2.6 calibrated
+# so a 70°F→90°F sea-level day gives ~+10% HR, matching the prior temp-only model at
+# that point; humidity/pressure then add on top. Clamp keeps a single day bounded.
+DENSITY_HR_EXPONENT: float = 2.6
+DENSITY_HR_CLAMP: tuple[float, float] = (0.82, 1.25)
+
+# ---------------------------------------------------------------------------
 # Per-PA rate and derived-count clamps
 # ---------------------------------------------------------------------------
 
@@ -211,6 +234,16 @@ LW_WALK: float = 0.31
 # Fraction of a lineup's plate appearances that face the opposing STARTER; the
 # remainder face that team's bullpen (bullpen_skill). ~5.2 starter IP in 2024-25.
 STARTER_PA_SHARE: float = 0.60
+
+# ---------------------------------------------------------------------------
+# First-inning run model (NRFI / YRFI)
+# ---------------------------------------------------------------------------
+# A team's first inning is led off by the top of the order, so it scores a bit more
+# than an average inning: first-inning run expectancy ≈ full-game runs × this share
+# (1.15/9 ≈ slightly above an even 1/9). The expected-runs → P(score) mapping is
+# calibrated so a league-average matchup (4.3 R/team) gives ~0.50 YRFI.
+FIRST_INNING_RUN_SHARE: float = 0.128
+NRFI_PROB_COEFF: float = 0.63
 
 # ---------------------------------------------------------------------------
 # S2 — batter platoon split (experimental; OFF by default)
