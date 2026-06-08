@@ -26,11 +26,30 @@ REGIONS = "us"
 ODDS_FORMAT = "american"
 
 # Provider game-market key -> canonical market key.
-GAME_MARKETS = {
+# Featured markets are the only game markets the slate-wide /odds endpoint serves.
+FEATURED_MARKETS = {
     "h2h": "moneyline",
     "spreads": "run_line",
     "totals": "total",
 }
+
+# Period (first-N-innings) game markets are only available on the per-EVENT odds
+# endpoint (like player props), so they are fetched per event alongside the props.
+# F5 is the period our starter-driven sim predicts best; total_f1 over 0.5 == YRFI.
+PERIOD_MARKETS = {
+    "h2h_1st_5_innings": "moneyline_f5",
+    "spreads_1st_5_innings": "run_line_f5",
+    "totals_1st_5_innings": "total_f5",
+    "totals_1st_1_innings": "total_f1",
+}
+
+# Full canonical map used when parsing any game-markets payload (featured or period).
+GAME_MARKETS = {**FEATURED_MARKETS, **PERIOD_MARKETS}
+
+# Canonical game markets that are over/under (vs. home/away team) markets.
+TOTAL_MARKETS = {"total", "total_f5", "total_f1"}
+# Canonical game markets that carry a spread point on each team side.
+RUN_LINE_MARKETS = {"run_line", "run_line_f5"}
 
 # Provider player-prop key -> canonical market key.
 PROP_MARKETS = {
@@ -62,13 +81,17 @@ def implied_prob(american: int) -> float:
 # ── HTTP ─────────────────────────────────────────────────────────────────────
 
 def fetch_game_odds(api_key: str) -> list[dict]:
-    """Upcoming MLB events with moneyline / run line / total prices across US books."""
+    """Upcoming MLB events with moneyline / run line / total prices across US books.
+
+    The slate-wide endpoint only serves the featured markets; period (F5/F1) markets
+    come from the per-event endpoint (see fetch_event_props).
+    """
     resp = requests.get(
         f"{ODDS_BASE}/sports/{SPORT_KEY}/odds",
         params={
             "apiKey": api_key,
             "regions": REGIONS,
-            "markets": ",".join(GAME_MARKETS),
+            "markets": ",".join(FEATURED_MARKETS),
             "oddsFormat": ODDS_FORMAT,
         },
         timeout=20,
@@ -78,13 +101,18 @@ def fetch_game_odds(api_key: str) -> list[dict]:
 
 
 def fetch_event_props(api_key: str, event_id: str) -> dict:
-    """Player-prop prices for a single event (separate, credit-billed endpoint)."""
+    """Per-event odds for one event (separate, credit-billed endpoint).
+
+    Returns player props AND the period (F5/F1) game markets in a single call — both
+    are only available on this endpoint. parse_prop_markets / parse_game_markets pull
+    the two kinds out of the returned event.
+    """
     resp = requests.get(
         f"{ODDS_BASE}/sports/{SPORT_KEY}/events/{event_id}/odds",
         params={
             "apiKey": api_key,
             "regions": REGIONS,
-            "markets": ",".join(PROP_MARKETS),
+            "markets": ",".join([*PROP_MARKETS, *PERIOD_MARKETS]),
             "oddsFormat": ODDS_FORMAT,
         },
         timeout=20,
@@ -126,19 +154,19 @@ def parse_game_markets(event: dict) -> list[dict]:
             for oc in market.get("outcomes", []):
                 name = oc.get("name")
                 point = oc.get("point")
-                if canonical == "total":
+                if canonical in TOTAL_MARKETS:
                     side = name.lower()  # "Over"/"Under"
                     if side not in ("over", "under"):
                         continue
                     line = point
-                else:  # moneyline / run_line keyed by team
+                else:  # moneyline / run_line keyed by team (full-game or F5)
                     if name == home:
                         side = "home"
                     elif name == away:
                         side = "away"
                     else:
                         continue
-                    line = point if canonical == "run_line" else None
+                    line = point if canonical in RUN_LINE_MARKETS else None
                 rows.append(
                     {
                         "bookmaker": bkey,

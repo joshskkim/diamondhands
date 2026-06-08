@@ -5,6 +5,7 @@ import type {
   FlatBatterPick,
   GameOdds,
   GameProjections,
+  MostLikely,
   PitcherSkillSplit,
   PitchTypeLeaderboardEntry,
   PitchTypeRef,
@@ -116,6 +117,13 @@ export function fetchPitchTypes(): Promise<PitchTypeRef[]> {
   return apiGet<PitchTypeRef[]>('/api/leaderboards/pitch-types')
 }
 
+export function fetchMostLikely(date?: string): Promise<MostLikely> {
+  const params = new URLSearchParams()
+  if (date) params.set('date', date)
+  const qs = params.toString()
+  return apiGet<MostLikely>(`/api/most-likely${qs ? `?${qs}` : ''}`)
+}
+
 export function fetchAccuracy(days = 30): Promise<AccuracyResponse> {
   const safeDays = Math.min(Math.max(days, 7), 180)
   return apiGet<AccuracyResponse>(`/api/accuracy?days=${safeDays}`)
@@ -180,6 +188,7 @@ export const queryKeys = {
   odds: {
     best: (date?: string) => ['odds', 'best', date ?? 'today'] as const,
   },
+  mostLikely: (date?: string) => ['most-likely', date ?? 'today'] as const,
   players: {
     detail: (playerId: number) => ['player', 'detail', playerId] as const,
     recent: (playerId: number, limit = 20) =>
@@ -254,6 +263,13 @@ export function pitchTypesQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.leaderboards.pitchTypes(),
     queryFn: fetchPitchTypes,
+  })
+}
+
+export function mostLikelyQueryOptions(date?: string) {
+  return queryOptions({
+    queryKey: queryKeys.mostLikely(date),
+    queryFn: () => fetchMostLikely(date),
   })
 }
 

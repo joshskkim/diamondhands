@@ -3,7 +3,15 @@
 Drives the existing base-running engine off our *projected* per-batter rates (no ML
 model needed), simulates a game many times, and derives EVERYTHING from the one run:
 team-run distributions (→ expected runs, win prob, over/under any total line),
-first-inning runs (→ NRFI/YRFI), and per-batter event counts (→ hit/HR/TB/K props).
+period (first-N-innings) run distributions (→ NRFI/YRFI for F1 and F5/F3/F7
+moneyline/run-line/totals), and per-batter event counts (→ hit/HR/TB/K props).
+
+Period markets note: because our per-batter rates are adjusted for the opposing
+*starter* (no bullpen, no times-through-order penalty), the first-N-innings outputs
+(F1/F3/F5) — which sportsbooks offer precisely because the early innings are
+starter-dominated — are the engine's most rigorous predictions. The full-game (F9)
+output extrapolates the starter across all nine innings and is a serviceable but
+weaker estimate.
 
 Outcome categories (7): 0 out, 1 K, 2 BB, 3 1B, 4 2B, 5 3B, 6 HR.
 """
@@ -12,6 +20,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+
+# Inning counts at which we snapshot cumulative runs (first-N-innings markets).
+# 1 = NRFI/YRFI (F1), 5 = first five (F5), 9 = full game.
+PERIODS: tuple[int, ...] = (1, 3, 5, 7, 9)
 
 from ingester.projection.batter_model import BatterProjection
 from ingester.projection.constants import (
@@ -59,19 +71,35 @@ def lineup_probs(projs: list[BatterProjection]) -> np.ndarray:
 
 @dataclass
 class TeamSim:
-    runs: np.ndarray            # (n_sims,) total runs
-    first_inning_runs: np.ndarray  # (n_sims,) runs in the 1st inning
+    runs: np.ndarray            # (n_sims,) total runs (== period_runs at full game)
+    period_runs: dict[int, np.ndarray]  # innings_completed -> (n_sims,) cumulative runs
     slot_hits: np.ndarray       # (n_sims, 9)
     slot_hr: np.ndarray         # (n_sims, 9)
     slot_tb: np.ndarray         # (n_sims, 9)
     slot_k: np.ndarray          # (n_sims, 9)
 
 
-def _sim_team(probs: np.ndarray, n_sims: int, rng: np.random.Generator, innings: int = 9) -> TeamSim:
-    """Simulate one team's offense `n_sims` times; track runs, 1st-inning runs, per-slot events."""
-    cum = np.cumsum(probs, axis=1)
+def _sim_team(
+    probs: np.ndarray,
+    n_sims: int,
+    rng: np.random.Generator,
+    innings: int = 9,
+    periods: tuple[int, ...] = PERIODS,
+    bullpen_probs: np.ndarray | None = None,
+    starter_innings: int = 5,
+) -> TeamSim:
+    """Simulate one team's offense `n_sims` times; track runs, per-period runs, per-slot events.
+
+    If `bullpen_probs` is given, the starter's rates (`probs`) are faced for the first
+    `starter_innings` innings and the bullpen's rates thereafter. This keeps the
+    first-N-innings (F1/F3/F5) markets purely starter-driven while making the full-game
+    output bullpen-aware. Default (None) faces the starter all game.
+    """
+    cum_starter = np.cumsum(probs, axis=1)
+    cum_bullpen = np.cumsum(bullpen_probs, axis=1) if bullpen_probs is not None else None
     runs = np.zeros(n_sims, dtype=np.int32)
-    first_inning = np.zeros(n_sims, dtype=np.int32)
+    period_runs: dict[int, np.ndarray] = {}
+    period_set = {p for p in periods if p <= innings}
     slot_hits = np.zeros((n_sims, 9), dtype=np.int32)
     slot_hr = np.zeros((n_sims, 9), dtype=np.int32)
     slot_tb = np.zeros((n_sims, 9), dtype=np.int32)
@@ -79,6 +107,7 @@ def _sim_team(probs: np.ndarray, n_sims: int, rng: np.random.Generator, innings:
     bptr = np.zeros(n_sims, dtype=np.int32)
 
     for inning in range(innings):
+        cum = cum_bullpen if (cum_bullpen is not None and inning >= starter_innings) else cum_starter
         outs = np.zeros(n_sims, dtype=np.int32)
         b1 = np.zeros(n_sims, bool); b2 = np.zeros(n_sims, bool); b3 = np.zeros(n_sims, bool)
         while (outs < 3).any():
@@ -156,10 +185,11 @@ def _sim_team(probs: np.ndarray, n_sims: int, rng: np.random.Generator, innings:
                 m1 = b1[a] & ~b2[a] & (rng.random(len(a)) < P_EXTRA_ADVANCE)
                 b2[a] = b2[a] | m1
                 b1[a] = b1[a] & ~m1
-        if inning == 0:
-            first_inning = runs.copy()
+        done = inning + 1
+        if done in period_set:
+            period_runs[done] = runs.copy()
 
-    return TeamSim(runs, first_inning, slot_hits, slot_hr, slot_tb, slot_k)
+    return TeamSim(runs, period_runs, slot_hits, slot_hr, slot_tb, slot_k)
 
 
 @dataclass
@@ -173,17 +203,95 @@ class BatterProps:
 
 
 @dataclass
+class PeriodMarket:
+    """First-N-innings market summary derived from the simulated run distributions."""
+    innings: int
+    home_runs: np.ndarray       # (n_sims,) cumulative home runs after `innings`
+    away_runs: np.ndarray
+
+    @property
+    def expected_home(self) -> float:
+        return float(self.home_runs.mean())
+
+    @property
+    def expected_away(self) -> float:
+        return float(self.away_runs.mean())
+
+    @property
+    def expected_total(self) -> float:
+        return float((self.home_runs + self.away_runs).mean())
+
+    @property
+    def p_home_lead(self) -> float:
+        """Moneyline: P(home leads). Ties (period push) are reported separately."""
+        return float((self.home_runs > self.away_runs).mean())
+
+    @property
+    def p_away_lead(self) -> float:
+        return float((self.away_runs > self.home_runs).mean())
+
+    @property
+    def p_tie(self) -> float:
+        return float((self.home_runs == self.away_runs).mean())
+
+    def prob_over(self, line: float) -> float:
+        """P(combined runs strictly over `line`) for this period."""
+        return float(((self.home_runs + self.away_runs) > line).mean())
+
+    def total_hist(self, max_runs: int) -> list[int]:
+        """Histogram of combined-run counts, bins 0..max_runs (last bin is >=max_runs)."""
+        total = self.home_runs + self.away_runs
+        clipped = np.minimum(total, max_runs)
+        return np.bincount(clipped, minlength=max_runs + 1).astype(int).tolist()
+
+
+@dataclass
 class GameSim:
     n_sims: int
-    expected_home_runs: float
-    expected_away_runs: float
-    expected_total: float
-    p_home_win: float
-    p_yrfi: float
-    home_runs: np.ndarray       # (n_sims,) for over/under on any line
-    away_runs: np.ndarray
-    home_props: list[BatterProps]   # per lineup slot 0..8
+    periods: dict[int, PeriodMarket]   # innings_completed -> market (1,3,5,7,9)
+    home_props: list[BatterProps]      # per lineup slot 0..8
     away_props: list[BatterProps]
+
+    @property
+    def full(self) -> PeriodMarket:
+        """Full-game (9-inning) market."""
+        return self.periods[max(self.periods)]
+
+    @property
+    def f5(self) -> PeriodMarket:
+        return self.periods[5]
+
+    # --- Full-game convenience accessors (back-compatible API) ---
+    @property
+    def expected_home_runs(self) -> float:
+        return self.full.expected_home
+
+    @property
+    def expected_away_runs(self) -> float:
+        return self.full.expected_away
+
+    @property
+    def expected_total(self) -> float:
+        return self.full.expected_total
+
+    @property
+    def p_home_win(self) -> float:
+        """Full-game win prob; extra-inning ties split as a coin flip."""
+        f = self.full
+        return f.p_home_lead + 0.5 * f.p_tie
+
+    @property
+    def home_runs(self) -> np.ndarray:
+        return self.full.home_runs
+
+    @property
+    def away_runs(self) -> np.ndarray:
+        return self.full.away_runs
+
+    @property
+    def p_yrfi(self) -> float:
+        """P(a run scores in the 1st inning) — F1 / YRFI."""
+        return self.periods[1].prob_over(0)
 
 
 def _slot_props(team: TeamSim) -> list[BatterProps]:
@@ -207,28 +315,34 @@ def simulate_game(
     away_lineup: list[BatterProjection],
     n_sims: int = 1000,
     seed: int = 0,
+    home_bullpen: list[BatterProjection] | None = None,
+    away_bullpen: list[BatterProjection] | None = None,
+    starter_innings: int = 5,
 ) -> GameSim:
-    """Simulate a full game n_sims times; derive totals, win prob, NRFI, and props."""
-    rng = np.random.default_rng(seed)
-    home = _sim_team(lineup_probs(home_lineup), n_sims, rng)
-    away = _sim_team(lineup_probs(away_lineup), n_sims, rng)
+    """Simulate a full game n_sims times; derive per-period markets and props.
 
-    # Win prob: count home wins; split ties evenly (extra innings are a coin flip).
-    home_win = home.runs > away.runs
-    tie = home.runs == away.runs
-    p_home_win = float(home_win.mean() + 0.5 * tie.mean())
+    `home_bullpen`/`away_bullpen` are the same lineups re-projected against the opposing
+    bullpen; when given, the bullpen is faced after `starter_innings` innings so the
+    full-game output is bullpen-aware while F1/F3/F5 stay starter-driven.
+    """
+    # Independent RNG streams per team so one team's late innings (bullpen) can't shift
+    # the other team's draws — this keeps F1/F5 invariant to the bullpen inputs.
+    rng_home, rng_away = (np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(2))
+    home_pen = lineup_probs(home_bullpen) if home_bullpen is not None else None
+    away_pen = lineup_probs(away_bullpen) if away_bullpen is not None else None
+    home = _sim_team(lineup_probs(home_lineup), n_sims, rng_home,
+                     bullpen_probs=home_pen, starter_innings=starter_innings)
+    away = _sim_team(lineup_probs(away_lineup), n_sims, rng_away,
+                     bullpen_probs=away_pen, starter_innings=starter_innings)
 
-    yrfi = (home.first_inning_runs > 0) | (away.first_inning_runs > 0)
+    periods = {
+        p: PeriodMarket(innings=p, home_runs=home.period_runs[p], away_runs=away.period_runs[p])
+        for p in home.period_runs
+    }
 
     return GameSim(
         n_sims=n_sims,
-        expected_home_runs=float(home.runs.mean()),
-        expected_away_runs=float(away.runs.mean()),
-        expected_total=float((home.runs + away.runs).mean()),
-        p_home_win=p_home_win,
-        p_yrfi=float(yrfi.mean()),
-        home_runs=home.runs,
-        away_runs=away.runs,
+        periods=periods,
         home_props=_slot_props(home),
         away_props=_slot_props(away),
     )

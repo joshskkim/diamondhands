@@ -2,13 +2,14 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutGrid, TrendingUp, Target, LineChart, LogIn, LogOut, Menu, type LucideIcon } from 'lucide-react'
+import { LayoutGrid, Sparkles, TrendingUp, Target, LineChart, LogIn, LogOut, Menu, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { DiamondMark } from '@/components/diamond-mark'
 import { useAuth } from '@/components/auth-provider'
 
 const NAV_LINKS: { label: string; href: string; icon: LucideIcon }[] = [
   { label: "Today's Board", href: '/', icon: LayoutGrid },
+  { label: 'Most Likely', href: '/mlb/most-likely', icon: Sparkles },
   { label: 'Best Lines', href: '/odds', icon: TrendingUp },
   { label: 'Pitch Matchups', href: '/leaderboards/pitch-types', icon: Target },
   { label: 'Accuracy', href: '/accuracy', icon: LineChart },
