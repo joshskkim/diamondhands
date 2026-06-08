@@ -57,18 +57,19 @@ public class OddsService {
 
             for (GameMarketDto market : odds.game()) {
                 for (LineQuoteDto q : market.quotes()) {
-                    addPlay(plays, gameId, matchup, market.market(),
+                    addPlay(plays, gameId, matchup, market.market(), q.side(),
                         gameSelection(market.market(), q.side(), q.line(), meta), q, null, null);
                 }
             }
             for (PropMarketDto prop : odds.props()) {
-                addPlay(plays, gameId, matchup, prop.market(),
+                addPlay(plays, gameId, matchup, prop.market(), "over",
                     propSelection(prop, "over"), prop.over(), prop.player().id(), prop.player().name());
-                addPlay(plays, gameId, matchup, prop.market(),
+                addPlay(plays, gameId, matchup, prop.market(), "under",
                     propSelection(prop, "under"), prop.under(), prop.player().id(), prop.player().name());
             }
         }
-        plays.sort(Comparator.comparingDouble(BestPlayDto::evPct).reversed());
+        // Rank by model-vs-fair edge (de-vigged), not raw EV — see edge() for why.
+        plays.sort(Comparator.comparingDouble(OddsService::edge).reversed());
         return plays;
     }
 
@@ -86,14 +87,19 @@ public class OddsService {
         for (String market : GAME_MARKET_ORDER) {
             Map<String, List<GameOddRow>> sides = grouped.get(market);
             if (sides == null) continue;
+            // No-vig only makes sense for a clean two-way market; sum the two best implieds.
+            Double impliedSum = sides.size() == 2
+                ? sides.values().stream().mapToDouble(b -> b.get(0).impliedProb()).sum()
+                : null;
             List<LineQuoteDto> quotes = new ArrayList<>();
             for (List<GameOddRow> books : sides.values()) {
                 GameOddRow best = books.get(0); // highest decimal
                 Double modelProb = gameModelProb(model, market, best.side(), best.line());
+                Double fairProb = fairShare(best.impliedProb(), impliedSum);
                 quotes.add(new LineQuoteDto(
                     best.side(), best.line(), best.bookmaker(),
                     best.priceAmerican(), best.priceDecimal(), best.impliedProb(),
-                    modelProb, ev(modelProb, best.priceDecimal()), gameBooks(books)));
+                    fairProb, modelProb, ev(modelProb, best.priceDecimal()), gameBooks(books)));
             }
             quotes.sort(SIDE_ORDER);
             out.add(new GameMarketDto(market, quotes));
@@ -130,8 +136,18 @@ public class OddsService {
             PlayerDto player = new PlayerDto(any.playerId(), any.playerName(), any.bats(), any.position());
             Double overProb = propOverProb(any.market(), any.line(), any);
             Double underProb = overProb == null ? null : 1.0 - overProb;
-            LineQuoteDto over = propQuote(sides.get("over"), overProb);
-            LineQuoteDto under = propQuote(sides.get("under"), underProb);
+            List<PropOddRow> overBooks = sides.get("over");
+            List<PropOddRow> underBooks = sides.get("under");
+            // De-vig over/under only when both sides are quoted (independent of the model,
+            // so even unmodeled pitcher props get a fair line for display).
+            Double fairOver = null, fairUnder = null;
+            if (overBooks != null && !overBooks.isEmpty() && underBooks != null && !underBooks.isEmpty()) {
+                double sum = overBooks.get(0).impliedProb() + underBooks.get(0).impliedProb();
+                fairOver = fairShare(overBooks.get(0).impliedProb(), sum);
+                fairUnder = fairShare(underBooks.get(0).impliedProb(), sum);
+            }
+            LineQuoteDto over = propQuote(overBooks, overProb, fairOver);
+            LineQuoteDto under = propQuote(underBooks, underProb, fairUnder);
             out.add(new PropMarketDto(player, any.market(), any.line(), over, under));
         }
         return out;
@@ -146,7 +162,7 @@ public class OddsService {
         };
     }
 
-    private LineQuoteDto propQuote(List<PropOddRow> books, Double modelProb) {
+    private LineQuoteDto propQuote(List<PropOddRow> books, Double modelProb, Double fairProb) {
         if (books == null || books.isEmpty()) return null;
         PropOddRow best = books.get(0); // highest decimal
         List<BookPriceDto> all = new ArrayList<>();
@@ -156,13 +172,29 @@ public class OddsService {
         return new LineQuoteDto(
             best.side(), best.line(), best.bookmaker(),
             best.priceAmerican(), best.priceDecimal(), best.impliedProb(),
-            modelProb, ev(modelProb, best.priceDecimal()), all);
+            fairProb, modelProb, ev(modelProb, best.priceDecimal()), all);
     }
 
     // ── Shared helpers ─────────────────────────────────────────────────────────
 
     private static Double ev(Double modelProb, double decimal) {
         return modelProb == null ? null : modelProb * decimal - 1.0;
+    }
+
+    /** No-vig fair probability for one side: its implied divided by the two-sided implied sum. */
+    private static Double fairShare(Double sideImplied, Double impliedSum) {
+        if (sideImplied == null || impliedSum == null || impliedSum <= 0) return null;
+        return sideImplied / impliedSum;
+    }
+
+    /**
+     * Board ranking metric: how much our model disagrees with the no-vig market on this side.
+     * Ranking by this instead of raw EV strips out the bookmaker's vig — which otherwise
+     * systematically favored "under" on juiced markets like hit-Over-0.5. Falls back to raw
+     * EV when the market couldn't be de-vigged (no opposite side quoted).
+     */
+    private static double edge(BestPlayDto p) {
+        return p.fairProb() != null ? p.modelProb() - p.fairProb() : p.evPct();
     }
 
     private static List<BookPriceDto> gameBooks(List<GameOddRow> books) {
@@ -188,11 +220,11 @@ public class OddsService {
         });
 
     private void addPlay(List<BestPlayDto> plays, long gameId, String matchup, String market,
-                         String selection, LineQuoteDto q, Integer playerId, String playerName) {
+                         String side, String selection, LineQuoteDto q, Integer playerId, String playerName) {
         if (q == null || q.evPct() == null || q.modelProb() == null) return;
         plays.add(new BestPlayDto(
-            gameId, matchup, market, selection, q.line(), q.bestBook(),
-            q.priceAmerican(), q.priceDecimal(), q.modelProb(), q.impliedProb(), q.evPct(),
+            gameId, matchup, market, side, selection, q.line(), q.bestBook(),
+            q.priceAmerican(), q.priceDecimal(), q.modelProb(), q.impliedProb(), q.fairProb(), q.evPct(),
             playerId, playerName));
     }
 

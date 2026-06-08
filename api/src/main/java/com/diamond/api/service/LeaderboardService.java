@@ -5,6 +5,7 @@ import com.diamond.api.dto.PitchTypeLeaderboardDto;
 import com.diamond.api.dto.PitchTypeRefDto;
 import com.diamond.api.repository.PitchRepository;
 import com.diamond.api.repository.PitchRepository.LeaderboardRow;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -38,7 +39,10 @@ public class LeaderboardService {
     /**
      * Top batters playing on {@code date} whose opposing starter throws {@code pitch}
      * (usage ≥ 20%, batter ≥ 100 pitches seen), ranked by regressed xwOBA edge desc.
+     * Cached per (pitch, date, limit): the underlying snapshot query is the heaviest in
+     * the app, and the slate is fixed for a given date, so the 5-min TTL is safe.
      */
+    @Cacheable(cacheNames = "pitchTypeLeaderboard", key = "#pitch + ':' + #date + ':' + #limit")
     public List<PitchTypeLeaderboardDto> pitchTypeLeaderboard(String pitch, LocalDate date, int limit) {
         List<PitchTypeLeaderboardDto> out = new ArrayList<>();
         for (LeaderboardRow r : pitchRepository.leaderboardCandidates(pitch, date)) {
