@@ -66,6 +66,36 @@ class TestParseGameMarkets:
         assert by[("total", "over")]["line"] == 8.5
         assert len(rows) == 6
 
+    def test_parses_first_five_and_first_inning_markets(self):
+        event = {
+            "home_team": "New York Yankees",
+            "away_team": "Boston Red Sox",
+            "bookmakers": [{"key": "draftkings", "last_update": "t", "markets": [
+                {"key": "totals_1st_5_innings", "outcomes": [
+                    {"name": "Over", "price": -110, "point": 4.5},
+                    {"name": "Under", "price": -110, "point": 4.5},
+                ]},
+                {"key": "h2h_1st_5_innings", "outcomes": [
+                    {"name": "New York Yankees", "price": -130},
+                    {"name": "Boston Red Sox", "price": 110},
+                ]},
+                {"key": "spreads_1st_5_innings", "outcomes": [
+                    {"name": "New York Yankees", "price": 120, "point": -0.5},
+                    {"name": "Boston Red Sox", "price": -140, "point": 0.5},
+                ]},
+                {"key": "totals_1st_1_innings", "outcomes": [
+                    {"name": "Over", "price": 120, "point": 0.5},
+                    {"name": "Under", "price": -150, "point": 0.5},
+                ]},
+            ]}],
+        }
+        by = {(r["market"], r["side"]): r for r in odds_api.parse_game_markets(event)}
+        assert by[("total_f5", "over")]["line"] == 4.5
+        assert by[("moneyline_f5", "home")]["line"] is None
+        assert by[("moneyline_f5", "away")]["price_american"] == 110
+        assert by[("run_line_f5", "home")]["line"] == -0.5
+        assert by[("total_f1", "over")]["line"] == 0.5  # YRFI market
+
 
 class TestParsePropMarkets:
     def test_player_and_side(self):

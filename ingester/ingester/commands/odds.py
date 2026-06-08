@@ -213,6 +213,25 @@ def cmd_refresh_odds(args: argparse.Namespace) -> None:
                 prop_event = None
 
             if prop_event:
+                # Period (F5/F1) game markets ride along on the per-event payload.
+                for r in odds_api.parse_game_markets(prop_event):
+                    american = r["price_american"]
+                    conn.execute(
+                        """
+                        INSERT INTO game_odds
+                            (game_id, bookmaker, market, side, line,
+                             price_american, price_decimal, implied_prob, last_update)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (game_id, bookmaker, market, side, line) DO NOTHING
+                        """,
+                        (
+                            game_id, r["bookmaker"], r["market"], r["side"], r["line"],
+                            american, odds_api.american_to_decimal(american),
+                            odds_api.implied_prob(american), r["last_update"],
+                        ),
+                    )
+                    game_rows_total += 1
+
                 roster = _game_roster(conn, game_id)
                 for r in odds_api.parse_prop_markets(prop_event):
                     player_id = roster.get(_norm_name(r["player_name"]))
