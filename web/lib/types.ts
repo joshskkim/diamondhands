@@ -197,6 +197,8 @@ export interface LineQuote {
   priceAmerican: number | null
   priceDecimal: number | null
   impliedProb: number | null
+  /** No-vig market probability for this side, or null if the market couldn't be de-vigged. */
+  fairProb: number | null
   modelProb: number | null
   evPct: number | null
   books: BookPrice[]
@@ -230,6 +232,8 @@ export interface BestPlay {
   gameId: number
   matchup: string
   market: string
+  /** Raw side token: over/under for props & totals; home/away for moneyline/run line. */
+  side: string
   selection: string
   line: number | null
   bestBook: string
@@ -237,6 +241,8 @@ export interface BestPlay {
   priceDecimal: number
   modelProb: number
   impliedProb: number
+  /** No-vig market probability for this side; null if not de-vigged. */
+  fairProb: number | null
   evPct: number
   playerId: number | null
   playerName: string | null
