@@ -277,6 +277,23 @@ export interface HitRate {
   nSeason: number
 }
 
+/** One bookmaker's posted price for a prop selection. */
+export interface BookQuote {
+  book: string
+  priceAmerican: number
+  priceDecimal: number
+}
+
+/**
+ * GET /api/odds/line-shop — per-selection book ladder for line shopping.
+ * `key` = "gameId:playerId:market:side:line" (line trailing-zeros stripped), matching
+ * a BestPlay row built from the same fields. `quotes` is sorted best-price-first.
+ */
+export interface LineShop {
+  key: string
+  quotes: BookQuote[]
+}
+
 /** GET /api/odds/props — one batter prop over-price (BetRivers-first) for Best Bets. */
 export interface BatterPropOdds {
   gameId: number

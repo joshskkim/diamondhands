@@ -3,6 +3,7 @@ package com.diamond.api.controller;
 import com.diamond.api.dto.BatterPropOddsDto;
 import com.diamond.api.dto.BestPlayDto;
 import com.diamond.api.dto.HitRateDto;
+import com.diamond.api.dto.LineShopDto;
 import com.diamond.api.service.OddsService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
@@ -51,5 +52,15 @@ public class OddsController {
     ) {
         LocalDate target = date != null ? date : LocalDate.now();
         return oddsService.hitRates(target);
+    }
+
+    /** Multi-book price ladder per prop selection (line shopping), best price first. */
+    @GetMapping("/line-shop")
+    public List<LineShopDto> lineShop(
+        @RequestParam(required = false)
+        @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
+    ) {
+        LocalDate target = date != null ? date : LocalDate.now();
+        return oddsService.lineShop(target);
     }
 }
