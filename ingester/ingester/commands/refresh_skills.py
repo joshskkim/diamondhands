@@ -26,6 +26,7 @@ from ingester.projection.constants import (
     REGRESSION_K_PA,
     REGRESSION_K_PA_L30,
 )
+from ingester.projection.prior import ProjectionPrior
 from ingester.statcast import (
     _terminal_pa,
     agg_batter_vs_pitcher_hand,
@@ -49,6 +50,35 @@ def _regress(raw: float | None, league: float, weight_player: float) -> float:
     if raw is None:
         return round(league, 4)
     return round(weight_player * raw + (1.0 - weight_player) * league, 4)
+
+
+def _load_priors(
+    conn: psycopg.Connection, season: int
+) -> dict[int, ProjectionPrior]:
+    """Marcel true-talent priors for the target season, keyed by player_id.
+
+    Empty when refresh-priors hasn't run for this season; callers then fall back
+    to the league mean (identical to pre-v2.4.0 behaviour).
+    """
+    rows = conn.execute(
+        """
+        SELECT player_id, proj_xwoba, proj_k_rate, proj_iso, proj_pa
+        FROM batter_projection_prior
+        WHERE season = %s
+        """,
+        (season,),
+    ).fetchall()
+    out: dict[int, ProjectionPrior] = {}
+    for pid, xwoba, k_rate, iso, proj_pa in rows:
+        if xwoba is None or k_rate is None or iso is None:
+            continue
+        out[int(pid)] = ProjectionPrior(
+            xwoba=float(xwoba),
+            k_rate=float(k_rate),
+            iso=float(iso),
+            proj_pa=int(proj_pa or 0),
+        )
+    return out
 
 
 def _resolve_l30_fields(
@@ -147,6 +177,11 @@ def compute_batter_skill_rows(
 
     l30_by_pid: dict[int, tuple] = {r[0]: r for r in l30_rows}
 
+    # v2.4.0: regress each player's season rates toward their Marcel true-talent
+    # prior rather than the flat league mean. Falls back to league per-metric
+    # when no prior exists (debutants) or refresh-priors hasn't run this season.
+    priors = _load_priors(conn, season)
+
     rows: list[dict] = []
     for r in season_rows:
         pid, pa, ab, hits, hr, tb, k, bb, xwoba, woba = r
@@ -169,11 +204,18 @@ def compute_batter_skill_rows(
         raw_bb_rate = bb / pa if pa > 0 else None
         raw_iso = (tb - hits) / ab if ab > 0 else None
 
-        xwoba_f = _regress(raw_xwoba, LEAGUE_XWOBA, weight)
+        # Regress the three model-driving metrics toward the player's prior;
+        # woba/bb_rate have no prior modeled, so they stay anchored to league.
+        prior = priors.get(pid)
+        tgt_xwoba = prior.xwoba if prior else LEAGUE_XWOBA
+        tgt_k = prior.k_rate if prior else LEAGUE_K_PER_PA
+        tgt_iso = prior.iso if prior else LEAGUE_ISO
+
+        xwoba_f = _regress(raw_xwoba, tgt_xwoba, weight)
         woba_f = _regress(raw_woba, LEAGUE_WOBA, weight)
-        k_rate = _regress(raw_k_rate, LEAGUE_K_PER_PA, weight)
+        k_rate = _regress(raw_k_rate, tgt_k, weight)
         bb_rate = _regress(raw_bb_rate, LEAGUE_BB_PER_PA, weight)
-        iso = _regress(raw_iso, LEAGUE_ISO, weight)
+        iso = _regress(raw_iso, tgt_iso, weight)
 
         # babip is stored for reference only (not a model input); leave it raw.
         babip_d = ab - k - hr

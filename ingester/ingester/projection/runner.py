@@ -35,7 +35,13 @@ from ingester.projection.constants import (
     PLATOON_WEIGHT_CAP,
 )
 from ingester.projection.matchup import MatchupResult, compute_matchup
-from ingester.projection.park_adj import ParkAdjustments, ParkFactors, compute_park_adjustments
+from ingester.projection.park_adj import (
+    BattedBallProfile,
+    ParkAdjustments,
+    ParkFactors,
+    ParkGeometry,
+    compute_park_adjustments,
+)
 from ingester.projection.pitcher_adj import (
     PitcherHandSplit,
     compute_pitcher_adjustments,
@@ -78,6 +84,19 @@ def _maybe_calibrate(proj):
     return _CALIBRATOR.apply(proj) if _CALIBRATOR is not None else proj
 
 
+# Backtest-only: when set, the backtest path personalizes the park HR factor using
+# each hitter's PRIOR-season batted-ball profile (leak-free — the prior season is
+# entirely before the backtest game). Off by default so existing backtests are
+# unchanged. The live path always personalizes from the current-season profile.
+_BACKTEST_PARK_PERSONALIZED: bool = False
+
+
+def set_backtest_park_personalized(flag: bool) -> None:
+    """Toggle prior-season park personalization in the backtest projection path."""
+    global _BACKTEST_PARK_PERSONALIZED
+    _BACKTEST_PARK_PERSONALIZED = flag
+
+
 @dataclass
 class ProjectSummary:
     game_date: date
@@ -108,6 +127,12 @@ class SlateGame:
     park_factor_hits: float
     park_factor_hr_lhb: float
     park_factor_hr_rhb: float
+    lf_line_ft: float | None = None
+    cf_ft: float | None = None
+    rf_line_ft: float | None = None
+    lf_wall_ft: float | None = None
+    cf_wall_ft: float | None = None
+    rf_wall_ft: float | None = None
 
 
 @dataclass(frozen=True)
@@ -160,7 +185,13 @@ def _load_slate_games(conn: psycopg.Connection, game_date: date) -> list[SlateGa
             COALESCE(s.park_factor_hr_rhb, 1.0),
             g.relative_humidity_pct,
             g.surface_pressure_hpa,
-            s.altitude_feet
+            s.altitude_feet,
+            s.lf_line_ft,
+            s.cf_ft,
+            s.rf_line_ft,
+            s.lf_wall_ft,
+            s.cf_wall_ft,
+            s.rf_wall_ft
         FROM games g
         JOIN stadiums s ON s.id = g.stadium_id
         WHERE g.game_date = %s
@@ -192,6 +223,12 @@ def _load_slate_games(conn: psycopg.Connection, game_date: date) -> list[SlateGa
                 park_factor_hits=float(row[12]),
                 park_factor_hr_lhb=float(row[13]),
                 park_factor_hr_rhb=float(row[14]),
+                lf_line_ft=_as_float(row[18]),
+                cf_ft=_as_float(row[19]),
+                rf_line_ft=_as_float(row[20]),
+                lf_wall_ft=_as_float(row[21]),
+                cf_wall_ft=_as_float(row[22]),
+                rf_wall_ft=_as_float(row[23]),
             )
         )
     return games
@@ -302,6 +339,47 @@ def _load_batter_skill(
         iso=iso,
         iso_l30=float(row[5]) if row[5] is not None else iso,
         pa_l30=int(row[6] or 0),
+    )
+
+
+def _park_geometry(game: SlateGame) -> ParkGeometry | None:
+    """ParkGeometry for personalization, or None if any fence dimension is absent."""
+    dims = (
+        game.lf_line_ft, game.cf_ft, game.rf_line_ft,
+        game.lf_wall_ft, game.cf_wall_ft, game.rf_wall_ft,
+    )
+    if any(d is None for d in dims):
+        return None
+    return ParkGeometry(
+        lf_line_ft=float(game.lf_line_ft),
+        cf_ft=float(game.cf_ft),
+        rf_line_ft=float(game.rf_line_ft),
+        lf_wall_ft=float(game.lf_wall_ft),
+        cf_wall_ft=float(game.cf_wall_ft),
+        rf_wall_ft=float(game.rf_wall_ft),
+    )
+
+
+def _load_batted_ball_profile(
+    conn: psycopg.Connection, player_id: int, season: int
+) -> BattedBallProfile | None:
+    """Per-batter spray + EV profile for park personalization (None if missing)."""
+    row = conn.execute(
+        """
+        SELECT pull_pct, center_pct, oppo_pct, fb_pct, avg_launch_speed
+        FROM batter_batted_ball
+        WHERE player_id = %s AND season = %s
+        """,
+        (player_id, season),
+    ).fetchone()
+    if row is None or any(v is None for v in row):
+        return None
+    return BattedBallProfile(
+        pull_pct=float(row[0]),
+        center_pct=float(row[1]),
+        oppo_pct=float(row[2]),
+        fb_pct=float(row[3]),
+        avg_launch_speed=float(row[4]),
     )
 
 
@@ -642,8 +720,9 @@ def _project_team_side(
         pitcher_split, pitcher_quality = resolve_pitcher_skill(
             splits, hitter.bats, pitcher_throws
         )
+        bb_profile = _load_batted_ball_profile(conn, hitter.player_id, season)
         park_adj = compute_park_adjustments(
-            park, hitter.bats, pitcher_throws
+            park, hitter.bats, pitcher_throws, profile=bb_profile
         )
         pitcher_adj = compute_pitcher_adjustments(pitcher_split)
         adj_weather_hit, adj_weather_hr = compute_weather_adjustments(
@@ -807,6 +886,7 @@ def _project_game(
         park_factor_hits=game.park_factor_hits,
         park_factor_hr_lhb=game.park_factor_hr_lhb,
         park_factor_hr_rhb=game.park_factor_hr_rhb,
+        geometry=_park_geometry(game),
     )
 
     home = _project_team_side(
@@ -1263,7 +1343,15 @@ def _project_team_side_backtest(
             continue
 
         pitcher_split, _quality = resolve_pitcher_skill(splits, hitter.bats, pitcher_throws)
-        park_adj = compute_park_adjustments(park, hitter.bats, pitcher_throws)
+        # Leak-free park personalization for the A/B: prior-season batted-ball profile.
+        bb_profile = (
+            _load_batted_ball_profile(conn, hitter.player_id, season - 1)
+            if _BACKTEST_PARK_PERSONALIZED
+            else None
+        )
+        park_adj = compute_park_adjustments(
+            park, hitter.bats, pitcher_throws, profile=bb_profile
+        )
         pitcher_adj = compute_pitcher_adjustments(pitcher_split)
         if weather_skipped:
             adj_weather_hit = _NEUTRAL_WEATHER_ADJ
@@ -1351,6 +1439,7 @@ def _project_game_backtest(
         park_factor_hits=game.park_factor_hits,
         park_factor_hr_lhb=game.park_factor_hr_lhb,
         park_factor_hr_rhb=game.park_factor_hr_rhb,
+        geometry=_park_geometry(game),
     )
 
     home_runs = _project_team_side_backtest(
