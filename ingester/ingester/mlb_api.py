@@ -116,3 +116,25 @@ def parse_game_lineups(game: dict) -> dict[bool, list[tuple[int, str]]]:
         if len(slots) >= LINEUP_SLOTS:
             result[is_home] = slots[:LINEUP_SLOTS]
     return result
+
+
+def fetch_people_birthdates(player_ids: list[int], chunk: int = 100) -> dict[int, str]:
+    """{player_id: birthDate 'YYYY-MM-DD'} from the MLB Stats API /people batch endpoint.
+
+    Players missing a birthDate (or absent from the response) are simply omitted.
+    """
+    out: dict[int, str] = {}
+    for i in range(0, len(player_ids), chunk):
+        ids = player_ids[i : i + chunk]
+        resp = requests.get(
+            f"{MLB_BASE}/people",
+            params={"personIds": ",".join(str(pid) for pid in ids)},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        for person in resp.json().get("people", []):
+            pid = person.get("id")
+            bd = person.get("birthDate")
+            if pid is not None and bd:
+                out[int(pid)] = bd
+    return out
