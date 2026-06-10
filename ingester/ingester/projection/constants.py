@@ -22,7 +22,8 @@ import os
 # the park's fence geometry (see park_adj.personalized_park_hr_mult).
 # v2.6.0: weather HR effect is a physical fly-ball carry-vs-fence model (carry_delta_ft
 # → weather_carry_hr_mult), replacing the flat density×wind scalar.
-MODEL_VERSION: str = "v2.6.0"
+# v2.6.1: Marcel prior regresses each metric by its own constant (K light, ISO heavy).
+MODEL_VERSION: str = "v2.6.1"
 
 # ---------------------------------------------------------------------------
 # League-average reference (2025 MLB approximations)
