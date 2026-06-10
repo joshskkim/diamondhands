@@ -58,6 +58,19 @@ public class OddsService {
         return out;
     }
 
+    /** Hit-rate "traffic light" per batter prop market for the slate (last 5/10/20 + season). */
+    @Cacheable(cacheNames = "oddsHitRates", key = "#date")
+    public List<HitRateDto> hitRates(LocalDate date) {
+        LocalDate seasonStart = LocalDate.of(date.getYear(), 1, 1);
+        List<HitRateDto> out = new ArrayList<>();
+        for (OddsRepository.HitRateRow r : repo.findHitRates(date, seasonStart)) {
+            out.add(new HitRateDto(
+                r.playerId(), r.market(), r.line(),
+                r.l5(), r.l10(), r.l20(), r.n20(), r.season(), r.nSeason()));
+        }
+        return out;
+    }
+
     @Cacheable(cacheNames = "oddsBest", key = "#date")
     public List<BestPlayDto> bestPlays(LocalDate date) {
         List<BestPlayDto> plays = new ArrayList<>();

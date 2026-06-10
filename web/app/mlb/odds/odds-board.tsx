@@ -1,10 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
-import { bestPlaysQueryOptions } from '@/lib/api'
-import type { BestPlay } from '@/lib/types'
+import { bestPlaysQueryOptions, hitRatesQueryOptions } from '@/lib/api'
+import type { BestPlay, HitRate } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -53,6 +53,34 @@ function evClass(ev: number) {
   return 'text-rose-300/80'
 }
 
+// Hit-rate "traffic light" — Outlier's thresholds: green ≥65%, amber 45–65%, red <45%.
+function hrTone(v: number | null): string {
+  if (v == null) return 'text-zinc-600'
+  if (v >= 0.65) return 'text-emerald-400'
+  if (v >= 0.45) return 'text-amber-300'
+  return 'text-rose-400'
+}
+
+function hrPct(v: number | null): string {
+  return v == null ? '—' : Math.round(v * 100) + '%'
+}
+
+// Last-10 / last-20 / season clear-rate for a prop's line, color-coded.
+function HitRateCell({ hr }: { hr: HitRate | undefined }) {
+  if (!hr) return <span className="text-zinc-600">—</span>
+  return (
+    <span className="inline-flex items-center gap-1 font-mono tabular-nums text-xs">
+      <span className={hrTone(hr.l10)} title={`Last 10 games (n=${Math.min(hr.n20, 10)})`}>
+        {hrPct(hr.l10)}
+      </span>
+      <span className="text-zinc-700">·</span>
+      <span className={hrTone(hr.l20)} title={`Last 20 games (n=${hr.n20})`}>{hrPct(hr.l20)}</span>
+      <span className="text-zinc-700">·</span>
+      <span className={hrTone(hr.season)} title={`Season (n=${hr.nSeason})`}>{hrPct(hr.season)}</span>
+    </span>
+  )
+}
+
 // "AWY @ HOM" → team abbr for a home/away side.
 function teamForSide(matchup: string, side: string): string {
   const parts = matchup.split(' @ ')
@@ -89,6 +117,14 @@ type Filter = 'positive' | 'all'
 export function OddsBoard() {
   const [filter, setFilter] = useState<Filter>('positive')
   const { data, isPending, isError } = useQuery(bestPlaysQueryOptions(undefined, 100))
+  const { data: hitRateData } = useQuery(hitRatesQueryOptions())
+
+  // Join key: playerId + market (only hit/hr props carry a hit rate).
+  const hitRates = useMemo(() => {
+    const m = new Map<string, HitRate>()
+    for (const h of hitRateData ?? []) m.set(`${h.playerId}:${h.market}`, h)
+    return m
+  }, [hitRateData])
 
   const rows: BestPlay[] = data ?? []
   const shown = filter === 'positive' ? rows.filter((r) => (edgeOf(r) ?? r.evPct) > 0) : rows
@@ -142,6 +178,12 @@ export function OddsBoard() {
                 <tr className={microLabel}>
                   <th className="px-3 py-2 text-left font-medium">Player / Game</th>
                   <th className="px-3 py-2 text-left font-medium">Type</th>
+                  <th
+                    className="px-3 py-2 text-left font-medium"
+                    title="Clear-rate vs the prop line — last 10 · last 20 · season"
+                  >
+                    Hit rate <span className="text-zinc-600 normal-case">L10·20·Szn</span>
+                  </th>
                   <th className="px-3 py-2 text-left font-medium">Side</th>
                   <th className="px-3 py-2 text-right font-medium">Line</th>
                   <th className="px-3 py-2 text-right font-medium">Best price</th>
@@ -161,6 +203,7 @@ export function OddsBoard() {
                 {shown.map((r, i) => {
                   const s = sideLabel(r)
                   const edge = edgeOf(r)
+                  const hr = r.playerId != null ? hitRates.get(`${r.playerId}:${r.market}`) : undefined
                   return (
                     <tr
                       key={`${r.gameId}-${r.market}-${r.selection}-${i}`}
@@ -187,6 +230,9 @@ export function OddsBoard() {
                       </td>
                       <td className="px-3 py-2 text-zinc-300 whitespace-nowrap">
                         {MARKET_LABEL[r.market] ?? r.market}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <HitRateCell hr={hr} />
                       </td>
                       <td className="px-3 py-2">
                         <span
