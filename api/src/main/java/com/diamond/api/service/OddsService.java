@@ -46,6 +46,18 @@ public class OddsService {
         return new GameOddsResponse(gameId, true, buildGameMarkets(gameRows, model), buildProps(propRows));
     }
 
+    /** Batter prop over-prices for the slate (BetRivers-first), keyed for Best Bets. */
+    @Cacheable(cacheNames = "oddsProps", key = "#date")
+    public List<BatterPropOddsDto> batterProps(LocalDate date) {
+        List<BatterPropOddsDto> out = new ArrayList<>();
+        for (OddsRepository.BatterPropRow r : repo.findBatterProps(date, OddsRepository.MAIN_PROP_BOOK)) {
+            out.add(new BatterPropOddsDto(
+                r.gameId(), r.playerId(), r.market(), r.line(),
+                r.bookmaker(), r.priceAmerican(), r.priceDecimal()));
+        }
+        return out;
+    }
+
     @Cacheable(cacheNames = "oddsBest", key = "#date")
     public List<BestPlayDto> bestPlays(LocalDate date) {
         List<BestPlayDto> plays = new ArrayList<>();

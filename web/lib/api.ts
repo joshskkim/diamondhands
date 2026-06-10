@@ -1,6 +1,7 @@
 import { queryOptions } from '@tanstack/react-query'
 import type {
   AccuracyResponse,
+  BatterPropOdds,
   BestPlay,
   FlatBatterPick,
   GameOdds,
@@ -113,6 +114,13 @@ export function fetchBestPlays(date?: string, limit = 50): Promise<BestPlay[]> {
   return apiGet<BestPlay[]>(`/api/odds/best?${params}`)
 }
 
+export function fetchBatterPropOdds(date?: string): Promise<BatterPropOdds[]> {
+  const params = new URLSearchParams()
+  if (date) params.set('date', date)
+  const qs = params.toString()
+  return apiGet<BatterPropOdds[]>(`/api/odds/props${qs ? `?${qs}` : ''}`)
+}
+
 export function fetchPitchTypes(): Promise<PitchTypeRef[]> {
   return apiGet<PitchTypeRef[]>('/api/leaderboards/pitch-types')
 }
@@ -187,6 +195,7 @@ export const queryKeys = {
   },
   odds: {
     best: (date?: string) => ['odds', 'best', date ?? 'today'] as const,
+    props: (date?: string) => ['odds', 'props', date ?? 'today'] as const,
   },
   mostLikely: (date?: string) => ['most-likely', date ?? 'today'] as const,
   players: {
@@ -242,6 +251,13 @@ export function bestPlaysQueryOptions(date?: string, limit = 50) {
   return queryOptions({
     queryKey: queryKeys.odds.best(date),
     queryFn: () => fetchBestPlays(date, limit),
+  })
+}
+
+export function batterPropOddsQueryOptions(date?: string) {
+  return queryOptions({
+    queryKey: queryKeys.odds.props(date),
+    queryFn: () => fetchBatterPropOdds(date),
   })
 }
 

@@ -17,6 +17,9 @@ import java.util.List;
 @Repository
 public class OddsRepository {
 
+    /** Preferred single book for batter props (only US book covering hit + hr + tb). */
+    public static final String MAIN_PROP_BOOK = "betrivers";
+
     private final JdbcTemplate jdbc;
 
     public OddsRepository(JdbcTemplate jdbc) {
@@ -87,6 +90,31 @@ public class OddsRepository {
         return jdbc.queryForList(GAME_IDS_SQL, Long.class, date);
     }
 
+    // ── slate-wide batter prop over-prices, one row per game+player+market ──
+    // Prefer the main prop book; otherwise fall back to the best (highest) price.
+    private static final String BATTER_PROPS_SQL = """
+        SELECT DISTINCT ON (po.game_id, po.player_id, po.market)
+            po.game_id, po.player_id, po.market, po.line,
+            po.bookmaker, po.price_american, po.price_decimal
+        FROM player_prop_odds po
+        JOIN games g ON g.id = po.game_id AND g.game_date = ?
+        WHERE po.side = 'over' AND po.market IN ('hit', 'hr') AND po.line = 0.5
+        ORDER BY po.game_id, po.player_id, po.market,
+                 (po.bookmaker = ?) DESC, po.price_decimal DESC
+        """;
+
+    public List<BatterPropRow> findBatterProps(LocalDate date, String preferredBook) {
+        return jdbc.query(BATTER_PROPS_SQL, (rs, n) -> new BatterPropRow(
+            rs.getLong("game_id"),
+            rs.getInt("player_id"),
+            rs.getString("market"),
+            toDouble(rs.getBigDecimal("line")),
+            rs.getString("bookmaker"),
+            rs.getInt("price_american"),
+            rs.getBigDecimal("price_decimal").doubleValue()),
+            date, preferredBook);
+    }
+
     private GameOddRow mapGameOdd(ResultSet rs, int n) throws SQLException {
         return new GameOddRow(
             rs.getString("market"),
@@ -133,4 +161,8 @@ public class OddsRepository {
     public record RunProj(double expHome, double expAway) {}
 
     public record GameMeta(String homeAbbr, String awayAbbr) {}
+
+    public record BatterPropRow(
+        long gameId, int playerId, String market, Double line,
+        String bookmaker, int priceAmerican, double priceDecimal) {}
 }

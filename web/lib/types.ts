@@ -33,6 +33,16 @@ export interface ProjectionSummary {
   projectedAt: string
 }
 
+/** Single-book (FanDuel) game-market odds shown on the today board. Fields may be null. */
+export interface GameOddsSummary {
+  book: string
+  totalLine: number | null
+  totalOverPrice: number | null
+  totalUnderPrice: number | null
+  homeMoneyline: number | null
+  awayMoneyline: number | null
+}
+
 /** GET /api/games/today */
 export interface TodayGame {
   gameId: number
@@ -43,6 +53,7 @@ export interface TodayGame {
   weather: Weather
   probables: Probables
   projection: ProjectionSummary | null
+  odds: GameOddsSummary | null
   status: string
 }
 
@@ -246,6 +257,18 @@ export interface BestPlay {
   evPct: number
   playerId: number | null
   playerName: string | null
+}
+
+/** GET /api/odds/props — one batter prop over-price (BetRivers-first) for Best Bets. */
+export interface BatterPropOdds {
+  gameId: number
+  playerId: number
+  /** 'hit' | 'hr' */
+  market: string
+  line: number | null
+  book: string
+  priceAmerican: number | null
+  priceDecimal: number | null
 }
 
 /** GET /api/players/:playerId */
