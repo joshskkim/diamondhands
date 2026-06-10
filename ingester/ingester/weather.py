@@ -142,5 +142,6 @@ def fetch_weather_at(lat: float, lon: float, target_utc: datetime) -> dict[str, 
             "forecast_days": 3,
         },
     )
-    resp.raise_for_status()
-    return _select_hour(resp.json()["hourly"], target_utc)
+    # _get_json already raised for HTTP errors and returned the parsed body; the
+    # leftover `resp.*` references here were a refactor stragglers (NameError).
+    return _select_hour(data["hourly"], target_utc)
