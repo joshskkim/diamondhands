@@ -6,6 +6,8 @@ Bump MODEL_VERSION whenever the projection logic or constants change.
 """
 from __future__ import annotations
 
+import os
+
 # ---------------------------------------------------------------------------
 # Model identity (increment on any constants or logic change)
 # ---------------------------------------------------------------------------
@@ -14,7 +16,14 @@ from __future__ import annotations
 # hit/K/HR rates (replacing the season blend). Note the full-season backtest found
 # this Brier-neutral-to-slightly-negative vs v2.0.0 — kept for an explainable
 # projection that matches the matchup surfaced in the UI (user decision).
-MODEL_VERSION: str = "v2.3.0"
+# v2.4.0: in-season rates regress toward a Marcel-style multi-year true-talent
+# prior (see prior.py) instead of the flat league mean.
+# v2.5.0: park HR factor is personalized per batter from spray + EV/LA carry vs
+# the park's fence geometry (see park_adj.personalized_park_hr_mult).
+# v2.6.0: weather HR effect is a physical fly-ball carry-vs-fence model (carry_delta_ft
+# → weather_carry_hr_mult), replacing the flat density×wind scalar.
+# v2.6.1: Marcel prior regresses each metric by its own constant (K light, ISO heavy).
+MODEL_VERSION: str = "v2.6.1"
 
 # ---------------------------------------------------------------------------
 # League-average reference (2025 MLB approximations)
@@ -42,6 +51,84 @@ REGRESSION_K_PA: int = 200
 REGRESSION_K_PA_L30: int = 80
 # Pitcher batters-faced regression. BF accrues ~1:1 with PA, so no scaling.
 REGRESSION_K_BF: int = 100
+
+# ---------------------------------------------------------------------------
+# Marcel-style multi-year true-talent prior (v2.4.0)
+# ---------------------------------------------------------------------------
+# refresh-priors builds a per-player projected baseline from the prior three
+# seasons; refresh-skills then regresses each player's in-season rates toward
+# THAT prior (by season PA, via REGRESSION_K_PA) instead of the flat league
+# mean. A thin in-season sample therefore reverts to the player's established
+# skill, not the league average. See ingester/projection/prior.py.
+#
+# Recency weights for (target-1, target-2, target-3) — classic Marcel 5/4/3.
+MARCEL_SEASON_WEIGHTS: tuple[int, int, int] = (5, 4, 3)
+# Phantom league-average weighted-PA mixed into the prior, so a thin multi-year
+# record reverts to league. Per-metric (v2.6.1): an out-of-sample fit (2023/24
+# priors → actual 2025, n=353) showed a single constant is wrong — a metric should
+# be regressed in proportion to how SLOWLY it stabilizes. K% settles fast (trust the
+# player → light regression), ISO is noisy (heavy regression), xwOBA in between.
+MARCEL_REGRESSION_PA_XWOBA: int = 1500
+MARCEL_REGRESSION_PA_K: int = 800
+MARCEL_REGRESSION_PA_ISO: int = 1800
+
+# ---------------------------------------------------------------------------
+# Personalized park HR factor (v2.5.0)
+# ---------------------------------------------------------------------------
+# personalized_park_hr_mult adjusts the empirical handedness HR factor for how a
+# specific batter's spray + power make a park play shorter/longer for THEM. It is
+# computed as a RATIO against the league-average hitter in the SAME park, so a
+# crude carry curve and a coarse spray→fence interpolation largely cancel — what
+# survives is this batter's deviation in pull tendency and exit velocity. The
+# result multiplies on top of (never replaces) the empirical factor and is
+# clamped, so it can only nudge, not dominate.
+# Ratio exponent (personalization strength). Tuned on the 2025 full-season backtest
+# (runs #62–66): HR Brier is flat across 0.4–0.6 (~0.1028, within noise) while
+# high-bucket HR calibration improves as BETA drops, so 0.5 dominates the original
+# 0.6 — equal Brier, ~14% less overconfidence. Env-overridable for future sweeps.
+PARK_GEO_BETA: float = float(os.environ.get("DIAMOND_PARK_GEO_BETA", "0.5"))
+PARK_GEO_LOGISTIC_SCALE_FT: float = 18.0         # ft spread of the clear-the-fence logistic
+PARK_GEO_MULT_CLAMP: tuple[float, float] = (0.70, 1.50)
+PARK_CARRY_BASE_FT: float = 375.0                # carry of a league-avg-EV authoritative fly
+PARK_CARRY_PER_MPH: float = 4.5                  # ft of carry per mph EV above league
+PARK_FENCE_PULL_FRAC: float = 0.55               # spray-angle interp: 0 = CF, 1 = foul line
+PARK_FENCE_OPPO_FRAC: float = 0.55
+PARK_WALL_STD_FT: float = 8.0                    # baseline wall height (no penalty at/below)
+PARK_WALL_DIST_PER_FT: float = 1.5              # effective added distance per ft of wall over standard
+
+# League-average batted-ball reference (2025, min 100 BIP) — the hitter the
+# empirical park factor is implicitly built on; the personalization ratio is
+# measured against this.
+LEAGUE_PULL_PCT: float = 0.442
+LEAGUE_CENTER_PCT: float = 0.284
+LEAGUE_OPPO_PCT: float = 0.273
+LEAGUE_FB_PCT: float = 0.265
+LEAGUE_EV_MPH: float = 88.7
+
+# ---------------------------------------------------------------------------
+# Trajectory-level weather (v2.6.0)
+# ---------------------------------------------------------------------------
+# #4 retires the flat density×wind HR scalar: weather instead shifts a batter's
+# fly-ball CARRY distance, and the HR effect is the change in P(clear the fence) —
+# non-linear in the batter's power and the park (a tailwind turns a warning-track
+# hitter's flyouts into homers but does nothing for a slap hitter). The two
+# coefficients below are CALIBRATED, not textbook: tuned so the league-average
+# batter's resulting multiplier tracks the old, run-environment-calibrated
+# density×wind scalar over the real game-weather distribution. The physics supplies
+# the per-batter SHAPE; the old scalar anchors the MAGNITUDE (there is no weather
+# backtest to catch a drift in the run environment).
+# Fitted (383 non-dome game-weathers × both hands) so the league-average batter's
+# carry mult tracks the old density×wind scalar (RMSE 0.026); over 25.9k real
+# batter×game evals the population mean drifts only −0.27% vs the old scalar, so the
+# run environment is preserved. Effective, not textbook — anchored to the milder
+# scalar through the steep logistic.
+WIND_CARRY_FT_PER_MPH: float = 0.85   # ft of carry per mph out-blowing wind
+DENSITY_CARRY_FRAC: float = 0.25      # share of carry that is drag-limited / ρ sensitivity
+WEATHER_CARRY_HR_CLAMP: tuple[float, float] = (0.70, 1.50)
+# Power gate: weather barely moves the HR rate of a hitter who can't drive the ball
+# far enough to reach the wall, so the carry effect is scaled by exit velocity. =1.0 at
+# league EV (so it leaves the run-env calibration untouched), →0 toward this floor.
+WEATHER_CARRY_EV_FLOOR_MPH: float = 82.0
 
 # ---------------------------------------------------------------------------
 # Pitch-mix matchup regression (v2.1.0)
