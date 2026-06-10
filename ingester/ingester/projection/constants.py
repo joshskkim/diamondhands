@@ -6,6 +6,8 @@ Bump MODEL_VERSION whenever the projection logic or constants change.
 """
 from __future__ import annotations
 
+import os
+
 # ---------------------------------------------------------------------------
 # Model identity (increment on any constants or logic change)
 # ---------------------------------------------------------------------------
@@ -72,7 +74,11 @@ MARCEL_REGRESSION_PA: int = 1200
 # survives is this batter's deviation in pull tendency and exit velocity. The
 # result multiplies on top of (never replaces) the empirical factor and is
 # clamped, so it can only nudge, not dominate.
-PARK_GEO_BETA: float = 0.6                       # ratio exponent (personalization strength)
+# Ratio exponent (personalization strength). Tuned on the 2025 full-season backtest
+# (runs #62–66): HR Brier is flat across 0.4–0.6 (~0.1028, within noise) while
+# high-bucket HR calibration improves as BETA drops, so 0.5 dominates the original
+# 0.6 — equal Brier, ~14% less overconfidence. Env-overridable for future sweeps.
+PARK_GEO_BETA: float = float(os.environ.get("DIAMOND_PARK_GEO_BETA", "0.5"))
 PARK_GEO_LOGISTIC_SCALE_FT: float = 18.0         # ft spread of the clear-the-fence logistic
 PARK_GEO_MULT_CLAMP: tuple[float, float] = (0.70, 1.50)
 PARK_CARRY_BASE_FT: float = 375.0                # carry of a league-avg-EV authoritative fly
