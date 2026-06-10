@@ -37,6 +37,7 @@ from ingester.commands.backfill_weather import cmd_backfill_weather
 from ingester.commands.refresh_weather import cmd_refresh_weather
 from ingester.commands.refresh_umpires import cmd_refresh_umpires
 from ingester.commands.refresh_skills import cmd_refresh_skills
+from ingester.commands.refresh_priors import cmd_refresh_priors
 from ingester.commands.refresh_bullpen import cmd_refresh_bullpen
 from ingester.commands.refresh_batted_ball import cmd_refresh_batted_ball
 from ingester.commands.skill_snapshots import cmd_refresh_skill_snapshots
@@ -161,6 +162,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_skills = sub.add_parser("refresh-skills", help="Recompute batter/pitcher skill aggregates")
     p_skills.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
+
+    p_priors = sub.add_parser(
+        "refresh-priors",
+        help="Compute Marcel-style multi-year true-talent priors into batter_projection_prior",
+    )
+    p_priors.add_argument("--season", type=int, default=2026, help="Target season year (default: 2026)")
 
     p_bullpen = sub.add_parser(
         "refresh-bullpen", help="Aggregate per-team relief-pitching skill into bullpen_skill"
@@ -413,6 +420,7 @@ COMMANDS = {
     "refresh-weather":          cmd_refresh_weather,
     "refresh-umpires":          cmd_refresh_umpires,
     "refresh-skills":           cmd_refresh_skills,
+    "refresh-priors":           cmd_refresh_priors,
     "refresh-bullpen":          cmd_refresh_bullpen,
     "refresh-batted-ball":      cmd_refresh_batted_ball,
     "refresh-skill-snapshots":  cmd_refresh_skill_snapshots,
