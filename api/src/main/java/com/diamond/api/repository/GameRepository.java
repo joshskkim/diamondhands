@@ -13,6 +13,9 @@ import java.util.List;
 @Repository
 public class GameRepository {
 
+    /** Single book shown for game markets on the today board (best US coverage of ML/total). */
+    public static final String MAIN_GAME_BOOK = "fanduel";
+
     private static final String TODAY_GAMES_SQL = """
         SELECT
             g.id                            AS game_id,
@@ -37,7 +40,12 @@ public class GameRepository {
             gp.expected_home_runs,
             gp.expected_away_runs,
             gp.expected_total_runs,
-            gp.computed_at                  AS gp_computed_at
+            gp.computed_at                  AS gp_computed_at,
+            fdo.fd_total_line,
+            fdo.fd_total_over,
+            fdo.fd_total_under,
+            fdo.fd_ml_home,
+            fdo.fd_ml_away
         FROM games g
         JOIN teams ht  ON ht.id  = g.home_team_id
         JOIN teams at2 ON at2.id = g.away_team_id
@@ -45,6 +53,17 @@ public class GameRepository {
         LEFT JOIN players hp ON hp.id = g.home_probable_pitcher_id
         LEFT JOIN players ap ON ap.id = g.away_probable_pitcher_id
         LEFT JOIN game_projections gp ON gp.game_id = g.id
+        LEFT JOIN (
+            SELECT game_id,
+                MAX(line)           FILTER (WHERE market='total'     AND side='over')  AS fd_total_line,
+                MAX(price_american) FILTER (WHERE market='total'     AND side='over')  AS fd_total_over,
+                MAX(price_american) FILTER (WHERE market='total'     AND side='under') AS fd_total_under,
+                MAX(price_american) FILTER (WHERE market='moneyline' AND side='home')  AS fd_ml_home,
+                MAX(price_american) FILTER (WHERE market='moneyline' AND side='away')  AS fd_ml_away
+            FROM game_odds
+            WHERE bookmaker = 'fanduel'
+            GROUP BY game_id
+        ) fdo ON fdo.game_id = g.id
         WHERE g.game_date = ?
         ORDER BY g.start_time_utc
         """;
@@ -94,11 +113,29 @@ public class GameRepository {
                 rs.getString("gp_computed_at"))
             : null;
 
+        GameOddsSummaryDto odds = mapOdds(rs);
+
         return new TodayGameDto(
             rs.getLong("game_id"),
             rs.getString("start_time_utc"),
-            home, away, stadium, weather, probables, projection,
+            home, away, stadium, weather, probables, projection, odds,
             rs.getString("status"));
+    }
+
+    /** FanDuel game-market summary, or null when the game has no FanDuel odds. */
+    private GameOddsSummaryDto mapOdds(ResultSet rs) throws SQLException {
+        BigDecimal totalLine = rs.getBigDecimal("fd_total_line");
+        Integer over = nullableInt(rs, "fd_total_over");
+        Integer under = nullableInt(rs, "fd_total_under");
+        Integer mlHome = nullableInt(rs, "fd_ml_home");
+        Integer mlAway = nullableInt(rs, "fd_ml_away");
+        if (totalLine == null && over == null && under == null && mlHome == null && mlAway == null) {
+            return null;
+        }
+        return new GameOddsSummaryDto(
+            MAIN_GAME_BOOK,
+            totalLine != null ? totalLine.doubleValue() : null,
+            over, under, mlHome, mlAway);
     }
 
     private static Integer nullableInt(ResultSet rs, String col) throws SQLException {

@@ -88,6 +88,28 @@ def _stored_hashes(conn, game_date) -> dict[int, str | None]:
     return {gid: h for gid, h in rows}
 
 
+def _games_needing_props(conn, game_date) -> set[int]:
+    """Game ids on the date with no player-prop rows yet that haven't started.
+
+    Books post player props later than game markets — usually after our first
+    pull of the day. The input-hash gate keys only on lineup/weather/pitcher
+    inputs, so once those lock it would skip the game forever and never capture
+    late-posting props (nor the provider's refreshed event id). We force a
+    re-pull of such games until first pitch or until at least one prop row lands.
+    """
+    rows = conn.execute(
+        """
+        SELECT g.id
+        FROM games g
+        WHERE g.game_date = %s
+          AND g.start_time_utc > NOW()
+          AND NOT EXISTS (SELECT 1 FROM player_prop_odds p WHERE p.game_id = g.id)
+        """,
+        (game_date,),
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
 def _game_roster(conn, game_id: int) -> dict[str, int]:
     """{normalized player name: player_id} for batters + probable pitchers in this game."""
     rows = conn.execute(
@@ -135,6 +157,10 @@ def cmd_refresh_odds(args: argparse.Namespace) -> None:
             gid for gid, h in fresh_hashes.items()
             if force or stored_hashes.get(gid) is None or stored_hashes[gid] != h
         }
+        # Also (re)pull games still missing props before first pitch — books
+        # post props after the early game-markets pull, and the hash gate alone
+        # would never revisit them once lineups/weather/pitchers lock.
+        changed_game_ids |= _games_needing_props(conn, game_date)
 
         # Slate-wide saver: if nothing changed, never touch the API.
         if not changed_game_ids:

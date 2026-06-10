@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import type { FlatBatterPick, TodayGame } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { bookLabel, formatAmerican } from '@/lib/odds'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
@@ -42,13 +43,25 @@ function BoardCard({
   )
 }
 
-// The reserved slot for a future sportsbook number (see plan: odds come later).
-function OddsSlot() {
+// Right-aligned sportsbook cell. `book` labels the price (e.g. "FanDuel").
+function OddsCell({
+  price,
+  book,
+}: {
+  price: number | null | undefined
+  book?: string | null
+}) {
   return (
-    <div className="text-right shrink-0 w-12">
-      {/* TODO: sportsbook odds — wire real money line / over-under here */}
-      <div className={microLabel}>Odds</div>
-      <div className="text-xs text-zinc-600 font-mono">—</div>
+    <div className="text-right shrink-0 w-16">
+      <div className={microLabel}>{book ? bookLabel(book) : 'Odds'}</div>
+      <div
+        className={cn(
+          'text-xs font-mono tabular-nums',
+          price == null ? 'text-zinc-600' : 'text-zinc-300',
+        )}
+      >
+        {formatAmerican(price)}
+      </div>
     </div>
   )
 }
@@ -103,7 +116,6 @@ function BatterRow({
       <div className={cn('font-mono tabular-nums text-sm shrink-0 w-14 text-right', valueClass)}>
         {value}
       </div>
-      <OddsSlot />
     </div>
   )
 }
@@ -229,12 +241,14 @@ function GameRow({
   value,
   valueClass,
   why,
+  oddsPrice,
 }: {
   rank: number
   game: TodayGame
   value: string
   valueClass?: string
   why: string
+  oddsPrice: number | null | undefined
 }) {
   return (
     <Link
@@ -251,7 +265,7 @@ function GameRow({
       <div className={cn('font-mono tabular-nums text-sm shrink-0 w-16 text-right', valueClass)}>
         {value}
       </div>
-      <OddsSlot />
+      <OddsCell price={oddsPrice} book={game.odds?.book} />
     </Link>
   )
 }
@@ -287,6 +301,7 @@ export function GameBoards({ games }: { games: TodayGame[] }) {
             value={`${g.projection!.expectedTotal!.toFixed(1)} R`}
             valueClass="text-cyan-300"
             why={`${g.home.abbr} ${g.projection!.expectedHomeRuns!.toFixed(1)} · ${g.away.abbr} ${g.projection!.expectedAwayRuns!.toFixed(1)}`}
+            oddsPrice={g.odds?.totalOverPrice}
           />
         ))}
       </BoardCard>
@@ -302,6 +317,13 @@ export function GameBoards({ games }: { games: TodayGame[] }) {
             game={g}
             value={`+${mag.toFixed(1)}`}
             valueClass="text-emerald-300"
+            oddsPrice={
+              g.odds
+                ? fav === g.home.abbr
+                  ? g.odds.homeMoneyline
+                  : g.odds.awayMoneyline
+                : null
+            }
             why={`${fav} favored by ${mag.toFixed(1)} R`}
           />
         ))}

@@ -3,10 +3,48 @@
 import { format } from 'date-fns'
 import { ArrowUp } from 'lucide-react'
 import Link from 'next/link'
-import type { TodayGame, Weather } from '@/lib/types'
+import type { GameOddsSummary, TodayGame, Weather } from '@/lib/types'
 import { cn, parseApiDate } from '@/lib/utils'
+import { bookLabel, formatAmerican } from '@/lib/odds'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
+
+/** FanDuel total + moneyline strip. Renders nothing when no odds are posted yet. */
+function OddsRow({
+  odds,
+  homeAbbr,
+  awayAbbr,
+}: {
+  odds: GameOddsSummary
+  homeAbbr: string
+  awayAbbr: string
+}) {
+  const hasTotal = odds.totalLine != null
+  const hasMl = odds.homeMoneyline != null || odds.awayMoneyline != null
+  if (!hasTotal && !hasMl) return null
+
+  return (
+    <div className="mt-3 pt-3 border-t border-white/5 flex items-center justify-between gap-2">
+      <span className={microLabel}>{bookLabel(odds.book)}</span>
+      <div className="flex items-center gap-3 text-xs font-mono tabular-nums text-zinc-300">
+        {hasTotal && (
+          <span title="Total (over)">
+            <span className="text-zinc-500">O/U</span> {odds.totalLine}
+            <span className="text-zinc-500 ml-1">{formatAmerican(odds.totalOverPrice)}</span>
+          </span>
+        )}
+        {hasTotal && hasMl && <span className="text-zinc-700">·</span>}
+        {hasMl && (
+          <span title="Moneyline">
+            {awayAbbr} {formatAmerican(odds.awayMoneyline)}
+            <span className="text-zinc-600 mx-1">/</span>
+            {homeAbbr} {formatAmerican(odds.homeMoneyline)}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
 
 function degreesToCardinal(deg: number): string {
   const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
@@ -97,6 +135,10 @@ export function GameCard({ game }: { game: TodayGame }) {
         <p className="text-xs text-amber-300 bg-amber-400/10 border border-amber-400/30 rounded px-2 py-1.5">
           Projection pending — probable pitchers or lineups not yet confirmed.
         </p>
+      )}
+
+      {game.odds && (
+        <OddsRow odds={game.odds} homeAbbr={game.home.abbr} awayAbbr={game.away.abbr} />
       )}
     </Link>
   )

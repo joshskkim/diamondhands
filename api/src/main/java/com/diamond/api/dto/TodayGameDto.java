@@ -9,5 +9,6 @@ public record TodayGameDto(
     WeatherDto weather,
     ProbablesDto probables,
     ProjectionSummaryDto projection,
+    GameOddsSummaryDto odds,
     String status
 ) {}

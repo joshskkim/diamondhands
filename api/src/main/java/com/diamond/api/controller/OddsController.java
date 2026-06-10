@@ -1,5 +1,6 @@
 package com.diamond.api.controller;
 
+import com.diamond.api.dto.BatterPropOddsDto;
 import com.diamond.api.dto.BestPlayDto;
 import com.diamond.api.service.OddsService;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -29,5 +30,15 @@ public class OddsController {
         int safeLimit = Math.min(Math.max(limit, 1), 200);
         List<BestPlayDto> plays = oddsService.bestPlays(target);
         return plays.size() > safeLimit ? plays.subList(0, safeLimit) : plays;
+    }
+
+    /** Batter prop over-prices for the slate (BetRivers-first), for Best Bets. */
+    @GetMapping("/props")
+    public List<BatterPropOddsDto> props(
+        @RequestParam(required = false)
+        @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
+    ) {
+        LocalDate target = date != null ? date : LocalDate.now();
+        return oddsService.batterProps(target);
     }
 }
