@@ -349,6 +349,12 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         model_version = f"{model_version}-cal"
         print(f"[backtest] Calibration: {'ON' if cal else 'requested but calibration.json missing'}")
 
+    if getattr(args, "park_personalized", False):
+        from ingester.projection.runner import set_backtest_park_personalized
+        set_backtest_park_personalized(True)
+        model_version = f"{model_version}-parkgeo"
+        print("[backtest] Park personalization: ON (prior-season batted-ball profile)")
+
     print(f"[backtest] Range {start} → {end}  |  Model {model_version}")
 
     conn = get_connection()

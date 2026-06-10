@@ -84,6 +84,19 @@ def _maybe_calibrate(proj):
     return _CALIBRATOR.apply(proj) if _CALIBRATOR is not None else proj
 
 
+# Backtest-only: when set, the backtest path personalizes the park HR factor using
+# each hitter's PRIOR-season batted-ball profile (leak-free — the prior season is
+# entirely before the backtest game). Off by default so existing backtests are
+# unchanged. The live path always personalizes from the current-season profile.
+_BACKTEST_PARK_PERSONALIZED: bool = False
+
+
+def set_backtest_park_personalized(flag: bool) -> None:
+    """Toggle prior-season park personalization in the backtest projection path."""
+    global _BACKTEST_PARK_PERSONALIZED
+    _BACKTEST_PARK_PERSONALIZED = flag
+
+
 @dataclass
 class ProjectSummary:
     game_date: date
@@ -1330,7 +1343,15 @@ def _project_team_side_backtest(
             continue
 
         pitcher_split, _quality = resolve_pitcher_skill(splits, hitter.bats, pitcher_throws)
-        park_adj = compute_park_adjustments(park, hitter.bats, pitcher_throws)
+        # Leak-free park personalization for the A/B: prior-season batted-ball profile.
+        bb_profile = (
+            _load_batted_ball_profile(conn, hitter.player_id, season - 1)
+            if _BACKTEST_PARK_PERSONALIZED
+            else None
+        )
+        park_adj = compute_park_adjustments(
+            park, hitter.bats, pitcher_throws, profile=bb_profile
+        )
         pitcher_adj = compute_pitcher_adjustments(pitcher_split)
         if weather_skipped:
             adj_weather_hit = _NEUTRAL_WEATHER_ADJ
