@@ -6,6 +6,8 @@ import type {
   FlatBatterPick,
   GameOdds,
   GameProjections,
+  HitRate,
+  LineShop,
   MostLikely,
   PitcherSkillSplit,
   PitchTypeLeaderboardEntry,
@@ -121,6 +123,20 @@ export function fetchBatterPropOdds(date?: string): Promise<BatterPropOdds[]> {
   return apiGet<BatterPropOdds[]>(`/api/odds/props${qs ? `?${qs}` : ''}`)
 }
 
+export function fetchHitRates(date?: string): Promise<HitRate[]> {
+  const params = new URLSearchParams()
+  if (date) params.set('date', date)
+  const qs = params.toString()
+  return apiGet<HitRate[]>(`/api/odds/hit-rates${qs ? `?${qs}` : ''}`)
+}
+
+export function fetchLineShop(date?: string): Promise<LineShop[]> {
+  const params = new URLSearchParams()
+  if (date) params.set('date', date)
+  const qs = params.toString()
+  return apiGet<LineShop[]>(`/api/odds/line-shop${qs ? `?${qs}` : ''}`)
+}
+
 export function fetchPitchTypes(): Promise<PitchTypeRef[]> {
   return apiGet<PitchTypeRef[]>('/api/leaderboards/pitch-types')
 }
@@ -196,6 +212,8 @@ export const queryKeys = {
   odds: {
     best: (date?: string) => ['odds', 'best', date ?? 'today'] as const,
     props: (date?: string) => ['odds', 'props', date ?? 'today'] as const,
+    hitRates: (date?: string) => ['odds', 'hit-rates', date ?? 'today'] as const,
+    lineShop: (date?: string) => ['odds', 'line-shop', date ?? 'today'] as const,
   },
   mostLikely: (date?: string) => ['most-likely', date ?? 'today'] as const,
   players: {
@@ -258,6 +276,20 @@ export function batterPropOddsQueryOptions(date?: string) {
   return queryOptions({
     queryKey: queryKeys.odds.props(date),
     queryFn: () => fetchBatterPropOdds(date),
+  })
+}
+
+export function hitRatesQueryOptions(date?: string) {
+  return queryOptions({
+    queryKey: queryKeys.odds.hitRates(date),
+    queryFn: () => fetchHitRates(date),
+  })
+}
+
+export function lineShopQueryOptions(date?: string) {
+  return queryOptions({
+    queryKey: queryKeys.odds.lineShop(date),
+    queryFn: () => fetchLineShop(date),
   })
 }
 

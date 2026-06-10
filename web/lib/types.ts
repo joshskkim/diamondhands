@@ -259,6 +259,41 @@ export interface BestPlay {
   playerName: string | null
 }
 
+/**
+ * GET /api/odds/hit-rates — Outlier-style "traffic light" for a batter prop market:
+ * how often the player cleared the prop's line over recent games + the season.
+ * Rates are 0..1 or null (no games in window); join to a BestPlay by playerId+market.
+ */
+export interface HitRate {
+  playerId: number
+  /** 'hit' | 'hr' */
+  market: string
+  line: number
+  l5: number | null
+  l10: number | null
+  l20: number | null
+  n20: number
+  season: number | null
+  nSeason: number
+}
+
+/** One bookmaker's posted price for a prop selection. */
+export interface BookQuote {
+  book: string
+  priceAmerican: number
+  priceDecimal: number
+}
+
+/**
+ * GET /api/odds/line-shop — per-selection book ladder for line shopping.
+ * `key` = "gameId:playerId:market:side:line" (line trailing-zeros stripped), matching
+ * a BestPlay row built from the same fields. `quotes` is sorted best-price-first.
+ */
+export interface LineShop {
+  key: string
+  quotes: BookQuote[]
+}
+
 /** GET /api/odds/props — one batter prop over-price (BetRivers-first) for Best Bets. */
 export interface BatterPropOdds {
   gameId: number

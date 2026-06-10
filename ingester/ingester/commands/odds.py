@@ -15,6 +15,7 @@ import hashlib
 import os
 import re
 import unicodedata
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
@@ -132,6 +133,8 @@ def _game_roster(conn, game_id: int) -> dict[str, int]:
 def cmd_refresh_odds(args: argparse.Namespace) -> None:
     load_dotenv()
     game_date = args.date if getattr(args, "date", None) is not None else eastern_today()
+    # One timestamp for the whole pull, so all of this run's odds_snapshots rows align.
+    run_ts = datetime.now(timezone.utc)
     use_sample = getattr(args, "sample", False)
     force = getattr(args, "force", False)
     api_key = os.getenv("ODDS_API_KEY")
@@ -283,6 +286,33 @@ def cmd_refresh_odds(args: argparse.Namespace) -> None:
                         ),
                     )
                     prop_rows_total += 1
+
+            # ── Line-movement capture (append-only) ──
+            # Snapshot the just-written current odds into odds_snapshots so future
+            # pulls accrue an open→current history. Captures both game markets and
+            # props for this game under the single run timestamp.
+            conn.execute(
+                """
+                INSERT INTO odds_snapshots
+                    (captured_at, game_id, scope, player_id, market, side, line,
+                     bookmaker, price_american, price_decimal)
+                SELECT %s, game_id, 'game', NULL, market, side, line,
+                       bookmaker, price_american, price_decimal
+                FROM game_odds WHERE game_id = %s
+                """,
+                (run_ts, game_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO odds_snapshots
+                    (captured_at, game_id, scope, player_id, market, side, line,
+                     bookmaker, price_american, price_decimal)
+                SELECT %s, game_id, 'prop', player_id, market, side, line,
+                       bookmaker, price_american, price_decimal
+                FROM player_prop_odds WHERE game_id = %s
+                """,
+                (run_ts, game_id),
+            )
 
             # Record the gate state for this game's successful pull.
             conn.execute(

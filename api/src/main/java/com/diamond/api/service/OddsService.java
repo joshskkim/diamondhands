@@ -58,6 +58,42 @@ public class OddsService {
         return out;
     }
 
+    /** Multi-book price ladder per prop selection (line shopping), best price first. */
+    @Cacheable(cacheNames = "oddsLineShop", key = "#date")
+    public List<LineShopDto> lineShop(LocalDate date) {
+        // Rows arrive grouped by selection and best-decimal-first (see PROP_QUOTES_SQL).
+        Map<String, List<BookQuoteDto>> byKey = new LinkedHashMap<>();
+        for (OddsRepository.PropQuoteRow r : repo.findPropQuotes(date)) {
+            String key = lineShopKey(r.gameId(), r.playerId(), r.market(), r.side(), r.line());
+            byKey.computeIfAbsent(key, k -> new ArrayList<>())
+                 .add(new BookQuoteDto(r.bookmaker(), r.priceAmerican(), r.priceDecimal()));
+        }
+        List<LineShopDto> out = new ArrayList<>(byKey.size());
+        for (Map.Entry<String, List<BookQuoteDto>> e : byKey.entrySet()) {
+            out.add(new LineShopDto(e.getKey(), e.getValue()));
+        }
+        return out;
+    }
+
+    /** Selection key shared with the client: line trailing-zeros stripped (0.50 → "0.5"). */
+    static String lineShopKey(long gameId, int playerId, String market, String side, double line) {
+        String normLine = java.math.BigDecimal.valueOf(line).stripTrailingZeros().toPlainString();
+        return gameId + ":" + playerId + ":" + market + ":" + side + ":" + normLine;
+    }
+
+    /** Hit-rate "traffic light" per batter prop market for the slate (last 5/10/20 + season). */
+    @Cacheable(cacheNames = "oddsHitRates", key = "#date")
+    public List<HitRateDto> hitRates(LocalDate date) {
+        LocalDate seasonStart = LocalDate.of(date.getYear(), 1, 1);
+        List<HitRateDto> out = new ArrayList<>();
+        for (OddsRepository.HitRateRow r : repo.findHitRates(date, seasonStart)) {
+            out.add(new HitRateDto(
+                r.playerId(), r.market(), r.line(),
+                r.l5(), r.l10(), r.l20(), r.n20(), r.season(), r.nSeason()));
+        }
+        return out;
+    }
+
     @Cacheable(cacheNames = "oddsBest", key = "#date")
     public List<BestPlayDto> bestPlays(LocalDate date) {
         List<BestPlayDto> plays = new ArrayList<>();

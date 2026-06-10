@@ -103,6 +103,87 @@ public class OddsRepository {
                  (po.bookmaker = ?) DESC, po.price_decimal DESC
         """;
 
+    // ── Multi-book line shopping (props) ──
+    // Every book's posted price for each prop selection on the slate, best (highest
+    // decimal = best for the bettor) first within a selection, so the service can group
+    // consecutive rows into a per-selection ladder.
+    private static final String PROP_QUOTES_SQL = """
+        SELECT po.game_id, po.player_id, po.market, po.side, po.line,
+               po.bookmaker, po.price_american, po.price_decimal
+        FROM player_prop_odds po
+        JOIN games g ON g.id = po.game_id AND g.game_date = ?
+        ORDER BY po.game_id, po.player_id, po.market, po.side, po.line,
+                 po.price_decimal DESC
+        """;
+
+    public List<PropQuoteRow> findPropQuotes(LocalDate date) {
+        return jdbc.query(PROP_QUOTES_SQL, (rs, n) -> new PropQuoteRow(
+                rs.getLong("game_id"),
+                rs.getInt("player_id"),
+                rs.getString("market"),
+                rs.getString("side"),
+                rs.getBigDecimal("line").doubleValue(),
+                rs.getString("bookmaker"),
+                rs.getInt("price_american"),
+                rs.getBigDecimal("price_decimal").doubleValue()),
+            date);
+    }
+
+    // ── Outlier-style hit-rate "traffic light" ──
+    // For every batter that has a hit/HR prop on the slate, how often they've cleared
+    // that prop's line over their last 5/10/20 games and the current season. The line
+    // comes from the prop itself (almost always 0.5 = "to record one"), so this answers
+    // exactly the question the prop asks. Trailing windows are rolling and may cross a
+    // season boundary (a player's literal last N games); the season rate is calendar-year.
+    private static final String HIT_RATES_SQL = """
+        WITH prop_players AS (
+            SELECT po.player_id, po.market, MIN(po.line) AS line
+            FROM player_prop_odds po
+            JOIN games g ON g.id = po.game_id AND g.game_date = ?
+            WHERE po.market IN ('hit', 'hr')
+            GROUP BY po.player_id, po.market
+        ),
+        recent AS (
+            SELECT pp.player_id, pp.market, pp.line, pgs.game_date,
+                   CASE pp.market
+                       WHEN 'hit' THEN (pgs.hits      > pp.line)::int
+                       WHEN 'hr'  THEN (pgs.home_runs > pp.line)::int
+                   END AS cleared,
+                   row_number() OVER (
+                       PARTITION BY pp.player_id, pp.market
+                       ORDER BY pgs.game_date DESC, pgs.game_id DESC
+                   ) AS rn
+            FROM prop_players pp
+            JOIN player_game_stats pgs
+                 ON pgs.player_id = pp.player_id
+                AND pgs.game_date < ?
+                AND pgs.plate_appearances > 0
+        )
+        SELECT player_id, market, line,
+            avg(cleared::numeric) FILTER (WHERE rn <= 5)            AS l5,
+            avg(cleared::numeric) FILTER (WHERE rn <= 10)           AS l10,
+            avg(cleared::numeric) FILTER (WHERE rn <= 20)           AS l20,
+            count(*)              FILTER (WHERE rn <= 20)           AS n20,
+            avg(cleared::numeric) FILTER (WHERE game_date >= ?)     AS season,
+            count(*)              FILTER (WHERE game_date >= ?)     AS n_season
+        FROM recent
+        GROUP BY player_id, market, line
+        """;
+
+    public List<HitRateRow> findHitRates(LocalDate date, LocalDate seasonStart) {
+        return jdbc.query(HIT_RATES_SQL, (rs, n) -> new HitRateRow(
+                rs.getInt("player_id"),
+                rs.getString("market"),
+                rs.getBigDecimal("line").doubleValue(),
+                toDouble(rs.getBigDecimal("l5")),
+                toDouble(rs.getBigDecimal("l10")),
+                toDouble(rs.getBigDecimal("l20")),
+                rs.getInt("n20"),
+                toDouble(rs.getBigDecimal("season")),
+                rs.getInt("n_season")),
+            date, date, seasonStart, seasonStart);
+    }
+
     public List<BatterPropRow> findBatterProps(LocalDate date, String preferredBook) {
         return jdbc.query(BATTER_PROPS_SQL, (rs, n) -> new BatterPropRow(
             rs.getLong("game_id"),
@@ -164,5 +245,14 @@ public class OddsRepository {
 
     public record BatterPropRow(
         long gameId, int playerId, String market, Double line,
+        String bookmaker, int priceAmerican, double priceDecimal) {}
+
+    public record HitRateRow(
+        int playerId, String market, double line,
+        Double l5, Double l10, Double l20, int n20,
+        Double season, int nSeason) {}
+
+    public record PropQuoteRow(
+        long gameId, int playerId, String market, String side, double line,
         String bookmaker, int priceAmerican, double priceDecimal) {}
 }
