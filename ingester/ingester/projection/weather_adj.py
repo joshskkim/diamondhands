@@ -11,9 +11,11 @@ import math
 from ingester.projection.constants import (
     AIR_GAS_CONST_DRY,
     AIR_GAS_CONST_VAPOR,
+    DENSITY_CARRY_FRAC,
     DENSITY_HR_CLAMP,
     DENSITY_HR_EXPONENT,
     DOME_WEATHER_ADJ,
+    PARK_CARRY_BASE_FT,
     PULL_BEARING_OFFSET_DEG,
     SEA_LEVEL_PRESSURE_HPA,
     TEMP_HIT_CLAMP,
@@ -22,6 +24,7 @@ from ingester.projection.constants import (
     TEMP_HR_COEFF_PER_F,
     WEATHER_BASELINE_HUMIDITY_PCT,
     WEATHER_TEMP_BASELINE_F,
+    WIND_CARRY_FT_PER_MPH,
     WIND_HR_CLAMP,
     WIND_HR_COEFF_PER_MPH,
 )
@@ -176,6 +179,63 @@ def density_hr_adjustment(
 def weather_is_neutral(*, is_dome: bool, is_retractable_open: bool) -> bool:
     """True when roof/dome blocks weather effects (v1: closed dome or closed retractable)."""
     return is_dome and not is_retractable_open
+
+
+# ── Trajectory-level carry delta (v2.6) ────────────────────────────────────────
+
+def carry_delta_ft(
+    *,
+    temperature_f: float,
+    wind_speed_mph: float,
+    wind_from_degrees: float,
+    cf_bearing_degrees: float,
+    bats: str,
+    pitcher_throws: str | None = None,
+    is_dome: bool = False,
+    is_retractable_open: bool = False,
+    humidity_pct: float | None = None,
+    surface_pressure_hpa: float | None = None,
+    altitude_ft: float | None = None,
+    baseline_carry_ft: float = PARK_CARRY_BASE_FT,
+) -> float:
+    """Feet the day's conditions add to (or take from) a fly ball's carry.
+
+    Two physical components, both relative to the park's own baseline (70°F, 50% RH,
+    standard pressure at the park's altitude — so the park's static altitude effect
+    cancels, leaving only the day-to-day weather deviation, matching the HR-scalar
+    convention):
+
+      * air density — thinner air (hotter / more humid / lower pressure) means less
+        drag and more carry. Temperature enters HERE, through density, so there is no
+        separate temperature term (avoids double-counting).
+      * wind — the component blowing out toward the batter's pull field adds carry;
+        blowing in subtracts it.
+
+    Returns 0.0 under a closed roof.
+    """
+    if weather_is_neutral(is_dome=is_dome, is_retractable_open=is_retractable_open):
+        return 0.0
+
+    alt = altitude_ft if altitude_ft is not None else 0.0
+    baseline_pressure = pressure_at_altitude_hpa(alt)
+    today_pressure = surface_pressure_hpa if surface_pressure_hpa is not None else baseline_pressure
+    today_humidity = humidity_pct if humidity_pct is not None else WEATHER_BASELINE_HUMIDITY_PCT
+
+    rho_today = air_density(temperature_f, today_humidity, today_pressure)
+    rho_baseline = air_density(
+        WEATHER_TEMP_BASELINE_F, WEATHER_BASELINE_HUMIDITY_PCT, baseline_pressure
+    )
+    d_density = (
+        baseline_carry_ft * DENSITY_CARRY_FRAC * (rho_baseline / rho_today - 1.0)
+        if rho_today > 0
+        else 0.0
+    )
+
+    pull = pull_bearing_degrees(cf_bearing_degrees, bats, pitcher_throws)
+    component = wind_component_mph(wind_speed_mph, wind_from_degrees, pull)
+    d_wind = component * WIND_CARRY_FT_PER_MPH
+
+    return d_density + d_wind
 
 
 def compute_weather_adjustments(

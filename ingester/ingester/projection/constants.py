@@ -20,7 +20,9 @@ import os
 # prior (see prior.py) instead of the flat league mean.
 # v2.5.0: park HR factor is personalized per batter from spray + EV/LA carry vs
 # the park's fence geometry (see park_adj.personalized_park_hr_mult).
-MODEL_VERSION: str = "v2.5.0"
+# v2.6.0: weather HR effect is a physical fly-ball carry-vs-fence model (carry_delta_ft
+# → weather_carry_hr_mult), replacing the flat density×wind scalar.
+MODEL_VERSION: str = "v2.6.0"
 
 # ---------------------------------------------------------------------------
 # League-average reference (2025 MLB approximations)
@@ -96,6 +98,31 @@ LEAGUE_CENTER_PCT: float = 0.284
 LEAGUE_OPPO_PCT: float = 0.273
 LEAGUE_FB_PCT: float = 0.265
 LEAGUE_EV_MPH: float = 88.7
+
+# ---------------------------------------------------------------------------
+# Trajectory-level weather (v2.6.0)
+# ---------------------------------------------------------------------------
+# #4 retires the flat density×wind HR scalar: weather instead shifts a batter's
+# fly-ball CARRY distance, and the HR effect is the change in P(clear the fence) —
+# non-linear in the batter's power and the park (a tailwind turns a warning-track
+# hitter's flyouts into homers but does nothing for a slap hitter). The two
+# coefficients below are CALIBRATED, not textbook: tuned so the league-average
+# batter's resulting multiplier tracks the old, run-environment-calibrated
+# density×wind scalar over the real game-weather distribution. The physics supplies
+# the per-batter SHAPE; the old scalar anchors the MAGNITUDE (there is no weather
+# backtest to catch a drift in the run environment).
+# Fitted (383 non-dome game-weathers × both hands) so the league-average batter's
+# carry mult tracks the old density×wind scalar (RMSE 0.026); over 25.9k real
+# batter×game evals the population mean drifts only −0.27% vs the old scalar, so the
+# run environment is preserved. Effective, not textbook — anchored to the milder
+# scalar through the steep logistic.
+WIND_CARRY_FT_PER_MPH: float = 0.85   # ft of carry per mph out-blowing wind
+DENSITY_CARRY_FRAC: float = 0.25      # share of carry that is drag-limited / ρ sensitivity
+WEATHER_CARRY_HR_CLAMP: tuple[float, float] = (0.70, 1.50)
+# Power gate: weather barely moves the HR rate of a hitter who can't drive the ball
+# far enough to reach the wall, so the carry effect is scaled by exit velocity. =1.0 at
+# league EV (so it leaves the run-env calibration untouched), →0 toward this floor.
+WEATHER_CARRY_EV_FLOOR_MPH: float = 82.0
 
 # ---------------------------------------------------------------------------
 # Pitch-mix matchup regression (v2.1.0)

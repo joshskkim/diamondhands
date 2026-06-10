@@ -37,17 +37,19 @@ from ingester.projection.constants import (
 from ingester.projection.matchup import MatchupResult, compute_matchup
 from ingester.projection.park_adj import (
     BattedBallProfile,
+    LEAGUE_AVERAGE_PROFILE,
     ParkAdjustments,
     ParkFactors,
     ParkGeometry,
     compute_park_adjustments,
+    weather_carry_hr_mult,
 )
 from ingester.projection.pitcher_adj import (
     PitcherHandSplit,
     compute_pitcher_adjustments,
     resolve_pitcher_skill,
 )
-from ingester.projection.weather_adj import compute_weather_adjustments
+from ingester.projection.weather_adj import carry_delta_ft, compute_weather_adjustments
 from ingester.projection.calibration import Calibrator
 
 log = logging.getLogger(__name__)
@@ -725,7 +727,10 @@ def _project_team_side(
             park, hitter.bats, pitcher_throws, profile=bb_profile
         )
         pitcher_adj = compute_pitcher_adjustments(pitcher_split)
-        adj_weather_hit, adj_weather_hr = compute_weather_adjustments(
+        # Hit side keeps the temperature scalar (and dome handling); the HR side is the
+        # v2.6 trajectory model: weather shifts fly-ball carry, and the HR effect is the
+        # change in P(clear the fence) for THIS batter (own profile, else league-average).
+        adj_weather_hit, _ = compute_weather_adjustments(
             temperature_f=game.temperature_f or 70.0,
             wind_speed_mph=game.wind_speed_mph or 0.0,
             wind_from_degrees=game.wind_from_degrees or 0.0,
@@ -737,6 +742,25 @@ def _project_team_side(
             humidity_pct=game.relative_humidity_pct,
             surface_pressure_hpa=game.surface_pressure_hpa,
             altitude_ft=game.altitude_feet,
+        )
+        d_carry = carry_delta_ft(
+            temperature_f=game.temperature_f or 70.0,
+            wind_speed_mph=game.wind_speed_mph or 0.0,
+            wind_from_degrees=game.wind_from_degrees or 0.0,
+            cf_bearing_degrees=game.cf_bearing_degrees,
+            bats=hitter.bats,
+            pitcher_throws=pitcher_throws,
+            is_dome=game.is_dome,
+            is_retractable_open=is_retractable_open,
+            humidity_pct=game.relative_humidity_pct,
+            surface_pressure_hpa=game.surface_pressure_hpa,
+            altitude_ft=game.altitude_feet,
+        )
+        adj_weather_hr = weather_carry_hr_mult(
+            park.geometry,
+            bb_profile if bb_profile is not None else LEAGUE_AVERAGE_PROFILE,
+            _effective_bat_side(hitter.bats, pitcher_throws),
+            d_carry,
         )
 
         # v2.1: the matchup drives the batter's hit/K/HR rates and is stored for audit/UI.
