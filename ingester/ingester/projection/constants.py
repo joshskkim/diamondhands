@@ -62,9 +62,14 @@ REGRESSION_K_BF: int = 100
 #
 # Recency weights for (target-1, target-2, target-3) — classic Marcel 5/4/3.
 MARCEL_SEASON_WEIGHTS: tuple[int, int, int] = (5, 4, 3)
-# Phantom league-average weighted-PA mixed into the prior itself, so a player
-# with a thin multi-year record reverts to league. ~2 full seasons of weight.
-MARCEL_REGRESSION_PA: int = 1200
+# Phantom league-average weighted-PA mixed into the prior, so a thin multi-year
+# record reverts to league. Per-metric (v2.6.1): an out-of-sample fit (2023/24
+# priors → actual 2025, n=353) showed a single constant is wrong — a metric should
+# be regressed in proportion to how SLOWLY it stabilizes. K% settles fast (trust the
+# player → light regression), ISO is noisy (heavy regression), xwOBA in between.
+MARCEL_REGRESSION_PA_XWOBA: int = 1500
+MARCEL_REGRESSION_PA_K: int = 800
+MARCEL_REGRESSION_PA_ISO: int = 1800
 
 # ---------------------------------------------------------------------------
 # Personalized park HR factor (v2.5.0)

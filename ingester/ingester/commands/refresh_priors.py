@@ -16,7 +16,9 @@ from ingester.projection.constants import (
     LEAGUE_ISO,
     LEAGUE_K_PER_PA,
     LEAGUE_XWOBA,
-    MARCEL_REGRESSION_PA,
+    MARCEL_REGRESSION_PA_ISO,
+    MARCEL_REGRESSION_PA_K,
+    MARCEL_REGRESSION_PA_XWOBA,
     MARCEL_SEASON_WEIGHTS,
 )
 from ingester.projection.prior import SeasonLine, compute_marcel_prior
@@ -113,5 +115,6 @@ def cmd_refresh_priors(args: argparse.Namespace) -> None:
     conn.close()
     print(
         f"[refresh-priors] Wrote {len(rows)} batter priors for {target} "
-        f"(Marcel {MARCEL_SEASON_WEIGHTS}, regression {MARCEL_REGRESSION_PA} PA)."
+        f"(Marcel {MARCEL_SEASON_WEIGHTS}, regression xwOBA/K/ISO="
+        f"{MARCEL_REGRESSION_PA_XWOBA}/{MARCEL_REGRESSION_PA_K}/{MARCEL_REGRESSION_PA_ISO} PA)."
     )
