@@ -3,32 +3,40 @@
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { Flame } from 'lucide-react'
-import { bestPlaysQueryOptions, mostLikelyQueryOptions } from '@/lib/api'
-import type { BestPlay, MostLikely } from '@/lib/types'
+import { bestPlaysQueryOptions, hitRatesQueryOptions, mostLikelyQueryOptions } from '@/lib/api'
+import type { BestPlay, HitRate, MostLikely } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican, MARKET_LABEL, teamForSide } from '@/lib/odds'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
-// ── the bar a line must clear ─────────────────────────────────────────────────
+// ── the bar a line must clear (KEEP IN SYNC with ingester/commands/picks.py) ──
 // A line only makes the board when the model and the price BOTH say yes:
 //   · de-vigged edge (model − fair) of at least MIN_EDGE
 //   · expected value at the best price of at least MIN_EV
 //   · model probability ≥ MIN_MODEL_PROB — below that, a couple points of model
 //     error flips the math, so longshots must show an outsized LONGSHOT_EDGE
-//   · edge ≤ MAX_EDGE — when model and market disagree by 25+ points, the smart
-//     read is model error or a stale line, not free money
+//   · edge ≤ MAX_EDGE — when model and market disagree by more, the smart read
+//     is model error or a stale line, not free money (tightened 0.25 → 0.15
+//     after the 0/3 day, whose misses were all 18–21pt "edges")
 //   · a totals lean is vetoed if the Monte-Carlo game sim lands on the other side
-//   · pitcher props are excluded entirely — backtests show no model edge there
+//   · pitcher props are excluded — backtests show no model edge there; the 'hit'
+//     market is excluded too (H≥1 has near-zero skill signal) pending the
+//     scoring loop's band calibration
+//   · an HR prop must not contradict the hit-rate traffic light (season clear
+//     rate, n ≥ 15): no overs on red, no unders on green
 // One pick per game, MAX_PICKS at most. When nothing qualifies, we say so.
 const MIN_EDGE = 0.04
-const MAX_EDGE = 0.25
+const MAX_EDGE = 0.15
 const MIN_EV = 0.05
 const MIN_MODEL_PROB = 0.4
 const LONGSHOT_EDGE = 0.08
 const STRONG_EDGE = 0.06
 const MAX_PICKS = 3
-const EXCLUDED_MARKETS = new Set(['pitcher_k', 'pitcher_outs'])
+const EXCLUDED_MARKETS = new Set(['pitcher_k', 'pitcher_outs', 'hit'])
+const HIT_RATE_VETO_MIN_N = 15
+const HIT_RATE_VETO_OVER_BELOW = 0.45
+const HIT_RATE_VETO_UNDER_ABOVE = 0.65
 
 interface ModelPick {
   play: BestPlay
@@ -76,7 +84,22 @@ function simPropNote(p: BestPlay, sim: MostLikely | undefined): string | null {
   } leaderboard today.`
 }
 
-function buildPicks(plays: BestPlay[], sim: MostLikely | undefined): ModelPick[] {
+// A prop that contradicts the player's season clear rate (the hit-rate traffic
+// light) needs more than a model-market gap: no overs on red, no unders on green.
+function hitRateVeto(p: BestPlay, hitRates: Map<string, HitRate> | undefined): boolean {
+  if (!hitRates || p.playerId == null) return false
+  const hr = hitRates.get(`${p.playerId}:${p.market}`)
+  if (!hr || hr.season == null || hr.nSeason < HIT_RATE_VETO_MIN_N) return false
+  if (p.side === 'over') return hr.season < HIT_RATE_VETO_OVER_BELOW
+  if (p.side === 'under') return hr.season > HIT_RATE_VETO_UNDER_ABOVE
+  return false
+}
+
+function buildPicks(
+  plays: BestPlay[],
+  sim: MostLikely | undefined,
+  hitRates: Map<string, HitRate> | undefined,
+): ModelPick[] {
   const candidates: ModelPick[] = []
 
   for (const p of plays) {
@@ -86,6 +109,7 @@ function buildPicks(plays: BestPlay[], sim: MostLikely | undefined): ModelPick[]
     if (edge < MIN_EDGE || edge > MAX_EDGE) continue
     if (p.evPct < MIN_EV) continue
     if (p.modelProb < MIN_MODEL_PROB && edge < LONGSHOT_EDGE) continue
+    if (hitRateVeto(p, hitRates)) continue
 
     const totals = simTotalsCheck(p, sim)
     if (totals.veto) continue
@@ -262,9 +286,13 @@ function Skeleton({ className = '' }: { className?: string }) {
 export function ModelPicks() {
   const { data: plays, isPending, isError } = useQuery(bestPlaysQueryOptions(undefined, 100))
   const { data: sim } = useQuery(mostLikelyQueryOptions())
+  const { data: hitRateData } = useQuery(hitRatesQueryOptions())
 
   const rows = plays ?? []
-  const picks = buildPicks(rows, sim)
+  const hitRates = new Map<string, HitRate>(
+    (hitRateData ?? []).map((h) => [`${h.playerId}:${h.market}`, h]),
+  )
+  const picks = buildPicks(rows, sim, hitRates)
 
   return (
     <section className="mb-10">

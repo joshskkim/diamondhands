@@ -22,14 +22,26 @@ from ingester.db import eastern_today, get_connection
 from ingester.projection.constants import MODEL_VERSION
 
 # ── the bar (mirror of model-picks.tsx) ──────────────────────────────────────
+# Interim tightening (Jun 2026), pending evidence-based recalibration once the
+# scoring loop accrues 2–3 weeks of band data:
+#   · MAX_EDGE 0.25 → 0.15 — the 0/3 day's misses were 18–21pt "edges"; at that
+#     level of disagreement the smart read is model error, not free money.
+#   · 'hit' excluded — backtests show H≥1 has near-zero skill signal, so
+#     model−market gaps there are mostly noise. HR (where the model has a
+#     validated edge) and game markets stay.
+#   · HR props must not contradict the hit-rate traffic light (season clear
+#     rate, n≥15): no overs on red, no unders on green.
 MIN_EDGE = 0.04
-MAX_EDGE = 0.25
+MAX_EDGE = 0.15
 MIN_EV = 0.05
 MIN_MODEL_PROB = 0.40
 LONGSHOT_EDGE = 0.08
 STRONG_EDGE = 0.06
 MAX_PICKS = 3
-EXCLUDED_MARKETS = {"pitcher_k", "pitcher_outs"}
+EXCLUDED_MARKETS = {"pitcher_k", "pitcher_outs", "hit"}
+HIT_RATE_VETO_MIN_N = 15      # season sample needed before the traffic light can veto
+HIT_RATE_VETO_OVER_BELOW = 0.45   # no prop OVER when the season clear rate is red
+HIT_RATE_VETO_UNDER_ABOVE = 0.65  # no prop UNDER when the season clear rate is green
 
 DEFAULT_API = "http://localhost:8080"
 
@@ -69,7 +81,27 @@ def _sim_corroborates(play: dict, sim: dict | None) -> bool:
     return False
 
 
-def build_picks(plays: list[dict], sim: dict | None) -> list[dict]:
+def _hit_rate_veto(play: dict, hit_rates: dict | None) -> bool:
+    """Veto a prop that contradicts the player's season clear rate (traffic light).
+
+    An OVER on a player who clears the line under HIT_RATE_VETO_OVER_BELOW of the
+    time (red), or an UNDER on one who clears it over HIT_RATE_VETO_UNDER_ABOVE
+    (green), needs more than a model-market gap to justify. No data → no veto.
+    """
+    if not hit_rates or play.get("playerId") is None:
+        return False
+    hr = hit_rates.get(f"{play['playerId']}:{play['market']}")
+    if hr is None or hr.get("season") is None or hr.get("nSeason", 0) < HIT_RATE_VETO_MIN_N:
+        return False
+    if play["side"] == "over":
+        return hr["season"] < HIT_RATE_VETO_OVER_BELOW
+    if play["side"] == "under":
+        return hr["season"] > HIT_RATE_VETO_UNDER_ABOVE
+    return False
+
+
+def build_picks(plays: list[dict], sim: dict | None,
+                hit_rates: dict | None = None) -> list[dict]:
     """Apply the Model's Picks bar; returns at most MAX_PICKS plays, board order."""
     candidates: list[tuple[float, dict, float, bool]] = []
     for p in plays:
@@ -83,6 +115,8 @@ def build_picks(plays: list[dict], sim: dict | None) -> list[dict]:
         if p["modelProb"] < MIN_MODEL_PROB and edge < LONGSHOT_EDGE:
             continue
         if _sim_totals_veto(p, sim):
+            continue
+        if _hit_rate_veto(p, hit_rates):
             continue
         corroborated = _sim_corroborates(p, sim)
         score = edge + 0.5 * p["evPct"] + (0.02 if corroborated else 0.0)
@@ -112,8 +146,14 @@ def cmd_record_picks(args: argparse.Namespace) -> None:
     except Exception as exc:  # noqa: BLE001 — sim is a corroborator, not a requirement
         print(f"[record-picks] sim unavailable ({exc}); recording without the sim veto")
         sim = None
+    try:
+        hit_rates = {f"{h['playerId']}:{h['market']}": h
+                     for h in _get_json(f"{api}/api/odds/hit-rates?date={slate}")}
+    except Exception as exc:  # noqa: BLE001 — like the sim, a veto source, not a requirement
+        print(f"[record-picks] hit-rates unavailable ({exc}); recording without that veto")
+        hit_rates = None
 
-    picks = build_picks(plays, sim)
+    picks = build_picks(plays, sim, hit_rates)
 
     conn = get_connection()
     try:
