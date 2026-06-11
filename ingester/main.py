@@ -48,6 +48,7 @@ from ingester.commands.pitch_aggregations import (
 )
 from ingester.commands.backtest import cmd_backtest
 from ingester.commands.accuracy import cmd_compute_accuracy
+from ingester.commands.picks import cmd_record_picks, cmd_score_picks
 from ingester.ml.dataset import cmd_build_training_data
 from ingester.ml.train import cmd_train_xgb, cmd_tune_blend
 from ingester.ml.perpa import cmd_train_pa
@@ -324,8 +325,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_daily.add_argument("--season", type=int, default=2025, help="Season year for skills (default: 2025)")
     p_daily.add_argument(
-        "--model", choices=["mechanistic", "xgb", "blend"], default="blend",
-        help="Probability source for project (default: blend)",
+        "--model", choices=["mechanistic", "xgb", "blend"], default="mechanistic",
+        help="Probability source for project (default: mechanistic — the backtest-validated path)",
     )
     p_daily.add_argument(
         "--skip-skills", action="store_true", default=False, dest="skip_skills",
@@ -375,6 +376,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Slate date to score (default: yesterday in US/Eastern — actuals exist by then)",
     )
 
+    p_rec_picks = sub.add_parser(
+        "record-picks",
+        help="Persist today's Model's Picks server-side (same bar as the home board)",
+    )
+    p_rec_picks.add_argument(
+        "--date", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+        help="Slate date (default: today in US/Eastern)",
+    )
+    p_rec_picks.add_argument(
+        "--api", default=None,
+        help="API base URL serving /api/odds/best (default: http://localhost:8080)",
+    )
+
+    p_score_picks = sub.add_parser(
+        "score-picks",
+        help="Grade a prior slate's recorded Model's Picks against actual results",
+    )
+    p_score_picks.add_argument(
+        "--date", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+        help="Slate date to score (default: yesterday in US/Eastern)",
+    )
+
     sub.add_parser("smoke",        help="DB connectivity sanity check")
     sub.add_parser("smoke-skills", help="Print top batters/pitchers from skill tables")
     p_smoke_slate    = sub.add_parser("smoke-slate",    help="Print today's slate with weather and probables")
@@ -401,9 +424,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use skill snapshots as of this date (backtest mode)",
     )
     p_project.add_argument(
-        "--model", choices=["mechanistic", "xgb", "blend"], default="blend",
-        help="Probability source for live projections: blend (default; per-market "
-             "w*mech+(1-w)*xgb, falls back to mechanistic if models missing), xgb, or mechanistic",
+        "--model", choices=["mechanistic", "xgb", "blend"], default="mechanistic",
+        # Default flipped blend -> mechanistic (Jun 2026): the blend's weights were tuned
+        # on the pre-v2.4 model and hand batter props ~100% to a stale XGB whose live
+        # output degenerated (quantized probs ~15pts under market -> phantom edges; the
+        # 0/3 Model's Picks day). Backtests validate the MECHANISTIC path; serve that.
+        # Re-enable blend only after retraining + re-tuning + live validation.
+        help="Probability source for live projections: mechanistic (default; the "
+             "backtest-validated path), xgb, or blend (per-market w*mech+(1-w)*xgb)",
     )
     p_project.add_argument(
         "--no-calibrate", action="store_true", default=False, dest="no_calibrate",
@@ -449,6 +477,8 @@ COMMANDS = {
     "refresh-odds":             cmd_refresh_odds,
     "backtest":                 cmd_backtest,
     "compute-accuracy":         cmd_compute_accuracy,
+    "record-picks":             cmd_record_picks,
+    "score-picks":              cmd_score_picks,
     "smoke":                    cmd_smoke,
     "smoke-skills":             cmd_smoke_skills,
     "smoke-slate":              cmd_smoke_slate,

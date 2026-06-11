@@ -1045,46 +1045,43 @@ def _upsert_game_sim_projection(
 
 def _clear_slate_projections(conn: psycopg.Connection, game_date: date) -> int:
     """
-    Drop projections for the slate date and any earlier date before recomputing.
+    Drop projections for THIS slate date only, before recomputing it.
 
-    The write path has no DELETE, so batter_projections / game_projections rows from
-    prior days pile up: each day's slate has fresh game_ids, so the (game_id, player_id)
-    PK never collides and old rows are never overwritten. A player then appears once per
-    past day in any cross-day query — the "duplicate rows" bug. We recompute the entire
-    slate from scratch on every run, so it is safe to clear:
+    Clearing the target date keeps re-runs idempotent (and drops a batter who fell
+    out of a now-confirmed lineup). Prior dates are intentionally PRESERVED: they are
+    the model's track record — `compute-accuracy` (daily_accuracy) and `score-picks`
+    score yesterday's slate by joining these rows to actuals the next morning. An
+    earlier version deleted `game_date <= slate` "to phase out stale rows", which
+    destroyed yesterday's evidence every morning and left daily_accuracy permanently
+    empty. Cross-day queries must filter by game date rather than assume one slate.
 
-      * the current date — makes re-runs idempotent and drops a batter who fell out of a
-        (now confirmed) lineup, and
-      * strictly-earlier dates — phases out the accumulated stale rows.
-
-    Future-dated projections, if any were ever written, are left untouched. Returns the
-    number of batter_projections rows removed (for logging).
+    Returns the number of batter_projections rows removed (for logging).
     """
     deleted = conn.execute(
         """
         DELETE FROM batter_projections
-        WHERE game_id IN (SELECT id FROM games WHERE game_date <= %s)
+        WHERE game_id IN (SELECT id FROM games WHERE game_date = %s)
         """,
         (game_date,),
     ).rowcount
     conn.execute(
         """
         DELETE FROM game_projections
-        WHERE game_id IN (SELECT id FROM games WHERE game_date <= %s)
+        WHERE game_id IN (SELECT id FROM games WHERE game_date = %s)
         """,
         (game_date,),
     )
     conn.execute(
         """
         DELETE FROM pitcher_projections
-        WHERE game_id IN (SELECT id FROM games WHERE game_date <= %s)
+        WHERE game_id IN (SELECT id FROM games WHERE game_date = %s)
         """,
         (game_date,),
     )
     conn.execute(
         """
         DELETE FROM game_sim_projections
-        WHERE game_id IN (SELECT id FROM games WHERE game_date <= %s)
+        WHERE game_id IN (SELECT id FROM games WHERE game_date = %s)
         """,
         (game_date,),
     )
@@ -1557,6 +1554,44 @@ def create_adhoc_backtest_run(
     return int(row[0])
 
 
+# ── Degeneracy guard (Jun 2026) ───────────────────────────────────────────────
+# A healthy slate's market probabilities are continuous: every batter's rates ×
+# expected PA differ. When a large share of the slate lands on ONE identical
+# probability, the source is emitting constants — exactly what the stale XGB blend
+# did on live 2026 features (72/267 rows at p_hit_1plus=0.5600, 26 at 0.3860,
+# ~15pts below market → phantom "hit under" edges → the 0/3 Model's Picks day).
+# Mechanistic output can't trip this: only real-skill batters are upserted, so
+# probabilities never collapse onto a single value at this share.
+DEGENERACY_MIN_ROWS: int = 80      # don't judge tiny slates
+DEGENERACY_TOP_SHARE: float = 0.25  # share of rows on one identical p_hit_1plus
+
+
+def is_degenerate_slate(n_rows: int, top_count: int) -> bool:
+    """True when one identical p_hit_1plus value covers too much of the slate."""
+    if n_rows < DEGENERACY_MIN_ROWS:
+        return False
+    return (top_count / n_rows) >= DEGENERACY_TOP_SHARE
+
+
+def _slate_prob_concentration(conn: psycopg.Connection, game_date: date) -> tuple[int, int, float | None]:
+    """(total rows, count of the most repeated p_hit_1plus, that value) for a slate."""
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(cnt), 0), COALESCE(MAX(cnt), 0),
+               (ARRAY_AGG(p ORDER BY cnt DESC))[1]
+        FROM (
+            SELECT bp.p_hit_1plus AS p, COUNT(*) AS cnt
+            FROM batter_projections bp
+            JOIN games g ON g.id = bp.game_id
+            WHERE g.game_date = %s AND bp.p_hit_1plus IS NOT NULL
+            GROUP BY bp.p_hit_1plus
+        ) t
+        """,
+        (game_date,),
+    ).fetchone()
+    return int(row[0]), int(row[1]), float(row[2]) if row[2] is not None else None
+
+
 def cmd_project(args: argparse.Namespace) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     game_date = args.date if args.date is not None else eastern_today()
@@ -1603,6 +1638,22 @@ def cmd_project(args: argparse.Namespace) -> None:
         conn = get_connection()
         try:
             summary = run_projections(conn, game_date, bundle=bundle)
+
+            # Degeneracy guard: if the prob source emitted constants across a large
+            # share of the slate, the numbers are garbage — and if an ML bundle
+            # produced them, recompute mechanistically rather than serve them.
+            n_rows, top_count, top_value = _slate_prob_concentration(conn, game_date)
+            if is_degenerate_slate(n_rows, top_count):
+                share = top_count / n_rows
+                print(
+                    f"[project] ⚠ DEGENERATE OUTPUT: {top_count}/{n_rows} batters "
+                    f"({share:.0%}) share p_hit_1plus={top_value} — probability source "
+                    f"is emitting constants, not projections."
+                )
+                if bundle is not None:
+                    print("[project] ⚠ Falling back to mechanistic and recomputing the slate.")
+                    summary = run_projections(conn, game_date, bundle=None)
+
             conn.commit()
         except Exception:
             conn.rollback()

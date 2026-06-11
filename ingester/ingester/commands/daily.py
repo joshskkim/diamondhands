@@ -18,25 +18,47 @@ from datetime import timedelta
 
 from ingester.db import eastern_today
 from ingester.commands.accuracy import cmd_compute_accuracy
+from ingester.commands.backfill_stats import cmd_backfill_stats
 from ingester.commands.daily_slate import cmd_daily_slate
+from ingester.commands.picks import cmd_record_picks, cmd_score_picks
 from ingester.commands.refresh_weather import cmd_refresh_weather
 from ingester.commands.refresh_umpires import cmd_refresh_umpires
 from ingester.commands.refresh_skills import cmd_refresh_skills
 from ingester.commands.refresh_bullpen import cmd_refresh_bullpen
 from ingester.commands.lineups import cmd_refresh_lineups
 from ingester.commands.odds import cmd_refresh_odds
+from ingester.commands.scores import cmd_backfill_scores
 from ingester.projection.runner import cmd_project
 
 
 def cmd_daily(args: argparse.Namespace) -> None:
     target = args.date if getattr(args, "date", None) is not None else eastern_today()
 
-    def _score_prior_slate(_args: argparse.Namespace) -> None:
-        """Score the PRIOR slate's accuracy: today's games have no actuals yet,
-        but yesterday's are final, so daily_accuracy stays one day behind."""
+    def _close_prior_slate(_args: argparse.Namespace) -> None:
+        """Close the books on the PRIOR slate (its actuals exist by now):
+        ingest final scores + player stats, grade the recorded picks, and write
+        the daily_accuracy snapshot. Substeps are individually guarded so one
+        flaky source doesn't lose the rest; props that still lack player stats
+        stay pending and are retried on the next nightly run.
+
+        This ordering matters: project preserves prior-slate projections
+        (_clear_slate_projections deletes only the target date), so the rows
+        compute-accuracy joins against are still there."""
         prior = copy.copy(_args)
         prior.date = target - timedelta(days=1)
-        cmd_compute_accuracy(prior)
+        prior.start = prior.date
+        prior.end = prior.date
+        prior.season = prior.date.year
+        for name, fn in (
+            ("backfill-scores", cmd_backfill_scores),
+            ("backfill-stats", cmd_backfill_stats),
+            ("score-picks", cmd_score_picks),
+            ("compute-accuracy", cmd_compute_accuracy),
+        ):
+            try:
+                fn(prior)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[daily]   ⚠ close-prior-slate/{name} failed: {exc} — continuing")
 
     # Build the ordered step list. --quick is the afternoon re-projection loop
     # (lineups trickle in, project clears+recomputes the slate); --skip-skills
@@ -49,6 +71,7 @@ def cmd_daily(args: argparse.Namespace) -> None:
             ("refresh-lineups", cmd_refresh_lineups, False),
             ("project", cmd_project, True),
             ("refresh-odds", cmd_refresh_odds, False),
+            ("record-picks", cmd_record_picks, False),
         ]
     else:
         steps = [
@@ -60,7 +83,8 @@ def cmd_daily(args: argparse.Namespace) -> None:
             ("refresh-lineups", cmd_refresh_lineups, False),
             ("project", cmd_project, True),
             ("refresh-odds", cmd_refresh_odds, False),
-            ("compute-accuracy (prior slate)", _score_prior_slate, False),
+            ("record-picks", cmd_record_picks, False),
+            ("close prior slate (scores+stats+picks+accuracy)", _close_prior_slate, False),
         ]
         if getattr(args, "skip_skills", False):
             # Both skills and bullpen do the slow Statcast-cache re-aggregation.
