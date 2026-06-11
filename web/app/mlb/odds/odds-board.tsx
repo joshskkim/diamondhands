@@ -6,18 +6,16 @@ import { useQuery } from '@tanstack/react-query'
 import { bestPlaysQueryOptions, hitRatesQueryOptions } from '@/lib/api'
 import type { BestPlay, HitRate } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { MARKET_LABEL, teamForSide } from '@/lib/odds'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
-const MARKET_LABEL: Record<string, string> = {
-  moneyline: 'Moneyline',
-  run_line: 'Run line',
-  total: 'Total',
-  hit: 'Hit',
-  hr: 'Home run',
-  pitcher_k: 'Strikeouts',
-  pitcher_outs: 'Outs',
-}
+// The default view only shows lines we'd actually consider: the model makes the
+// side at least this likely AND it carries a positive de-vigged edge — capped at
+// the top few per market so one prop type (hits) can't flood the board. The
+// toggles re-reveal everything else.
+const MIN_MODEL_PROB = 0.5
+const LIKED_PER_MARKET = 5
 
 function amer(n: number) {
   return n > 0 ? `+${n}` : `${n}`
@@ -81,13 +79,6 @@ function HitRateCell({ hr }: { hr: HitRate | undefined }) {
   )
 }
 
-// "AWY @ HOM" → team abbr for a home/away side.
-function teamForSide(matchup: string, side: string): string {
-  const parts = matchup.split(' @ ')
-  if (parts.length !== 2) return side
-  return side === 'home' ? parts[1] : parts[0]
-}
-
 function sideLabel(r: BestPlay): { text: string; tone: 'over' | 'under' | 'team' } {
   if (r.side === 'over') return { text: 'Over', tone: 'over' }
   if (r.side === 'under') return { text: 'Under', tone: 'under' }
@@ -111,11 +102,43 @@ const SIDE_TONE: Record<'over' | 'under' | 'team', string> = {
   team: 'bg-cyan-500/10 text-cyan-300 border-cyan-400/30',
 }
 
-// Positive-edge plays are the point of the board; let the user hide the rest.
-type Filter = 'positive' | 'all'
+// Tiered filters: what we like (model% floor + edge) → any positive edge → everything.
+type Filter = 'liked' | 'positive' | 'all'
+
+function isLiked(r: BestPlay): boolean {
+  const edge = edgeOf(r)
+  return edge != null && edge > 0 && r.modelProb >= MIN_MODEL_PROB
+}
+
+function isPositive(r: BestPlay): boolean {
+  return (edgeOf(r) ?? r.evPct) > 0
+}
+
+// Liked rows, best edge first, at most LIKED_PER_MARKET from any one market.
+function likedRows(rows: BestPlay[]): BestPlay[] {
+  const byMarket = new Map<string, BestPlay[]>()
+  for (const r of rows) {
+    if (!isLiked(r)) continue
+    const list = byMarket.get(r.market) ?? []
+    list.push(r)
+    byMarket.set(r.market, list)
+  }
+  const out: BestPlay[] = []
+  for (const list of byMarket.values()) {
+    list.sort((a, b) => (edgeOf(b) ?? 0) - (edgeOf(a) ?? 0))
+    out.push(...list.slice(0, LIKED_PER_MARKET))
+  }
+  return out.sort((a, b) => (edgeOf(b) ?? 0) - (edgeOf(a) ?? 0))
+}
+
+const EMPTY_MESSAGE: Record<Filter, string> = {
+  liked: `Nothing clears the bar right now (model ≥ ${MIN_MODEL_PROB * 100}% with a positive edge) — widen to +Edge or All to see the rest of the board.`,
+  positive: 'No positive-edge plays right now.',
+  all: 'No plays on the board.',
+}
 
 export function OddsBoard() {
-  const [filter, setFilter] = useState<Filter>('positive')
+  const [filter, setFilter] = useState<Filter>('liked')
   const { data, isPending, isError } = useQuery(bestPlaysQueryOptions(undefined, 100))
   const { data: hitRateData } = useQuery(hitRatesQueryOptions())
 
@@ -127,7 +150,15 @@ export function OddsBoard() {
   }, [hitRateData])
 
   const rows: BestPlay[] = data ?? []
-  const shown = filter === 'positive' ? rows.filter((r) => (edgeOf(r) ?? r.evPct) > 0) : rows
+  const liked = likedRows(rows)
+  const shown = filter === 'liked' ? liked : filter === 'positive' ? rows.filter(isPositive) : rows
+
+  const filterLabel = (f: Filter) =>
+    f === 'liked'
+      ? `What we like (${liked.length})`
+      : f === 'positive'
+        ? `+Edge (${rows.filter(isPositive).length})`
+        : `All (${rows.length})`
 
   return (
     <main className="max-w-6xl mx-auto px-4 py-8">
@@ -139,12 +170,15 @@ export function OddsBoard() {
         <span className="text-zinc-200">fair</span> (no-vig) market probability. We strip the
         bookmaker&apos;s margin out of both sides before comparing, so a juiced favorite no longer
         makes its opposite side look like free money. Game markets use a Poisson run model; hit/HR
-        use the batter projections.
+        use the batter projections. By default we only show{' '}
+        <span className="text-zinc-200">what we like</span>: sides the model makes at least{' '}
+        {MIN_MODEL_PROB * 100}% likely with a positive edge, capped at the top{' '}
+        {LIKED_PER_MARKET} per market.
       </p>
 
       <div className="flex items-center gap-2 mb-4">
         <span className={microLabel}>Show</span>
-        {(['positive', 'all'] as const).map((f) => (
+        {(['liked', 'positive', 'all'] as const).map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}
@@ -155,7 +189,7 @@ export function OddsBoard() {
                 : 'bg-white/5 text-zinc-400 border-white/10 hover:text-zinc-200 hover:border-white/20',
             )}
           >
-            {f === 'positive' ? '+Edge only' : 'All'}
+            {filterLabel(f)}
           </button>
         ))}
       </div>
@@ -270,7 +304,7 @@ export function OddsBoard() {
             </table>
           </div>
           {shown.length === 0 && (
-            <p className="px-4 py-6 text-sm text-zinc-500">No positive-edge plays right now.</p>
+            <p className="px-4 py-6 text-sm text-zinc-500">{EMPTY_MESSAGE[filter]}</p>
           )}
         </div>
       )}

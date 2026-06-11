@@ -36,3 +36,21 @@ export function bookLabel(book: string | null | undefined): string {
   if (!book) return ''
   return BOOK_LABELS[book] ?? book
 }
+
+/** Display label for a market key on the odds boards. */
+export const MARKET_LABEL: Record<string, string> = {
+  moneyline: 'Moneyline',
+  run_line: 'Run line',
+  total: 'Total',
+  hit: 'Hit',
+  hr: 'Home run',
+  pitcher_k: 'Strikeouts',
+  pitcher_outs: 'Outs',
+}
+
+/** "AWY @ HOM" → team abbr for a 'home'/'away' side token. */
+export function teamForSide(matchup: string, side: string): string {
+  const parts = matchup.split(' @ ')
+  if (parts.length !== 2) return side
+  return side === 'home' ? parts[1] : parts[0]
+}

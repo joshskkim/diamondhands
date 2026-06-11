@@ -1,8 +1,6 @@
-import type { Metadata } from 'next'
-import { MostLikelyBoard } from './most-likely-board'
+import { redirect } from 'next/navigation'
 
-export const metadata: Metadata = { title: 'Most Likely' }
-
+// The Most Likely board now lives on Today's Board (home).
 export default function MostLikelyPage() {
-  return <MostLikelyBoard />
+  redirect('/')
 }
