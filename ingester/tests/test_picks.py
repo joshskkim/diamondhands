@@ -1,0 +1,82 @@
+"""Unit tests for Model's Picks recording/scoring + the degeneracy guard."""
+from __future__ import annotations
+
+import unittest
+
+from ingester.commands.picks import MAX_PICKS, _grade, build_picks
+from ingester.projection.runner import DEGENERACY_MIN_ROWS, is_degenerate_slate
+
+
+def play(game_id=1, market="hit", side="over", line=0.5, model=0.60, fair=0.50,
+         ev=0.10, player_id=10, name="A B"):
+    return {
+        "gameId": game_id, "market": market, "side": side, "line": line,
+        "modelProb": model, "fairProb": fair, "evPct": ev,
+        "playerId": player_id, "playerName": name, "matchup": "AWY @ HOM",
+        "priceAmerican": -110, "bestBook": "betrivers",
+    }
+
+
+class TestBuildPicks(unittest.TestCase):
+    def test_bar_filters(self):
+        plays = [
+            play(game_id=1, model=0.60, fair=0.50, ev=0.10),       # qualifies
+            play(game_id=2, model=0.52, fair=0.50, ev=0.10),       # edge 2pt < 4pt
+            play(game_id=3, model=0.90, fair=0.55, ev=0.30),       # edge 35pt > 25pt cap
+            play(game_id=4, model=0.60, fair=0.50, ev=0.02),       # EV < 5%
+            play(game_id=5, market="pitcher_k", model=0.7, fair=0.5, ev=0.2),  # excluded
+            play(game_id=6, model=0.35, fair=0.30, ev=0.10),       # longshot, edge 5 < 8
+            {**play(game_id=7), "fairProb": None},                  # one-sided, no de-vig
+        ]
+        picks = build_picks(plays, sim=None)
+        self.assertEqual([p["gameId"] for p in picks], [1])
+
+    def test_one_per_game_and_max(self):
+        plays = [play(game_id=g, model=0.60 + g * 0.001, fair=0.50, ev=0.10,
+                      player_id=g) for g in range(1, 6)]
+        plays.append(play(game_id=1, model=0.70, fair=0.55, ev=0.20, player_id=99))
+        picks = build_picks(plays, sim=None)
+        self.assertEqual(len(picks), MAX_PICKS)
+        self.assertEqual(len({p["gameId"] for p in picks}), MAX_PICKS)
+
+    def test_sim_totals_veto(self):
+        total = play(game_id=1, market="total", side="under", line=9.0,
+                     model=0.65, fair=0.50, ev=0.15, player_id=None, name=None)
+        sim_against = {"totals": [{"gameId": 1, "simTotal": 9.8}], "props": {}}
+        sim_with = {"totals": [{"gameId": 1, "simTotal": 8.1}], "props": {}}
+        self.assertEqual(build_picks([total], sim_against), [])
+        self.assertEqual(len(build_picks([total], sim_with)), 1)
+
+
+class TestGrade(unittest.TestCase):
+    def test_total(self):
+        self.assertEqual(_grade("total", "under", 9.0, 6, 4, None), (10.0, False))
+        self.assertEqual(_grade("total", "under", 9.0, 4, 4, None), (8.0, True))
+        self.assertEqual(_grade("total", "over", 9.0, 5, 4, None), (9.0, None))  # push
+
+    def test_moneyline_and_run_line(self):
+        self.assertEqual(_grade("moneyline", "away", None, 3, 4, None), (1.0, True))
+        # home -1.5 covers only on a 2+ run win
+        self.assertEqual(_grade("run_line", "home", -1.5, 5, 3, None)[1], True)
+        self.assertEqual(_grade("run_line", "home", -1.5, 4, 3, None)[1], False)
+        # away +1.5 covers a 1-run loss
+        self.assertEqual(_grade("run_line", "away", 1.5, 4, 3, None)[1], True)
+
+    def test_props(self):
+        self.assertEqual(_grade("hit", "under", 1.5, 0, 0, 2), (2.0, False))
+        self.assertEqual(_grade("hr", "over", 0.5, 0, 0, 1), (1.0, True))
+        self.assertEqual(_grade("hit", "over", 0.5, 0, 0, None), (None, None))
+
+
+class TestDegeneracyGuard(unittest.TestCase):
+    def test_thresholds(self):
+        # Yesterday's actual blend slate: 72 of 267 on one value → degenerate.
+        self.assertTrue(is_degenerate_slate(267, 72))
+        # A healthy mechanistic slate: top duplicate is a handful of rows.
+        self.assertFalse(is_degenerate_slate(267, 9))
+        # Small slates are never judged.
+        self.assertFalse(is_degenerate_slate(DEGENERACY_MIN_ROWS - 1, 40))
+
+
+if __name__ == "__main__":
+    unittest.main()
