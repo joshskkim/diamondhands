@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Matches DiamondMark: cyan→blue gradient diamond on the app's dark background -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22d3ee" />
+      <stop offset="1" stop-color="#3b82f6" />
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="0" stdDeviation="2" flood-color="#22d3ee" flood-opacity="0.7" />
+    </filter>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="#08090d" />
+  <polygon points="16,5 27,16 16,27 5,16" fill="url(#g)" filter="url(#glow)" />
+</svg>
