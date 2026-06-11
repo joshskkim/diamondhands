@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { format } from 'date-fns'
 import { ModelPicks } from '@/components/home/model-picks'
+import { PropBoard } from '@/components/home/prop-board'
 import { SimBoards } from '@/components/home/sim-boards'
 import { SlateProjectionsChart } from '@/components/home/slate-projections-chart'
 import { GameSelectorBar } from '@/components/game/game-selector-bar'
@@ -48,6 +49,9 @@ export default function SlatePage() {
         <>
           {/* the model's curated 1–3 lines (or an honest pass) */}
           <ModelPicks />
+
+          {/* odds-independent: the most likely batter per prop market, with reasons */}
+          <PropBoard />
 
           {/* condensed game-sim leans (formerly the Most Likely page) */}
           <SimBoards />
