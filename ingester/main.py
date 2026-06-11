@@ -39,6 +39,7 @@ from ingester.commands.refresh_umpires import cmd_refresh_umpires
 from ingester.commands.refresh_skills import cmd_refresh_skills
 from ingester.commands.refresh_priors import cmd_refresh_priors
 from ingester.commands.backfill_birthdates import cmd_backfill_birthdates
+from ingester.commands.ingest_steamer import cmd_ingest_steamer
 from ingester.commands.refresh_bullpen import cmd_refresh_bullpen
 from ingester.commands.refresh_batted_ball import cmd_refresh_batted_ball
 from ingester.commands.skill_snapshots import cmd_refresh_skill_snapshots
@@ -175,6 +176,14 @@ def build_parser() -> argparse.ArgumentParser:
         "backfill-birthdates", help="Populate players.birth_date from the MLB Stats API (aging curve)"
     )
     p_birth.add_argument("--all", action="store_true", default=False, help="Refresh every player, not just NULLs")
+
+    p_steamer = sub.add_parser(
+        "ingest-steamer",
+        help="Load a FanGraphs Steamer projection CSV into batter_projection_prior (true-talent prior)",
+    )
+    p_steamer.add_argument("--csv", required=True, metavar="PATH", help="Steamer batter projections CSV export")
+    p_steamer.add_argument("--season", type=int, default=2026, help="Target season year (default: 2026)")
+    p_steamer.add_argument("--method", default="steamer", help="Tag stored in batter_projection_prior.method")
 
     p_bullpen = sub.add_parser(
         "refresh-bullpen", help="Aggregate per-team relief-pitching skill into bullpen_skill"
@@ -460,6 +469,7 @@ COMMANDS = {
     "refresh-skills":           cmd_refresh_skills,
     "refresh-priors":           cmd_refresh_priors,
     "backfill-birthdates":      cmd_backfill_birthdates,
+    "ingest-steamer":           cmd_ingest_steamer,
     "refresh-bullpen":          cmd_refresh_bullpen,
     "refresh-batted-ball":      cmd_refresh_batted_ball,
     "refresh-skill-snapshots":  cmd_refresh_skill_snapshots,
