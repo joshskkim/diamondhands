@@ -23,7 +23,7 @@ function goodHeat(level: 'hi' | 'mid' | 'lo') {
 
 // ── shared card shell ────────────────────────────────────────────────────────
 
-function BoardCard({
+export function BoardCard({
   title,
   blurb,
   children,
@@ -66,7 +66,7 @@ function OddsCell({
   )
 }
 
-function Rank({ n }: { n: number }) {
+export function Rank({ n }: { n: number }) {
   return (
     <span className="w-5 shrink-0 text-right font-mono tabular-nums text-xs text-zinc-600">
       {n}
