@@ -103,6 +103,32 @@ public class OddsRepository {
                  (po.bookmaker = ?) DESC, po.price_decimal DESC
         """;
 
+    // ── Multi-book line shopping (props) ──
+    // Every book's posted price for each prop selection on the slate, best (highest
+    // decimal = best for the bettor) first within a selection, so the service can group
+    // consecutive rows into a per-selection ladder.
+    private static final String PROP_QUOTES_SQL = """
+        SELECT po.game_id, po.player_id, po.market, po.side, po.line,
+               po.bookmaker, po.price_american, po.price_decimal
+        FROM player_prop_odds po
+        JOIN games g ON g.id = po.game_id AND g.game_date = ?
+        ORDER BY po.game_id, po.player_id, po.market, po.side, po.line,
+                 po.price_decimal DESC
+        """;
+
+    public List<PropQuoteRow> findPropQuotes(LocalDate date) {
+        return jdbc.query(PROP_QUOTES_SQL, (rs, n) -> new PropQuoteRow(
+                rs.getLong("game_id"),
+                rs.getInt("player_id"),
+                rs.getString("market"),
+                rs.getString("side"),
+                rs.getBigDecimal("line").doubleValue(),
+                rs.getString("bookmaker"),
+                rs.getInt("price_american"),
+                rs.getBigDecimal("price_decimal").doubleValue()),
+            date);
+    }
+
     // ── Outlier-style hit-rate "traffic light" ──
     // For every batter that has a hit/HR prop on the slate, how often they've cleared
     // that prop's line over their last 5/10/20 games and the current season. The line
@@ -225,4 +251,8 @@ public class OddsRepository {
         int playerId, String market, double line,
         Double l5, Double l10, Double l20, int n20,
         Double season, int nSeason) {}
+
+    public record PropQuoteRow(
+        long gameId, int playerId, String market, String side, double line,
+        String bookmaker, int priceAmerican, double priceDecimal) {}
 }

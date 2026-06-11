@@ -33,6 +33,8 @@ from ingester.projection.constants import (
     PARK_GEO_MULT_CLAMP,
     PARK_WALL_DIST_PER_FT,
     PARK_WALL_STD_FT,
+    WEATHER_CARRY_EV_FLOOR_MPH,
+    WEATHER_CARRY_HR_CLAMP,
 )
 from ingester.projection.weather_adj import effective_bats
 
@@ -58,6 +60,18 @@ class BattedBallProfile:
     oppo_pct: float
     fb_pct: float
     avg_launch_speed: float  # mph (exit velocity, all batted balls)
+
+
+# League-average batter, used as the weather-carry fallback for hitters with no
+# batted-ball profile so EVERY batter still gets a (physically-derived) weather HR
+# effect — the v2.6 "full replacement" of the old flat scalar.
+LEAGUE_AVERAGE_PROFILE = BattedBallProfile(
+    pull_pct=LEAGUE_PULL_PCT,
+    center_pct=LEAGUE_CENTER_PCT,
+    oppo_pct=LEAGUE_OPPO_PCT,
+    fb_pct=LEAGUE_FB_PCT,
+    avg_launch_speed=LEAGUE_EV_MPH,
+)
 
 
 @dataclass(frozen=True)
@@ -155,6 +169,52 @@ def personalized_park_hr_mult(
     gate = _clamp(profile.fb_pct / LEAGUE_FB_PCT, (0.0, 1.0))
     geo_mult = 1.0 + gate * (raw_mult - 1.0)
     return _clamp(geo_mult, PARK_GEO_MULT_CLAMP)
+
+
+def weather_carry_hr_mult(
+    geo: ParkGeometry | None,
+    profile: BattedBallProfile | None,
+    hand: str,
+    delta_carry_ft: float,
+) -> float:
+    """Physical weather HR multiplier (v2.6): the change in P(clear the fence) when
+    the day's conditions add ``delta_carry_ft`` to this batter's fly-ball carry.
+
+    Unlike :func:`personalized_park_hr_mult` (a ratio vs the league hitter, so the
+    park/weather cancel), this is the batter's OWN clear-probability with the weather
+    vs without — so the full weather signal survives, but it is now *non-linear* in
+    the batter's power and the park: the same +12 ft helps a warning-track hitter far
+    more than a slap hitter (who never reaches the wall) or a light-tower slugger (who
+    clears it anyway). Replaces the old flat density×wind scalar. Returns 1.0 when
+    there is no weather effect or no geometry/profile.
+    """
+    if geo is None or profile is None or delta_carry_ft == 0.0:
+        return 1.0
+
+    scale = PARK_GEO_LOGISTIC_SCALE_FT
+    carry = _carry_ft(profile.avg_launch_speed)
+    fence = _targeted_fence(
+        geo, hand, profile.pull_pct, profile.center_pct, profile.oppo_pct
+    )
+    s_base = _logistic((carry - fence) / scale)
+    s_today = _logistic((carry + delta_carry_ft - fence) / scale)
+    if s_base <= 0.0:
+        return 1.0
+    raw = s_today / s_base
+
+    # Two gates, both 1.0 at the league-average batter (so the run-env calibration
+    # holds), each pulling the effect toward 1.0 for hitters carry can't help:
+    #   * fly-ball rate — a grounder hitter's HR barely responds to carry;
+    #   * exit velocity — a soft hitter never reaches the wall, so the steep low-tail
+    #     of the logistic (which otherwise inflates their ratio) is damped out.
+    fb_gate = _clamp(profile.fb_pct / LEAGUE_FB_PCT, (0.0, 1.0))
+    power_gate = _clamp(
+        (profile.avg_launch_speed - WEATHER_CARRY_EV_FLOOR_MPH)
+        / (LEAGUE_EV_MPH - WEATHER_CARRY_EV_FLOOR_MPH),
+        (0.0, 1.3),
+    )
+    mult = 1.0 + fb_gate * power_gate * (raw - 1.0)
+    return _clamp(mult, WEATHER_CARRY_HR_CLAMP)
 
 
 def compute_park_adjustments(

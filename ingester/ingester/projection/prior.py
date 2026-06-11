@@ -21,7 +21,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ingester.projection.constants import (
-    MARCEL_REGRESSION_PA,
+    MARCEL_REGRESSION_PA_ISO,
+    MARCEL_REGRESSION_PA_K,
+    MARCEL_REGRESSION_PA_XWOBA,
     MARCEL_SEASON_WEIGHTS,
 )
 
@@ -87,13 +89,16 @@ def compute_marcel_prior(
     league_k_rate: float,
     league_iso: float,
     weights: tuple[int, int, int] = MARCEL_SEASON_WEIGHTS,
-    regression_pa: float = MARCEL_REGRESSION_PA,
+    regression_pa_xwoba: float = MARCEL_REGRESSION_PA_XWOBA,
+    regression_pa_k: float = MARCEL_REGRESSION_PA_K,
+    regression_pa_iso: float = MARCEL_REGRESSION_PA_ISO,
 ) -> ProjectionPrior | None:
     """Project ``target_season`` from the prior three seasons.
 
-    ``weights`` apply to (target-1, target-2, target-3). Returns None when the
-    player has no usable prior-season data at all (a true debutant — the caller
-    should fall back to the league mean for them).
+    ``weights`` apply to (target-1, target-2, target-3). Each metric reverts to its
+    league mean by its own regression constant (K% light, ISO heavy — see constants).
+    Returns None when the player has no usable prior-season data at all (a true
+    debutant — the caller should fall back to the league mean for them).
     """
     # Collect (recency_weight, SeasonLine) for the seasons we actually have.
     present: list[tuple[int, SeasonLine]] = []
@@ -121,8 +126,8 @@ def compute_marcel_prior(
             iso_pairs.append((wpa, iso))
 
     return ProjectionPrior(
-        xwoba=round(_weighted_regress(xwoba_pairs, league_xwoba, regression_pa), 4),
-        k_rate=round(_weighted_regress(k_pairs, league_k_rate, regression_pa), 4),
-        iso=round(_weighted_regress(iso_pairs, league_iso, regression_pa), 4),
+        xwoba=round(_weighted_regress(xwoba_pairs, league_xwoba, regression_pa_xwoba), 4),
+        k_rate=round(_weighted_regress(k_pairs, league_k_rate, regression_pa_k), 4),
+        iso=round(_weighted_regress(iso_pairs, league_iso, regression_pa_iso), 4),
         proj_pa=int(weighted_pa),
     )

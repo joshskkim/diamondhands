@@ -38,6 +38,7 @@ from ingester.commands.refresh_weather import cmd_refresh_weather
 from ingester.commands.refresh_umpires import cmd_refresh_umpires
 from ingester.commands.refresh_skills import cmd_refresh_skills
 from ingester.commands.refresh_priors import cmd_refresh_priors
+from ingester.commands.backfill_birthdates import cmd_backfill_birthdates
 from ingester.commands.refresh_bullpen import cmd_refresh_bullpen
 from ingester.commands.refresh_batted_ball import cmd_refresh_batted_ball
 from ingester.commands.skill_snapshots import cmd_refresh_skill_snapshots
@@ -168,6 +169,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Compute Marcel-style multi-year true-talent priors into batter_projection_prior",
     )
     p_priors.add_argument("--season", type=int, default=2026, help="Target season year (default: 2026)")
+
+    p_birth = sub.add_parser(
+        "backfill-birthdates", help="Populate players.birth_date from the MLB Stats API (aging curve)"
+    )
+    p_birth.add_argument("--all", action="store_true", default=False, help="Refresh every player, not just NULLs")
 
     p_bullpen = sub.add_parser(
         "refresh-bullpen", help="Aggregate per-team relief-pitching skill into bullpen_skill"
@@ -425,6 +431,7 @@ COMMANDS = {
     "refresh-umpires":          cmd_refresh_umpires,
     "refresh-skills":           cmd_refresh_skills,
     "refresh-priors":           cmd_refresh_priors,
+    "backfill-birthdates":      cmd_backfill_birthdates,
     "refresh-bullpen":          cmd_refresh_bullpen,
     "refresh-batted-ball":      cmd_refresh_batted_ball,
     "refresh-skill-snapshots":  cmd_refresh_skill_snapshots,
