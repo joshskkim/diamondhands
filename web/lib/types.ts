@@ -306,6 +306,52 @@ export interface BatterPropOdds {
   priceDecimal: number | null
 }
 
+/**
+ * GET /api/props/board — the model's most likely batter for one prop market
+ * (all 0.5 lines), with the factors that explain the number. Price fields are the
+ * best *cached* over-price and are null whenever odds haven't been pulled; the
+ * pick stands on the model alone.
+ */
+export interface PropBoardPick {
+  /** 'hit' | 'hr' | 'k' */
+  market: string
+  line: number
+  gameId: number
+  matchup: string
+  playerId: number
+  player: string
+  team: string
+  lineupPosition: number | null
+  lineupConfirmed: boolean | null
+  expectedPa: number | null
+  prob: number
+  opposingPitcherId: number | null
+  opposingPitcher: string | null
+  /** 'matchup' | 'overall' | 'league_avg' */
+  pitcherDataQuality: string | null
+  matchupXwoba: number | null
+  /** 'matchup' | 'fallback_overall' */
+  matchupQuality: string | null
+  adjPark: number | null
+  adjPitcher: number | null
+  adjWeather: number | null
+  stadium: string | null
+  rateL10: number | null
+  rateSeason: number | null
+  nSeason: number | null
+  bestBook: string | null
+  priceAmerican: number | null
+  priceDecimal: number | null
+  evPct: number | null
+}
+
+/** GET /api/props/board — model-first prop board for a slate. */
+export interface PropBoard {
+  date: string
+  battersConsidered: number
+  picks: PropBoardPick[]
+}
+
 /** GET /api/players/:playerId */
 export interface PlayerDetail {
   id: number
