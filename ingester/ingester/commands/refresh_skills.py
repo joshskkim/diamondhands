@@ -478,7 +478,7 @@ def _aggregate_batter_platoon_skill(
 # ---------------------------------------------------------------------------
 
 def cmd_refresh_skills(args: argparse.Namespace) -> None:
-    season: int = getattr(args, "season", 2025)
+    season: int = getattr(args, "season", None) or eastern_today().year
 
     require_valid_season(season, cmd="refresh-skills")
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 
-from ingester.db import get_connection
+from ingester.db import eastern_today, get_connection
 from ingester.statcast import agg_batter_batted_ball, pull_statcast_chunks
 
 # Below this many balls in play, the spray/quality split is too noisy to store.
@@ -16,7 +16,7 @@ MIN_BIP = 50
 
 
 def cmd_refresh_batted_ball(args: argparse.Namespace) -> None:
-    season = getattr(args, "season", 2025)
+    season = getattr(args, "season", None) or eastern_today().year
     print(f"[refresh-batted-ball] Aggregating batted-ball profiles for {season}…")
     chunks = list(pull_statcast_chunks(season))
     rows = agg_batter_batted_ball(chunks)

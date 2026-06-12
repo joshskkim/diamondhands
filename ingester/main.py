@@ -57,6 +57,7 @@ from ingester.commands.simulate_eval import cmd_simulate_eval
 from ingester.commands.report import cmd_compare_runs
 from ingester.commands.fit_calibration import cmd_fit_calibration
 from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
+from ingester.db import eastern_today
 from ingester.projection.runner import cmd_project, cmd_smoke_project
 
 
@@ -67,6 +68,13 @@ def _date_arg(s: str) -> date:
         raise argparse.ArgumentTypeError(
             f"Invalid date {s!r} — expected YYYY-MM-DD (e.g. 2026-04-15)"
         )
+
+
+# Default --season for refresh/backfill commands: the season in progress (Eastern
+# clock, so a late-night Pacific run doesn't roll to the wrong year). A hardcoded
+# year here once went stale at the season turnover and silently kept the nightly
+# pipeline aggregating the PRIOR season's skills all spring.
+CURRENT_SEASON = eastern_today().year
 
 
 def cmd_smoke(args: argparse.Namespace) -> None:
@@ -112,7 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     p_backfill = sub.add_parser("backfill-stats", help="Pull historical game logs via pybaseball")
-    p_backfill.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
+    p_backfill.add_argument("--season", type=int, default=CURRENT_SEASON, help="Season year (default: current season)")
 
     p_bf_games = sub.add_parser("backfill-games", help="Populate historical games for a date range")
     p_bf_games.add_argument(
@@ -164,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     p_skills = sub.add_parser("refresh-skills", help="Recompute batter/pitcher skill aggregates")
-    p_skills.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
+    p_skills.add_argument("--season", type=int, default=CURRENT_SEASON, help="Season year (default: current season)")
 
     p_priors = sub.add_parser(
         "refresh-priors",
@@ -188,19 +196,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_bullpen = sub.add_parser(
         "refresh-bullpen", help="Aggregate per-team relief-pitching skill into bullpen_skill"
     )
-    p_bullpen.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
+    p_bullpen.add_argument("--season", type=int, default=CURRENT_SEASON, help="Season year (default: current season)")
 
     p_batted = sub.add_parser(
         "refresh-batted-ball",
         help="Aggregate per-batter spray / batted-ball profiles from Statcast into batter_batted_ball",
     )
-    p_batted.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
+    p_batted.add_argument("--season", type=int, default=CURRENT_SEASON, help="Season year (default: current season)")
 
     p_snapshots = sub.add_parser(
         "refresh-skill-snapshots",
         help="Compute point-in-time skill snapshots for backtesting",
     )
-    p_snapshots.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
+    p_snapshots.add_argument("--season", type=int, default=CURRENT_SEASON, help="Season year (default: current season)")
     p_snapshots.add_argument(
         "--start", metavar="YYYY-MM-DD", type=_date_arg, required=True,
         help="First date in snapshot range",
@@ -223,7 +231,7 @@ def build_parser() -> argparse.ArgumentParser:
         "refresh-pitch-aggregations",
         help="Aggregate pitch-level Statcast into batter pitch-type stats, arsenals, baselines",
     )
-    p_pitch_agg.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
+    p_pitch_agg.add_argument("--season", type=int, default=CURRENT_SEASON, help="Season year (default: current season)")
     p_pitch_agg.add_argument(
         "--as-of", metavar="YYYY-MM-DD", type=_date_arg, default=None, dest="as_of",
         help="Aggregate season-to-date through this date (default: today in US/Eastern)",
@@ -233,7 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
         "refresh-pitch-snapshots",
         help="Backfill point-in-time pitch-mix snapshots (one per Monday) for backtesting",
     )
-    p_pitch_snap.add_argument("--season", type=int, default=2025, help="Season year (default: 2025)")
+    p_pitch_snap.add_argument("--season", type=int, default=CURRENT_SEASON, help="Season year (default: current season)")
     p_pitch_snap.add_argument(
         "--start", metavar="YYYY-MM-DD", type=_date_arg, required=True,
         help="First date in snapshot range",
@@ -332,7 +340,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the full daily workflow in sequence: "
              "slate -> weather -> skills -> lineups -> project",
     )
-    p_daily.add_argument("--season", type=int, default=2025, help="Season year for skills (default: 2025)")
+    p_daily.add_argument(
+        "--season", type=int, default=None,
+        help="Season year for skills (default: the slate date's year)",
+    )
     p_daily.add_argument(
         "--model", choices=["mechanistic", "xgb", "blend"], default="mechanistic",
         help="Probability source for project (default: mechanistic — the backtest-validated path)",
