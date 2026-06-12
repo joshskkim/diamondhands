@@ -146,6 +146,17 @@ public class PropBoardService {
             ? null
             : repo.findBestOverPrice(date, r.playerId(), m.oddsMarket());
 
+        // The fence this batter pulls toward: RHB → LF corner, LHB → RF. Switch
+        // hitters have no single pull side, so the park-fit fields stay null.
+        Double pullFence = null, pullWall = null;
+        if ("R".equals(r.bats())) {
+            pullFence = r.lfLineFt();
+            pullWall = r.lfWallFt();
+        } else if ("L".equals(r.bats())) {
+            pullFence = r.rfLineFt();
+            pullWall = r.rfWallFt();
+        }
+
         return new PropBoardPickDto(
             m.key(), 0.5,
             r.gameId(), r.matchup(),
@@ -157,6 +168,8 @@ public class PropBoardService {
             r.matchupXwoba(), r.matchupQuality(),
             r.adjPark(), r.adjPitcher(), m.weather().apply(r),
             r.stadium(),
+            r.bats(), r.pullPct(), r.fbPct(), r.avgLaunchSpeed(),
+            pullFence, pullWall,
             rateFor(m.key(), rates, true),
             rateFor(m.key(), rates, false),
             rates == null ? null : rates.nSeason(),
