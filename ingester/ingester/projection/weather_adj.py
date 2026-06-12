@@ -105,6 +105,41 @@ def wind_component_mph(
     return wind_speed_mph * math.cos(math.radians(delta))
 
 
+def spray_weighted_wind_component_mph(
+    wind_speed_mph: float,
+    wind_from_degrees: float,
+    cf_bearing_degrees: float,
+    bats: str,
+    pitcher_throws: str | None,
+    spray_weights: tuple[float, float, float],
+) -> float:
+    """
+    Wind component weighted across the batter's actual spray distribution.
+
+    The pull-only projection treats every batter as a 100% pull hitter — an extreme
+    oppo hitter got full credit for a gale blowing out to his pull field he rarely
+    uses. Here the wind is projected onto the three attack bearings (pull = CF ∓
+    offset by hand, center = CF, oppo = CF ± offset) and averaged with the batter's
+    ``(pull_pct, center_pct, oppo_pct)`` as weights (renormalized; falls back to the
+    pull-only projection when they don't sum to anything meaningful).
+    """
+    hand = effective_bats(bats, pitcher_throws)
+    cf = _normalize_degrees(cf_bearing_degrees)
+    sign = -1.0 if hand == "R" else 1.0  # RHB pulls toward LF (cf - offset)
+    bearings = (
+        _normalize_degrees(cf + sign * PULL_BEARING_OFFSET_DEG),   # pull
+        cf,                                                        # center
+        _normalize_degrees(cf - sign * PULL_BEARING_OFFSET_DEG),   # oppo
+    )
+    total = sum(spray_weights)
+    if total <= 0.0:
+        return wind_component_mph(wind_speed_mph, wind_from_degrees, bearings[0])
+    return sum(
+        (w / total) * wind_component_mph(wind_speed_mph, wind_from_degrees, b)
+        for w, b in zip(spray_weights, bearings)
+    )
+
+
 def temperature_hr_adjustment(temperature_f: float) -> float:
     adj = 1.0 + (temperature_f - WEATHER_TEMP_BASELINE_F) * TEMP_HR_COEFF_PER_F
     return _clamp(adj, *TEMP_HR_CLAMP)
@@ -197,6 +232,7 @@ def carry_delta_ft(
     surface_pressure_hpa: float | None = None,
     altitude_ft: float | None = None,
     baseline_carry_ft: float = PARK_CARRY_BASE_FT,
+    spray_weights: tuple[float, float, float] | None = None,
 ) -> float:
     """Feet the day's conditions add to (or take from) a fly ball's carry.
 
@@ -209,7 +245,9 @@ def carry_delta_ft(
         drag and more carry. Temperature enters HERE, through density, so there is no
         separate temperature term (avoids double-counting).
       * wind — the component blowing out toward the batter's pull field adds carry;
-        blowing in subtracts it.
+        blowing in subtracts it. When ``spray_weights`` (pull, center, oppo shares)
+        are supplied, the projection is weighted across all three attack bearings
+        instead of assuming a 100% pull hitter (v2.7).
 
     Returns 0.0 under a closed roof.
     """
@@ -231,8 +269,14 @@ def carry_delta_ft(
         else 0.0
     )
 
-    pull = pull_bearing_degrees(cf_bearing_degrees, bats, pitcher_throws)
-    component = wind_component_mph(wind_speed_mph, wind_from_degrees, pull)
+    if spray_weights is not None:
+        component = spray_weighted_wind_component_mph(
+            wind_speed_mph, wind_from_degrees, cf_bearing_degrees,
+            bats, pitcher_throws, spray_weights,
+        )
+    else:
+        pull = pull_bearing_degrees(cf_bearing_degrees, bats, pitcher_throws)
+        component = wind_component_mph(wind_speed_mph, wind_from_degrees, pull)
     d_wind = component * WIND_CARRY_FT_PER_MPH
 
     return d_density + d_wind

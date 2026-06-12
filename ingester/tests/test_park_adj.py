@@ -113,5 +113,34 @@ class TestPersonalizedParkHrMult(unittest.TestCase):
         self.assertGreater(adj.hr, 1.00)
 
 
+class TestParkHitPersonalization(unittest.TestCase):
+    """v2.7 spray-hit personalization ships OFF (beta 0.0) — the hit factor must
+    pass through exactly until a backtest justifies enabling it."""
+
+    def test_hit_factor_unchanged_with_beta_zero(self):
+        from ingester.projection.constants import PARK_HIT_GEO_BETA
+        from ingester.projection.park_adj import (
+            BattedBallProfile,
+            ParkFactors,
+            ParkGeometry,
+            compute_park_adjustments,
+        )
+
+        self.assertEqual(PARK_HIT_GEO_BETA, 0.0)
+        geo = ParkGeometry(
+            lf_line_ft=315, cf_ft=400, rf_line_ft=330,
+            lf_wall_ft=37, cf_wall_ft=8, rf_wall_ft=8,
+        )
+        profile = BattedBallProfile(
+            pull_pct=0.55, center_pct=0.30, oppo_pct=0.15,
+            fb_pct=0.35, avg_launch_speed=92.0,
+        )
+        factors = ParkFactors(
+            park_factor_hits=1.04, park_factor_hr_lhb=0.93,
+            park_factor_hr_rhb=1.02, geometry=geo,
+        )
+        adj = compute_park_adjustments(factors, "R", "L", profile=profile)
+        self.assertEqual(adj.hit, 1.04)
+
 if __name__ == "__main__":
     unittest.main()
