@@ -29,14 +29,38 @@ public class PropBoardService {
     /** A market definition: model probability + the weather adjustment that drives it. */
     private record Market(String key, String oddsMarket,
                           Function<SlateRow, Double> prob,
-                          Function<SlateRow, Double> weather) {}
+                          Function<SlateRow, Double> weather,
+                          Double minSeasonRate,
+                          double leagueRate) {}
+
+    // Empirical-rate shrinkage (Jun 2026): the multiplicative adjustment chain
+    // (park × pitcher × weather) can stack a league-average bat to the rate clamp —
+    // the board once advertised an 85% hit prob for a player whose own season
+    // clear-rate was 46%. Two-stage blend:
+    //   1. the player's season clear-rate is regressed toward the LEAGUE clear-rate
+    //      by sample size (PRIOR_N phantom games) — so a 5-game sample can't dodge
+    //      scrutiny the way a raw n/(n+K) weight would allow;
+    //   2. the model's probability is blended toward that stabilized empirical
+    //      target, with the empirical side's weight growing with evidence.
+    // The model still moves the number (that's its job); it just can't double a
+    // 63-game track record or ride a 5-game rookie sample to the top of the board.
+    private static final int SHRINK_K = 60;
+    private static final int PRIOR_N = 25;
+    // Per-market sanity floor for an over card (applied at n >= GUARD_MIN_N): a hit
+    // pick needs a non-red season clear-rate; an HR pick needs a player who homers
+    // in at least 8% of games. Thresholds are market-specific — hit-market bands
+    // applied to HR would veto every slugger alive.
+    private static final int GUARD_MIN_N = 15;
+    private static final int CANDIDATE_POOL = 10;
 
     // Batter K has no odds-market counterpart in our data (books we ingest don't
     // quote it), so its price fields are always null.
+    // League clear-rates per market (≈2025-26: share of starter games with 1+ hit /
+    // 1+ HR / 1+ K) — the prior a thin empirical sample regresses toward.
     private static final List<Market> MARKETS = List.of(
-        new Market("hit", "hit", SlateRow::pHit1, SlateRow::adjWeatherHits),
-        new Market("hr",  "hr",  SlateRow::pHr,   SlateRow::adjWeatherHr),
-        new Market("k",   null,  SlateRow::pK1,   r -> null));
+        new Market("hit", "hit", SlateRow::pHit1, SlateRow::adjWeatherHits, 0.45, 0.62),
+        new Market("hr",  "hr",  SlateRow::pHr,   SlateRow::adjWeatherHr,   0.08, 0.15),
+        new Market("k",   null,  SlateRow::pK1,   r -> null,                null, 0.66));
 
     private final PropBoardRepository repo;
 
@@ -44,30 +68,80 @@ public class PropBoardService {
         this.repo = repo;
     }
 
+    /** A candidate scored for one market: its clear rates and blended probability. */
+    private record Scored(SlateRow row, ClearRates rates, double blended) {}
+
     @Cacheable(cacheNames = "propBoard", key = "#date.toString()")
     public PropBoardResponse board(LocalDate date) {
         List<SlateRow> rows = repo.findSlateRows(date);
         List<PropBoardPickDto> picks = new ArrayList<>();
-        // One player at most once across the board — three cards of the same batter
-        // is a worse display than the marginally-less-likely runner-up.
+        // One player at most once across the TOP picks — three cards of the same
+        // batter is a worse display than the marginally-less-likely runner-up.
         Set<Integer> used = new HashSet<>();
 
         for (Market m : MARKETS) {
-            rows.stream()
+            // Pool the strongest raw-model candidates, then re-rank by the shrunk
+            // (model ⊕ demonstrated-rate) probability; top = card, next two =
+            // honorable mentions.
+            List<Scored> scored = rows.stream()
                 .filter(r -> m.prob().apply(r) != null && r.expectedPa() != null)
                 .filter(r -> !used.contains(r.playerId()))
-                .max(Comparator.comparingDouble(r -> m.prob().apply(r)))
-                .ifPresent(r -> {
-                    used.add(r.playerId());
-                    picks.add(toPick(m, r, date));
-                });
+                .sorted(Comparator.comparingDouble((SlateRow r) -> m.prob().apply(r)).reversed())
+                .limit(CANDIDATE_POOL)
+                .map(r -> {
+                    ClearRates rates = repo.findClearRates(r.playerId(), date);
+                    return new Scored(r, rates,
+                        blend(m.prob().apply(r), seasonRate(m.key(), rates),
+                              nSeasonOf(rates), m.leagueRate()));
+                })
+                .filter(s -> !guardVetoed(m, s.rates()))
+                .sorted(Comparator.comparingDouble(Scored::blended).reversed())
+                .toList();
+
+            if (scored.isEmpty()) continue;
+            Scored top = scored.get(0);
+            used.add(top.row().playerId());
+            List<PropBoardPickDto.RunnerUp> runnersUp = scored.stream()
+                .skip(1).limit(2)
+                .map(s -> new PropBoardPickDto.RunnerUp(
+                    s.row().playerId(), s.row().player(), s.row().team(),
+                    round(s.blended(), 4)))
+                .toList();
+            picks.add(toPick(m, top, runnersUp, date));
         }
         return new PropBoardResponse(date.toString(), rows.size(), picks);
     }
 
-    private PropBoardPickDto toPick(Market m, SlateRow r, LocalDate date) {
-        double prob = m.prob().apply(r);
-        ClearRates rates = repo.findClearRates(r.playerId(), date);
+    /** Blend the model's probability toward a league-stabilized empirical clear rate. */
+    static double blend(double modelProb, Double seasonRate, Integer nSeason, double leagueRate) {
+        int n = (seasonRate == null || nSeason == null) ? 0 : Math.max(nSeason, 0);
+        double season = seasonRate == null ? leagueRate : seasonRate;
+        // Stage 1: stabilize the empirical rate (PRIOR_N phantom league games).
+        double empirical = (n * season + PRIOR_N * leagueRate) / (n + PRIOR_N);
+        // Stage 2: weight the empirical side by how much evidence backs it.
+        double w = (n + PRIOR_N) / (double) (n + PRIOR_N + SHRINK_K);
+        return w * empirical + (1.0 - w) * modelProb;
+    }
+
+    private static boolean guardVetoed(Market m, ClearRates rates) {
+        if (m.minSeasonRate() == null || rates == null || rates.nSeason() < GUARD_MIN_N) {
+            return false;
+        }
+        Double season = seasonRate(m.key(), rates);
+        return season != null && season < m.minSeasonRate();
+    }
+
+    private static Integer nSeasonOf(ClearRates rates) {
+        return rates == null ? null : rates.nSeason();
+    }
+
+    private PropBoardPickDto toPick(Market m, Scored top,
+                                    List<PropBoardPickDto.RunnerUp> runnersUp,
+                                    LocalDate date) {
+        SlateRow r = top.row();
+        ClearRates rates = top.rates();
+        double rawProb = m.prob().apply(r);
+        double prob = top.blended();
         BestPrice price = m.oddsMarket() == null
             ? null
             : repo.findBestOverPrice(date, r.playerId(), m.oddsMarket());
@@ -78,6 +152,7 @@ public class PropBoardService {
             r.playerId(), r.player(), r.team(),
             r.lineupPosition(), r.lineupConfirmed(), r.expectedPa(),
             round(prob, 4),
+            round(rawProb, 4),
             r.opposingPitcherId(), r.opposingPitcher(), r.pitcherDataQuality(),
             r.matchupXwoba(), r.matchupQuality(),
             r.adjPark(), r.adjPitcher(), m.weather().apply(r),
@@ -88,7 +163,13 @@ public class PropBoardService {
             price == null ? null : price.bookmaker(),
             price == null ? null : price.priceAmerican(),
             price == null ? null : price.priceDecimal(),
-            price == null ? null : round(prob * price.priceDecimal() - 1.0, 4));
+            // EV at the cached price uses the blended (displayed) probability.
+            price == null ? null : round(prob * price.priceDecimal() - 1.0, 4),
+            runnersUp);
+    }
+
+    private static Double seasonRate(String market, ClearRates rates) {
+        return rateFor(market, rates, false);
     }
 
     private static Double rateFor(String market, ClearRates rates, boolean l10) {
