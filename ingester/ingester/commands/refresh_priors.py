@@ -21,7 +21,7 @@ from ingester.projection.constants import (
     MARCEL_REGRESSION_PA_XWOBA,
     MARCEL_SEASON_WEIGHTS,
 )
-from ingester.projection.prior import SeasonLine, compute_marcel_prior
+from ingester.projection.prior import SeasonLine, bat_speed_iso_anchor, compute_marcel_prior
 
 
 def _load_prior_seasons(conn, target_season: int) -> dict[int, dict[int, SeasonLine]]:
@@ -63,11 +63,37 @@ def _load_prior_seasons(conn, target_season: int) -> dict[int, dict[int, SeasonL
     return out
 
 
+def _load_iso_anchors(conn, target_season: int) -> dict[int, float]:
+    """Bat-speed-implied ISO anchors from the PRIOR season's tracking (leak-free).
+
+    Empty for pre-2025 targets (tracking starts 2024) — callers just fall back to
+    the league anchor, i.e. pre-v2.7 behaviour.
+    """
+    rows = conn.execute(
+        """
+        SELECT player_id, avg_bat_speed, fast_swing_rate
+        FROM batter_bat_tracking WHERE season = %s
+        """,
+        (target_season - 1,),
+    ).fetchall()
+    out: dict[int, float] = {}
+    for pid, bs, fast in rows:
+        anchor = bat_speed_iso_anchor(
+            float(bs) if bs is not None else None,
+            float(fast) if fast is not None else None,
+            LEAGUE_ISO,
+        )
+        if anchor is not None:
+            out[int(pid)] = anchor
+    return out
+
+
 def cmd_refresh_priors(args: argparse.Namespace) -> None:
     target: int = getattr(args, "season", 2026)
 
     conn = get_connection()
     by_player = _load_prior_seasons(conn, target)
+    iso_anchors = _load_iso_anchors(conn, target)
 
     rows: list[dict] = []
     for pid, seasons in by_player.items():
@@ -77,6 +103,7 @@ def cmd_refresh_priors(args: argparse.Namespace) -> None:
             league_xwoba=LEAGUE_XWOBA,
             league_k_rate=LEAGUE_K_PER_PA,
             league_iso=LEAGUE_ISO,
+            iso_anchor=iso_anchors.get(pid),
         )
         if prior is None:
             continue

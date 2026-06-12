@@ -21,6 +21,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ingester.projection.constants import (
+    BAT_SPEED_ISO_PER_Z,
+    BAT_SPEED_MEAN,
+    BAT_SPEED_SD,
+    FAST_SWING_ISO_PER_Z,
+    FAST_SWING_MEAN,
+    FAST_SWING_SD,
     MARCEL_REGRESSION_PA_ISO,
     MARCEL_REGRESSION_PA_K,
     MARCEL_REGRESSION_PA_XWOBA,
@@ -92,11 +98,18 @@ def compute_marcel_prior(
     regression_pa_xwoba: float = MARCEL_REGRESSION_PA_XWOBA,
     regression_pa_k: float = MARCEL_REGRESSION_PA_K,
     regression_pa_iso: float = MARCEL_REGRESSION_PA_ISO,
+    iso_anchor: float | None = None,
 ) -> ProjectionPrior | None:
     """Project ``target_season`` from the prior three seasons.
 
     ``weights`` apply to (target-1, target-2, target-3). Each metric reverts to its
     league mean by its own regression constant (K% light, ISO heavy — see constants).
+    ``iso_anchor`` (v2.7): when the caller can supply a bat-speed-implied ISO (see
+    bat_speed_iso_anchor), the ISO component regresses toward THAT instead of the
+    flat league mean. Evidence-rich histories barely feel it (their own weighted PA
+    dominate the phantom 1800); thin histories lean on it hard — which is exactly
+    where the out-of-sample gate showed bat tracking helps (thin-half ISO MAE −4%)
+    and where it showed redundancy for established hitters.
     Returns None when the player has no usable prior-season data at all (a true
     debutant — the caller should fall back to the league mean for them).
     """
@@ -125,9 +138,30 @@ def compute_marcel_prior(
         if iso is not None:
             iso_pairs.append((wpa, iso))
 
+    iso_target = iso_anchor if iso_anchor is not None else league_iso
     return ProjectionPrior(
         xwoba=round(_weighted_regress(xwoba_pairs, league_xwoba, regression_pa_xwoba), 4),
         k_rate=round(_weighted_regress(k_pairs, league_k_rate, regression_pa_k), 4),
-        iso=round(_weighted_regress(iso_pairs, league_iso, regression_pa_iso), 4),
+        iso=round(_weighted_regress(iso_pairs, iso_target, regression_pa_iso), 4),
         proj_pa=int(weighted_pa),
     )
+
+
+def bat_speed_iso_anchor(
+    avg_bat_speed: float | None,
+    fast_swing_rate: float | None,
+    league_iso: float,
+) -> float | None:
+    """Bat-speed-implied ISO: the regression target for thin ISO histories.
+
+    Fit out-of-sample (2024 tracking → 2025 ISO, n=324): standalone corr .496 —
+    nearly as predictive as a full 3-year Marcel (.617) from one season of swing
+    physics. Centered on the league ISO (not the fitted intercept, which carries
+    ≥200-PA survivor bias). Returns None without tracking data → caller falls back
+    to the plain league anchor.
+    """
+    if avg_bat_speed is None or fast_swing_rate is None:
+        return None
+    bs_z = (avg_bat_speed - BAT_SPEED_MEAN) / BAT_SPEED_SD
+    fast_z = (fast_swing_rate - FAST_SWING_MEAN) / FAST_SWING_SD
+    return league_iso + BAT_SPEED_ISO_PER_Z * bs_z + FAST_SWING_ISO_PER_Z * fast_z
