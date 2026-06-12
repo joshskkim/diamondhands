@@ -52,6 +52,8 @@ function evClass(ev: number) {
 }
 
 // Hit-rate "traffic light" — Outlier's thresholds: green ≥65%, amber 45–65%, red <45%.
+// Applied to the SEASON rate only: short-window streaks are hot-hand noise (and our
+// own backtests treat them that way), so L10/L20 render as muted context, not signal.
 function hrTone(v: number | null): string {
   if (v == null) return 'text-zinc-600'
   if (v >= 0.65) return 'text-emerald-400'
@@ -63,18 +65,20 @@ function hrPct(v: number | null): string {
   return v == null ? '—' : Math.round(v * 100) + '%'
 }
 
-// Last-10 / last-20 / season clear-rate for a prop's line, color-coded.
+// Season clear-rate (colored) leads; last-10/last-20 follow as muted context.
 function HitRateCell({ hr }: { hr: HitRate | undefined }) {
   if (!hr) return <span className="text-zinc-600">—</span>
   return (
     <span className="inline-flex items-center gap-1 font-mono tabular-nums text-xs">
-      <span className={hrTone(hr.l10)} title={`Last 10 games (n=${Math.min(hr.n20, 10)})`}>
+      <span className={hrTone(hr.season)} title={`Season (n=${hr.nSeason})`}>{hrPct(hr.season)}</span>
+      <span className="text-zinc-700">·</span>
+      <span className="text-zinc-500" title={`Last 10 games (n=${Math.min(hr.n20, 10)}) — context, not signal`}>
         {hrPct(hr.l10)}
       </span>
       <span className="text-zinc-700">·</span>
-      <span className={hrTone(hr.l20)} title={`Last 20 games (n=${hr.n20})`}>{hrPct(hr.l20)}</span>
-      <span className="text-zinc-700">·</span>
-      <span className={hrTone(hr.season)} title={`Season (n=${hr.nSeason})`}>{hrPct(hr.season)}</span>
+      <span className="text-zinc-500" title={`Last 20 games (n=${hr.n20}) — context, not signal`}>
+        {hrPct(hr.l20)}
+      </span>
     </span>
   )
 }
@@ -225,7 +229,7 @@ export function OddsBoard() {
                     className="px-3 py-2 text-left font-medium"
                     title="Clear-rate vs the prop line — last 10 · last 20 · season"
                   >
-                    Hit rate <span className="text-zinc-600 normal-case">L10·20·Szn</span>
+                    Hit rate <span className="text-zinc-600 normal-case">Szn·L10·L20</span>
                   </th>
                   <th className="px-3 py-2 text-left font-medium">Side</th>
                   <th className="px-3 py-2 text-right font-medium">Line</th>

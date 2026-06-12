@@ -13,9 +13,11 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { api, fetchPlayer } from '@/lib/api'
+import { api, fetchPlayer, playerSprayQueryOptions } from '@/lib/api'
 import type { RecentStat } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { getStadiumByAbbr } from '@/lib/stadiums'
+import { StadiumDiagram } from '@/components/game/stadium-diagram'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 const chip =
@@ -89,6 +91,11 @@ export function PlayerDetail({ playerId }: { playerId: number }) {
     queryKey: ['player', 'recent', playerId],
     queryFn: () => api.recentStats(playerId, 20),
   })
+
+  const { data: spray } = useQuery(playerSprayQueryOptions(playerId))
+  // The spray bins are park-independent; the player's home park just gives the
+  // wedges a familiar fence to land against.
+  const homePark = getStadiumByAbbr(player?.teamAbbr)
 
   const chartData = [...(stats ?? [])]
     .reverse()
@@ -188,6 +195,20 @@ export function PlayerDetail({ playerId }: { playerId: number }) {
                   />
                 </LineChart>
               </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* spray chart over the player's home park */}
+          {spray && spray.totalBip > 0 && (
+            <div className="mb-6">
+              <StadiumDiagram
+                stadium={homePark}
+                stadiumName={homePark?.stadiumName ?? 'Spray chart'}
+                isDome={homePark?.isDome ?? false}
+                weather={{ tempF: null, windMph: null, windDirDeg: null }}
+                spray={spray}
+                sprayLabel={player?.fullName}
+              />
             </div>
           )}
 

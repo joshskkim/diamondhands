@@ -178,8 +178,15 @@ MATCHUP_MIN_COVERED_USAGE: float = 0.6
 # ---------------------------------------------------------------------------
 
 # weight_l30 = min(pa_l30 / PA_L30_FULL_WEIGHT, PA_L30_BLEND_CAP)
+# Cap on recent-form (last-30-day) weight in the skill blend. Set to 0.0 (recent
+# form OFF) by the hot-hand audit: full-2025 backtest sweep at caps 0.0/0.3/0.6
+# (runs #67/#68/#69, n=41,667) was MONOTONICALLY worse with more recency weight on
+# H≥2/HR/K and tied on H≥1 — including in a May-15+ slice where L30 windows are
+# fully populated. The Marcel prior + season sample carry the signal; streaks are
+# noise. L30 columns remain computed/stored for display. Env-overridable
+# (DIAMOND_PA_L30_CAP) for future sweeps.
 PA_L30_FULL_WEIGHT: int = 150
-PA_L30_BLEND_CAP: float = 0.6
+PA_L30_BLEND_CAP: float = float(os.environ.get("DIAMOND_PA_L30_CAP", "0.0"))
 
 # refresh-skills: minimum season PA to get a (regressed) batter_skill row.
 # Below this, the sample is too noisy to blend even with regression — skip entirely.

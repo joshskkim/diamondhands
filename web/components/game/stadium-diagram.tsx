@@ -1,8 +1,78 @@
 'use client'
 
-import type { Weather } from '@/lib/types'
+import type { PlayerSpray, Weather } from '@/lib/types'
 import type { StadiumRef } from '@/lib/stadiums'
 import { Chip, microLabel } from './ui'
+
+// ── Spray-wedge geometry ───────────────────────────────────────────────────────
+// The SVG field: home plate (160,250), foul lines at ±45° from the home→CF axis,
+// fence ≈200 units out. Spray bins are field-absolute (bin 0 hugs the LF line,
+// bin 8 the RF line) so they render directly — no handedness mirroring.
+const HOME_X = 160
+const HOME_Y = 250
+const FENCE_SVG_R = 196
+const BIN_WIDTH_DEG = 10
+const FAIR_HALF_DEG = 45
+
+function polar(thetaDeg: number, r: number): [number, number] {
+  const t = (thetaDeg * Math.PI) / 180
+  return [HOME_X + r * Math.sin(t), HOME_Y - r * Math.cos(t)]
+}
+
+/** Real fence distance at a spray angle: lerp foul line ↔ CF by |angle|. */
+function fenceFtAt(thetaDeg: number, stadium: StadiumRef | null): number {
+  if (!stadium) return 380
+  const frac = Math.min(Math.abs(thetaDeg) / FAIR_HALF_DEG, 1)
+  const lineFt = thetaDeg < 0 ? stadium.lfLineFt : stadium.rfLineFt
+  return stadium.cfFt * (1 - frac) + lineFt * frac
+}
+
+function SprayWedges({
+  spray,
+  stadium,
+}: {
+  spray: PlayerSpray
+  stadium: StadiumRef | null
+}) {
+  const maxBip = Math.max(...spray.bins.map((b) => b.bip), 1)
+  return (
+    <g>
+      {spray.bins.map((b) => {
+        const t1 = -FAIR_HALF_DEG + b.bin * BIN_WIDTH_DEG
+        const t2 = t1 + BIN_WIDTH_DEG
+        const mid = (t1 + t2) / 2
+        // Wedge depth tracks the bin's average carry vs the real fence there.
+        const depth =
+          b.avgDistanceFt == null
+            ? 0.6
+            : Math.min(Math.max(b.avgDistanceFt / fenceFtAt(mid, stadium), 0.15), 1.02)
+        const r = depth * FENCE_SVG_R
+        const [x1, y1] = polar(t1, r)
+        const [x2, y2] = polar(t2, r)
+        const traffic = b.bip / maxBip
+        return (
+          <g key={b.bin}>
+            <path
+              d={`M${HOME_X} ${HOME_Y} L${x1.toFixed(1)} ${y1.toFixed(1)} A${r.toFixed(1)} ${r.toFixed(1)} 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)} Z`}
+              fill={`rgba(34,211,238,${(0.08 + 0.4 * traffic).toFixed(2)})`}
+              stroke="rgba(34,211,238,0.15)"
+              strokeWidth="0.5"
+            />
+            {b.hr > 0 && (
+              <path
+                d={`M${x1.toFixed(1)} ${y1.toFixed(1)} A${r.toFixed(1)} ${r.toFixed(1)} 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)}`}
+                fill="none"
+                stroke="rgba(244,63,94,0.85)"
+                strokeWidth={1.5 + 3 * Math.min(b.hr / 8, 1)}
+                strokeLinecap="round"
+              />
+            )}
+          </g>
+        )
+      })}
+    </g>
+  )
+}
 
 function degreesToCardinal(deg: number): string {
   const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
@@ -40,12 +110,18 @@ export function StadiumDiagram({
   stadiumName,
   isDome,
   weather,
+  spray,
+  sprayLabel,
 }: {
   stadium: StadiumRef | null
   stadiumName: string
   isDome: boolean
   weather: Weather
+  /** Optional batter spray bins to overlay; park-only rendering when absent. */
+  spray?: PlayerSpray | null
+  sprayLabel?: string
 }) {
+  const hasSpray = spray != null && spray.totalBip > 0 && spray.bins.length > 0
   // RHB pull to LF (left half); LHB pull to RF (right half).
   const lfFill = stadium ? pfFill(stadium.parkFactorHrRhb) : 'rgba(255,255,255,0.03)'
   const rfFill = stadium ? pfFill(stadium.parkFactorHrLhb) : 'rgba(255,255,255,0.03)'
@@ -83,16 +159,8 @@ export function StadiumDiagram({
             {/* home plate */}
             <circle cx="160" cy="250" r="3" fill="#fafafa" />
 
-            {/* spray / hot-zone placeholder */}
-            <g opacity="0.6">
-              <rect x="92" y="92" width="136" height="74" rx="8" fill="none" stroke="rgba(34,211,238,0.4)" strokeDasharray="5 5" />
-              <text x="160" y="124" textAnchor="middle" fill="#67e8f9" fontSize="10" fontWeight="600">
-                Hit spray &amp; hot zones
-              </text>
-              <text x="160" y="140" textAnchor="middle" fill="#52525b" fontSize="9">
-                coming soon
-              </text>
-            </g>
+            {/* batter spray overlay (when provided) */}
+            {hasSpray && <SprayWedges spray={spray} stadium={stadium} />}
 
             {/* side labels */}
             <text x="36" y="150" fill="#71717a" fontSize="9">LF</text>
@@ -179,9 +247,20 @@ export function StadiumDiagram({
           )}
 
           <p className="text-[11px] text-zinc-500 leading-relaxed">
-            Outfield shading reflects this park&apos;s home-run factors by batter
-            hand — warmer is more HR-friendly. Spray charts and hitting hot zones
-            land here once batted-ball data is wired up.
+            {hasSpray ? (
+              <>
+                Cyan wedges are {sprayLabel ?? 'the batter'}&apos;s balls in play this
+                season ({spray.totalBip} BIP) — brighter sectors carry more traffic,
+                wedge depth tracks average carry vs the fence, and a rose edge marks
+                home-run directions. Park shading underneath reflects HR factors by
+                batter hand.
+              </>
+            ) : (
+              <>
+                Outfield shading reflects this park&apos;s home-run factors by batter
+                hand — warmer is more HR-friendly.
+              </>
+            )}
           </p>
         </div>
       </div>

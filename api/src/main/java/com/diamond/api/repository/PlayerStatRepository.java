@@ -2,6 +2,7 @@ package com.diamond.api.repository;
 
 import com.diamond.api.dto.PlayerDetailDto;
 import com.diamond.api.dto.RecentStatDto;
+import com.diamond.api.dto.SprayResponse;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -42,6 +43,14 @@ public class PlayerStatRepository {
         LIMIT ?
         """;
 
+    // Spray bins are per-season; the season filter is mandatory (multi-season table).
+    private static final String SPRAY_SQL = """
+        SELECT bin, bip, hr, avg_distance_ft
+        FROM batter_spray_bins
+        WHERE player_id = ? AND season = ?
+        ORDER BY bin
+        """;
+
     private final JdbcTemplate jdbc;
 
     public PlayerStatRepository(JdbcTemplate jdbc) {
@@ -63,6 +72,17 @@ public class PlayerStatRepository {
 
     public List<RecentStatDto> findRecent(int playerId, int limit) {
         return jdbc.query(RECENT_STATS_SQL, this::mapRow, playerId, limit);
+    }
+
+    public List<SprayResponse.SprayBinDto> findSprayBins(int playerId, int season) {
+        return jdbc.query(SPRAY_SQL, (rs, n) -> new SprayResponse.SprayBinDto(
+            rs.getInt("bin"),
+            rs.getInt("bip"),
+            rs.getInt("hr"),
+            rs.getObject("avg_distance_ft") == null
+                ? null
+                : rs.getBigDecimal("avg_distance_ft").doubleValue()),
+            playerId, season);
     }
 
     private static Integer nullableInt(ResultSet rs, String col) throws SQLException {

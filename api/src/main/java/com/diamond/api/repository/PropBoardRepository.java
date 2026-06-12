@@ -33,7 +33,10 @@ public class PropBoardRepository {
                bp.adj_park, bp.adj_pitcher, bp.adj_weather_hr, bp.adj_weather_hits,
                bp.matchup_xwoba, bp.matchup_quality, bp.pitcher_data_quality,
                bp.opposing_pitcher_id, op.full_name AS opposing_pitcher,
-               s.name AS stadium
+               s.name AS stadium,
+               COALESCE(p.bats, 'R') AS bats,
+               s.lf_line_ft, s.lf_wall_ft, s.rf_line_ft, s.rf_wall_ft,
+               bb.pull_pct, bb.fb_pct, bb.avg_launch_speed
         FROM batter_projections bp
         JOIN games g    ON g.id  = bp.game_id
         JOIN players p  ON p.id  = bp.player_id
@@ -42,6 +45,9 @@ public class PropBoardRepository {
         JOIN teams ht   ON ht.id = g.home_team_id
         JOIN teams at2  ON at2.id = g.away_team_id
         LEFT JOIN stadiums s ON s.id = g.stadium_id
+        LEFT JOIN batter_batted_ball bb
+               ON bb.player_id = bp.player_id
+              AND bb.season = EXTRACT(YEAR FROM g.game_date)::int
         WHERE g.game_date = ?
         """;
 
@@ -121,7 +127,15 @@ public class PropBoardRepository {
             rs.getString("pitcher_data_quality"),
             (Integer) rs.getObject("opposing_pitcher_id"),
             rs.getString("opposing_pitcher"),
-            rs.getString("stadium"));
+            rs.getString("stadium"),
+            rs.getString("bats"),
+            dbl(rs, "lf_line_ft"),
+            dbl(rs, "lf_wall_ft"),
+            dbl(rs, "rf_line_ft"),
+            dbl(rs, "rf_wall_ft"),
+            dbl(rs, "pull_pct"),
+            dbl(rs, "fb_pct"),
+            dbl(rs, "avg_launch_speed"));
     }
 
     private ClearRates mapRates(ResultSet rs) throws SQLException {
@@ -143,7 +157,10 @@ public class PropBoardRepository {
         Double pHit1, Double pHr, Double pK1,
         Double adjPark, Double adjPitcher, Double adjWeatherHr, Double adjWeatherHits,
         Double matchupXwoba, String matchupQuality, String pitcherDataQuality,
-        Integer opposingPitcherId, String opposingPitcher, String stadium
+        Integer opposingPitcherId, String opposingPitcher, String stadium,
+        String bats,
+        Double lfLineFt, Double lfWallFt, Double rfLineFt, Double rfWallFt,
+        Double pullPct, Double fbPct, Double avgLaunchSpeed
     ) {}
 
     public record ClearRates(

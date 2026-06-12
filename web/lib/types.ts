@@ -339,6 +339,15 @@ export interface PropBoardPick {
   adjPitcher: number | null
   adjWeather: number | null
   stadium: string | null
+  /** 'L' | 'R' | 'S' — batting side (server defaults unknown to 'R'). */
+  bats: string | null
+  /** Share of balls in play hit to the batter's pull side (current season, ≥50 BIP). */
+  pullPct: number | null
+  fbPct: number | null
+  avgLaunchSpeed: number | null
+  /** Fence distance/wall height on the batter's pull side; null for switch hitters. */
+  pullFenceFt: number | null
+  pullWallFt: number | null
   rateL10: number | null
   rateSeason: number | null
   nSeason: number | null
@@ -363,6 +372,27 @@ export interface PropBoard {
   date: string
   battersConsidered: number
   picks: PropBoardPick[]
+}
+
+/** One 10° spray sector: balls in play, homers, average Statcast hit distance. */
+export interface SprayBin {
+  /** 0 = hugs the LF foul line … 8 = hugs the RF line (field-absolute). */
+  bin: number
+  bip: number
+  hr: number
+  avgDistanceFt: number | null
+}
+
+/**
+ * GET /api/players/:playerId/spray — spray-direction bins for the hot-zone
+ * visual. Empty bins = the player is below the 50-BIP aggregation gate.
+ */
+export interface PlayerSpray {
+  playerId: number
+  season: number
+  bats: string | null
+  totalBip: number
+  bins: SprayBin[]
 }
 
 /** GET /api/players/:playerId */
