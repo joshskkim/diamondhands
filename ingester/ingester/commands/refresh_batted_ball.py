@@ -9,7 +9,11 @@ from __future__ import annotations
 import argparse
 
 from ingester.db import eastern_today, get_connection
-from ingester.statcast import agg_batter_batted_ball, pull_statcast_chunks
+from ingester.statcast import (
+    agg_batter_batted_ball,
+    agg_batter_spray_bins,
+    pull_statcast_chunks,
+)
 
 # Below this many balls in play, the spray/quality split is too noisy to store.
 MIN_BIP = 50
@@ -57,6 +61,32 @@ def cmd_refresh_batted_ball(args: argparse.Namespace) -> None:
                 ),
             )
             written += 1
+
+        # Spray-direction bins (hot-zone visual). Same per-player BIP gate as the
+        # profile: a player's bins are written only when his season total clears
+        # MIN_BIP, so the heatmap never renders a 12-ball sample.
+        bin_rows = agg_batter_spray_bins(chunks)
+        eligible = {r["player_id"] for r in rows if r["bip"] >= MIN_BIP} & known
+        bins_written = 0
+        for b in bin_rows:
+            if b["player_id"] not in eligible:
+                continue
+            conn.execute(
+                """
+                INSERT INTO batter_spray_bins (
+                    player_id, season, bin, bip, hr, avg_distance_ft, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (player_id, season, bin) DO UPDATE SET
+                    bip = EXCLUDED.bip,
+                    hr = EXCLUDED.hr,
+                    avg_distance_ft = EXCLUDED.avg_distance_ft,
+                    updated_at = NOW()
+                """,
+                (b["player_id"], season, b["bin"], b["bip"], b["hr"],
+                 b["avg_distance_ft"]),
+            )
+            bins_written += 1
         conn.commit()
     except Exception:
         conn.rollback()
@@ -65,4 +95,4 @@ def cmd_refresh_batted_ball(args: argparse.Namespace) -> None:
         conn.close()
 
     print(f"[refresh-batted-ball] {written} batter row(s) written (min {MIN_BIP} BIP); "
-          f"{skipped} below threshold / unknown.")
+          f"{skipped} below threshold / unknown; {bins_written} spray-bin row(s).")
