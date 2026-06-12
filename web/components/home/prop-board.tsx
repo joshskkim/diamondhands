@@ -105,6 +105,16 @@ function buildReasons(p: PropBoardPick): string[] {
         ? `, ${pct(p.rateSeason)} across ${p.nSeason} games this season`
         : ''
     reasons.push(`Has cleared in ${l10} of his last 10 games${season}.`)
+  // Season rate leads — it's the meaningful base rate. The last-10 count is
+  // appended as context only (short windows are hot-hand noise, not signal).
+  if (p.rateSeason != null && p.nSeason != null) {
+    const l10 =
+      p.rateL10 != null ? ` (${Math.round(p.rateL10 * 10)} of his last 10)` : ''
+    reasons.push(
+      `Has cleared in ${pct(p.rateSeason)} of his ${p.nSeason} games this season${l10}.`,
+    )
+  } else if (p.rateL10 != null) {
+    reasons.push(`Has cleared in ${Math.round(p.rateL10 * 10)} of his last 10 games.`)
   }
 
   if (p.priceAmerican != null && p.evPct != null) {

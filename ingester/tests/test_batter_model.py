@@ -106,7 +106,9 @@ class TestBatterModelHandComputed(unittest.TestCase):
         cls.EXP_TB = pa * cls.ADJ_HIT * bases_per_hit
 
     def test_l30_weight_cap(self) -> None:
-        self.assertAlmostEqual(self.W_L30, 50 / PA_L30_FULL_WEIGHT)
+        # Cap-aware: at the hot-hand-audit default (cap 0.0) recent form carries zero
+        # weight; under an env-override sweep the ramp min(pa/150, cap) still holds.
+        self.assertAlmostEqual(self.W_L30, min(50 / PA_L30_FULL_WEIGHT, PA_L30_BLEND_CAP))
         self.assertLessEqual(self.W_L30, PA_L30_BLEND_CAP)
         self.assertAlmostEqual(l30_blend_weight(0), 0.0)
         self.assertAlmostEqual(l30_blend_weight(500), PA_L30_BLEND_CAP)
