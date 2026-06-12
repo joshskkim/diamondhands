@@ -16,7 +16,7 @@ import argparse
 
 import psycopg
 
-from ingester.db import build_team_abbrev_map, get_connection
+from ingester.db import build_team_abbrev_map, eastern_today, get_connection
 from ingester.statcast import agg_bullpen_vs_handedness, require_valid_season
 from ingester.commands.refresh_skills import load_all_statcast_pa
 
@@ -77,7 +77,7 @@ def _aggregate_bullpen_skill(conn: psycopg.Connection, season: int) -> int:
 
 
 def cmd_refresh_bullpen(args: argparse.Namespace) -> None:
-    season: int = getattr(args, "season", 2025)
+    season: int = getattr(args, "season", None) or eastern_today().year
 
     require_valid_season(season, cmd="refresh-bullpen")
 

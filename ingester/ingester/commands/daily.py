@@ -34,6 +34,13 @@ from ingester.projection.runner import cmd_project
 def cmd_daily(args: argparse.Namespace) -> None:
     target = args.date if getattr(args, "date", None) is not None else eastern_today()
 
+    # Season follows the slate being projected unless explicitly overridden. This was
+    # once a hardcoded CLI default (2025), which silently kept refresh-skills and
+    # refresh-bullpen aggregating the PRIOR season all spring 2026 — projections then
+    # ran off year-old skill rows while backfill (which derives its own year) looked fine.
+    if getattr(args, "season", None) is None:
+        args.season = target.year
+
     def _close_prior_slate(_args: argparse.Namespace) -> None:
         """Close the books on the PRIOR slate (its actuals exist by now):
         ingest final scores + player stats, grade the recorded picks, and write

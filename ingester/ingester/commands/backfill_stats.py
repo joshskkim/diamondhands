@@ -6,7 +6,7 @@ import argparse
 import psycopg
 import requests
 
-from ingester.db import get_connection, build_team_abbrev_map
+from ingester.db import eastern_today, get_connection, build_team_abbrev_map
 from ingester.statcast import (
     _terminal_pa,
     agg_batter_game_stats,
@@ -172,7 +172,7 @@ def _upsert_pitcher_skill(
 # ---------------------------------------------------------------------------
 
 def cmd_backfill_stats(args: argparse.Namespace) -> None:
-    season: int = getattr(args, "season", 2025)
+    season: int = getattr(args, "season", None) or eastern_today().year
 
     require_valid_season(season, cmd="backfill-stats")
 
