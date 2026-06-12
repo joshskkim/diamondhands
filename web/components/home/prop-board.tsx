@@ -155,6 +155,25 @@ function PropCard({ pick }: { pick: PropBoardPick }) {
           <li key={i}>{r}</li>
         ))}
       </ul>
+
+      {pick.runnersUp.length > 0 && (
+        <div className="pt-2 border-t border-white/5 text-xs text-zinc-500">
+          <span className={microLabel}>Also&nbsp;</span>
+          {pick.runnersUp.map((ru, i) => (
+            <span key={ru.playerId}>
+              {i > 0 && <span className="text-zinc-700"> · </span>}
+              <Link
+                href={`/mlb/players/${ru.playerId}`}
+                className="text-zinc-400 hover:text-cyan-400 transition-colors"
+              >
+                {ru.player}
+              </Link>{' '}
+              <span className="text-zinc-600">{ru.team}</span>{' '}
+              <span className="font-mono tabular-nums text-zinc-400">{pct(ru.prob)}</span>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

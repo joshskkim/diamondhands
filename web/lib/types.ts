@@ -324,7 +324,10 @@ export interface PropBoardPick {
   lineupPosition: number | null
   lineupConfirmed: boolean | null
   expectedPa: number | null
+  /** Displayed probability: model shrunk toward the player's season clear rate. */
   prob: number
+  /** Raw model probability before the empirical-rate shrinkage. */
+  probModel: number
   opposingPitcherId: number | null
   opposingPitcher: string | null
   /** 'matchup' | 'overall' | 'league_avg' */
@@ -343,6 +346,16 @@ export interface PropBoardPick {
   priceAmerican: number | null
   priceDecimal: number | null
   evPct: number | null
+  /** Next two batters by the same blended ranking — honorable mentions. */
+  runnersUp: PropBoardRunnerUp[]
+}
+
+/** An honorable mention on a prop card: name + blended probability, no reasoning. */
+export interface PropBoardRunnerUp {
+  playerId: number
+  player: string
+  team: string
+  prob: number
 }
 
 /** GET /api/props/board — model-first prop board for a slate. */

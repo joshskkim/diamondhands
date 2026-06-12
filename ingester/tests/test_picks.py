@@ -33,18 +33,25 @@ class TestBuildPicks(unittest.TestCase):
         self.assertEqual([p["gameId"] for p in picks], [1])
 
     def test_hit_rate_veto(self):
-        # An HR over on a red season clear rate is vetoed; an under on green too.
+        # Bands are PER MARKET: hr uses (0.08, 0.50), not the hit bands — a normal
+        # slugger's ~25% HR clear-rate must NOT veto an over (the original single-
+        # threshold veto would have banned every HR over on the board).
         over = play(game_id=1, side="over", model=0.60, fair=0.50, ev=0.10)
         under = play(game_id=2, side="under", model=0.60, fair=0.50, ev=0.10)
-        red = {"10:hr": {"season": 0.10, "nSeason": 40}}
-        green = {"10:hr": {"season": 0.70, "nSeason": 40}}
-        thin = {"10:hr": {"season": 0.10, "nSeason": 5}}  # below MIN_N → no veto
+        slugger = {"10:hr": {"season": 0.26, "nSeason": 40}}   # normal slugger → fine
+        red = {"10:hr": {"season": 0.05, "nSeason": 40}}       # never homers → veto over
+        green = {"10:hr": {"season": 0.55, "nSeason": 40}}     # >0.50 → veto under
+        thin = {"10:hr": {"season": 0.05, "nSeason": 5}}       # below MIN_N → no veto
 
+        self.assertEqual(len(build_picks([over], None, slugger)), 1)
         self.assertEqual(build_picks([over], None, red), [])
         self.assertEqual(build_picks([under], None, green), [])
         self.assertEqual(len(build_picks([over], None, thin)), 1)
         self.assertEqual(len(build_picks([over], None, None)), 1)  # no data → no veto
-        self.assertEqual(len(build_picks([over], None, green)), 1)  # green over is fine
+        # Unbanded market (total) never vetoes regardless of rates.
+        total = play(game_id=3, market="total", side="under", line=9.0,
+                     model=0.60, fair=0.50, ev=0.10, player_id=None, name=None)
+        self.assertEqual(len(build_picks([total], None, red)), 1)
 
     def test_one_per_game_and_max(self):
         plays = [play(game_id=g, model=0.60 + g * 0.001, fair=0.50, ev=0.10,

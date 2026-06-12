@@ -35,8 +35,13 @@ const STRONG_EDGE = 0.06
 const MAX_PICKS = 3
 const EXCLUDED_MARKETS = new Set(['pitcher_k', 'pitcher_outs', 'hit'])
 const HIT_RATE_VETO_MIN_N = 15
-const HIT_RATE_VETO_OVER_BELOW = 0.45
-const HIT_RATE_VETO_UNDER_ABOVE = 0.65
+// Per-market veto bands: [no OVER below, no UNDER above]. Market-specific because
+// clear-rate scales differ wildly — hit bands applied to HR would veto every
+// slugger alive. Markets absent here never veto.
+const HIT_RATE_VETO_BANDS: Record<string, [number, number]> = {
+  hit: [0.45, 0.65],
+  hr: [0.08, 0.5],
+}
 
 interface ModelPick {
   play: BestPlay
@@ -85,13 +90,15 @@ function simPropNote(p: BestPlay, sim: MostLikely | undefined): string | null {
 }
 
 // A prop that contradicts the player's season clear rate (the hit-rate traffic
-// light) needs more than a model-market gap: no overs on red, no unders on green.
+// light) needs more than a model-market gap. Bands are per market.
 function hitRateVeto(p: BestPlay, hitRates: Map<string, HitRate> | undefined): boolean {
   if (!hitRates || p.playerId == null) return false
+  const band = HIT_RATE_VETO_BANDS[p.market]
+  if (!band) return false
   const hr = hitRates.get(`${p.playerId}:${p.market}`)
   if (!hr || hr.season == null || hr.nSeason < HIT_RATE_VETO_MIN_N) return false
-  if (p.side === 'over') return hr.season < HIT_RATE_VETO_OVER_BELOW
-  if (p.side === 'under') return hr.season > HIT_RATE_VETO_UNDER_ABOVE
+  if (p.side === 'over') return hr.season < band[0]
+  if (p.side === 'under') return hr.season > band[1]
   return false
 }
 

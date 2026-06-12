@@ -39,9 +39,14 @@ LONGSHOT_EDGE = 0.08
 STRONG_EDGE = 0.06
 MAX_PICKS = 3
 EXCLUDED_MARKETS = {"pitcher_k", "pitcher_outs", "hit"}
-HIT_RATE_VETO_MIN_N = 15      # season sample needed before the traffic light can veto
-HIT_RATE_VETO_OVER_BELOW = 0.45   # no prop OVER when the season clear rate is red
-HIT_RATE_VETO_UNDER_ABOVE = 0.65  # no prop UNDER when the season clear rate is green
+HIT_RATE_VETO_MIN_N = 15  # season sample needed before the traffic light can veto
+# Per-market veto bands: (no OVER below, no UNDER above). Market-specific because
+# clear-rate scales differ wildly — the hit bands applied to HR would veto every
+# slugger alive (nobody homers in 45% of games). Markets absent here never veto.
+HIT_RATE_VETO_BANDS: dict[str, tuple[float, float]] = {
+    "hit": (0.45, 0.65),
+    "hr": (0.08, 0.50),
+}
 
 DEFAULT_API = "http://localhost:8080"
 
@@ -84,19 +89,23 @@ def _sim_corroborates(play: dict, sim: dict | None) -> bool:
 def _hit_rate_veto(play: dict, hit_rates: dict | None) -> bool:
     """Veto a prop that contradicts the player's season clear rate (traffic light).
 
-    An OVER on a player who clears the line under HIT_RATE_VETO_OVER_BELOW of the
-    time (red), or an UNDER on one who clears it over HIT_RATE_VETO_UNDER_ABOVE
-    (green), needs more than a model-market gap to justify. No data → no veto.
+    Per-market bands (HIT_RATE_VETO_BANDS): an OVER on a player below the market's
+    floor, or an UNDER on one above its ceiling, needs more than a model-market gap
+    to justify. No band for the market, or no data → no veto.
     """
     if not hit_rates or play.get("playerId") is None:
+        return False
+    band = HIT_RATE_VETO_BANDS.get(play["market"])
+    if band is None:
         return False
     hr = hit_rates.get(f"{play['playerId']}:{play['market']}")
     if hr is None or hr.get("season") is None or hr.get("nSeason", 0) < HIT_RATE_VETO_MIN_N:
         return False
+    over_floor, under_ceiling = band
     if play["side"] == "over":
-        return hr["season"] < HIT_RATE_VETO_OVER_BELOW
+        return hr["season"] < over_floor
     if play["side"] == "under":
-        return hr["season"] > HIT_RATE_VETO_UNDER_ABOVE
+        return hr["season"] > under_ceiling
     return False
 
 
