@@ -77,6 +77,27 @@ function buildReasons(p: PropBoardPick): string[] {
     reasons.push(env.join('; ') + '.')
   }
 
+  // Park fit (HR card only): the batter's pull tendency against the fence his
+  // handedness targets. Raw facts — the model's personalization stays server-side.
+  if (
+    p.market === 'hr' &&
+    p.pullPct != null &&
+    p.pullFenceFt != null &&
+    (p.bats === 'R' || p.bats === 'L')
+  ) {
+    const field = p.bats === 'R' ? 'left-field' : 'right-field'
+    const wall = p.pullWallFt != null ? ` (${Math.round(p.pullWallFt)}-ft wall)` : ''
+    const ev =
+      p.avgLaunchSpeed != null
+        ? `; ${p.avgLaunchSpeed.toFixed(1)} mph average exit velocity`
+        : ''
+    reasons.push(
+      `Park fit: pulls ${Math.round(p.pullPct * 100)}% of his balls in play toward the ${Math.round(
+        p.pullFenceFt,
+      )}-ft ${field} fence${wall}${ev}.`,
+    )
+  }
+
   if (p.rateL10 != null) {
     const l10 = Math.round(p.rateL10 * 10)
     const season =

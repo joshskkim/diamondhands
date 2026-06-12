@@ -339,6 +339,15 @@ export interface PropBoardPick {
   adjPitcher: number | null
   adjWeather: number | null
   stadium: string | null
+  /** 'L' | 'R' | 'S' — batting side (server defaults unknown to 'R'). */
+  bats: string | null
+  /** Share of balls in play hit to the batter's pull side (current season, ≥50 BIP). */
+  pullPct: number | null
+  fbPct: number | null
+  avgLaunchSpeed: number | null
+  /** Fence distance/wall height on the batter's pull side; null for switch hitters. */
+  pullFenceFt: number | null
+  pullWallFt: number | null
   rateL10: number | null
   rateSeason: number | null
   nSeason: number | null

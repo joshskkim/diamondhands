@@ -14,6 +14,12 @@ import java.util.List;
  * {@code probModel} is the raw model output, kept for transparency. {@code runnersUp}
  * are the next two batters by the same blended ranking — honorable mentions, no
  * explanations.
+ *
+ * Park-fit fields ({@code pullPct}/{@code fbPct}/{@code avgLaunchSpeed} from the
+ * batter's current-season batted-ball profile; {@code pullFenceFt}/{@code pullWallFt}
+ * = the fence his handedness pulls toward) are raw facts for the HR card's reasoning —
+ * the personalization multiplier itself stays in the Python model. All nullable:
+ * missing profile, switch hitter (no single pull side), or missing fence data.
  */
 public record PropBoardPickDto(
     String market,
@@ -37,6 +43,12 @@ public record PropBoardPickDto(
     Double adjPitcher,
     Double adjWeather,
     String stadium,
+    String bats,
+    Double pullPct,
+    Double fbPct,
+    Double avgLaunchSpeed,
+    Double pullFenceFt,
+    Double pullWallFt,
     Double rateL10,
     Double rateSeason,
     Integer nSeason,
