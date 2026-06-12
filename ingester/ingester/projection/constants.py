@@ -227,6 +227,13 @@ EXPECTED_PA_PER_STARTER: float = 4.0
 # Offset from CF bearing toward the batter's pull field.
 PULL_BEARING_OFFSET_DEG: float = 35.0
 
+# Spray-personalized HIT park factor (v2.7, OFF by default). Exponent on the same
+# clear-the-fence ratio the HR personalization uses — the physical story for hits
+# (wall-ball doubles, deep-gap singles) is far weaker than for HR, so this ships at
+# 0.0 (= multiplier exactly 1.0) until a backtest shows a Brier improvement.
+PARK_HIT_GEO_BETA: float = 0.0
+PARK_HIT_GEO_MULT_CLAMP: tuple[float, float] = (0.92, 1.08)
+
 # ---------------------------------------------------------------------------
 # Weather adjustment coefficients
 # ---------------------------------------------------------------------------

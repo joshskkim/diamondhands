@@ -6,10 +6,12 @@ import unittest
 
 from ingester.projection.weather_adj import (
     air_density,
+    carry_delta_ft,
     compute_weather_adjustments,
     density_hr_adjustment,
     pressure_at_altitude_hpa,
     pull_bearing_degrees,
+    spray_weighted_wind_component_mph,
     wind_component_mph,
     wind_to_degrees,
 )
@@ -174,6 +176,63 @@ class TestWeatherAdjustments(unittest.TestCase):
         )
         self.assertGreater(adj_hr, 1.0)
         self.assertGreater(adj_hit, 1.0)
+
+
+class TestSprayWeightedWind(unittest.TestCase):
+    """v2.7: wind projected across the batter's real spray mix, not pull-only."""
+
+    # CF due north (0°), wind blowing TOWARD the RHB pull field (LF, bearing 325°):
+    # wind FROM 145°. A pure pull hitter feels the full component; an extreme oppo
+    # hitter mostly feels the (much smaller) component along the RF bearing.
+    WIND_FROM = 145.0
+
+    def _component(self, weights: tuple[float, float, float]) -> float:
+        return spray_weighted_wind_component_mph(
+            10.0, self.WIND_FROM, 0.0, "R", None, weights
+        )
+
+    def test_pure_pull_matches_legacy_projection(self) -> None:
+        legacy = wind_component_mph(10.0, self.WIND_FROM, pull_bearing_degrees(0.0, "R"))
+        self.assertAlmostEqual(self._component((1.0, 0.0, 0.0)), legacy, places=9)
+
+    def test_oppo_hitter_feels_less_outblowing_pull_wind(self) -> None:
+        pull_hitter = self._component((0.6, 0.3, 0.1))
+        oppo_hitter = self._component((0.1, 0.3, 0.6))
+        self.assertGreater(pull_hitter, oppo_hitter)
+
+    def test_weights_renormalize(self) -> None:
+        self.assertAlmostEqual(
+            self._component((0.4, 0.35, 0.25)),
+            self._component((0.8, 0.70, 0.50)),
+            places=9,
+        )
+
+    def test_degenerate_weights_fall_back_to_pull(self) -> None:
+        legacy = wind_component_mph(10.0, self.WIND_FROM, pull_bearing_degrees(0.0, "R"))
+        self.assertAlmostEqual(self._component((0.0, 0.0, 0.0)), legacy, places=9)
+
+    def test_lhb_mirrors_rhb(self) -> None:
+        rhb = spray_weighted_wind_component_mph(
+            10.0, self.WIND_FROM, 0.0, "R", None, (0.6, 0.3, 0.1)
+        )
+        # Mirror the wind across the CF axis (from 145° → 215°) for the LHB.
+        lhb = spray_weighted_wind_component_mph(
+            10.0, 215.0, 0.0, "L", None, (0.6, 0.3, 0.1)
+        )
+        self.assertAlmostEqual(rhb, lhb, places=9)
+
+    def test_carry_delta_spray_weights_shrink_pull_wind_gain(self) -> None:
+        kwargs = dict(
+            temperature_f=70.0,
+            wind_speed_mph=15.0,
+            wind_from_degrees=self.WIND_FROM,
+            cf_bearing_degrees=0.0,
+            bats="R",
+        )
+        d_pull_only = carry_delta_ft(**kwargs)
+        d_weighted = carry_delta_ft(**kwargs, spray_weights=(0.4, 0.35, 0.25))
+        self.assertGreater(d_pull_only, d_weighted)
+        self.assertGreater(d_weighted, 0.0)
 
 
 if __name__ == "__main__":

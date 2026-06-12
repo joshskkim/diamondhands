@@ -394,6 +394,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--park-personalized", action="store_true", default=False, dest="park_personalized",
         help="Personalize park HR factor from each hitter's prior-season batted-ball profile (leak-free A/B)",
     )
+    p_backtest.add_argument(
+        "--weather-carry", action="store_true", default=False, dest="weather_carry",
+        help="HR weather via the trajectory carry model with spray-weighted wind, prior-season profiles (leak-free A/B)",
+    )
 
     p_accuracy = sub.add_parser(
         "compute-accuracy",

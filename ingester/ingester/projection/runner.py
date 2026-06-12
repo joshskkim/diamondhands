@@ -99,6 +99,19 @@ def set_backtest_park_personalized(flag: bool) -> None:
     _BACKTEST_PARK_PERSONALIZED = flag
 
 
+# Backtest-only: when set, the backtest's HR weather effect uses the live v2.6/v2.7
+# trajectory path (carry_delta_ft with spray-weighted wind → weather_carry_hr_mult,
+# PRIOR-season profiles for leak-freeness) instead of the legacy flat density×wind
+# scalar. Off by default so existing backtests are unchanged.
+_BACKTEST_WEATHER_CARRY: bool = False
+
+
+def set_backtest_weather_carry(flag: bool) -> None:
+    """Toggle the trajectory (carry) weather-HR model in the backtest path."""
+    global _BACKTEST_WEATHER_CARRY
+    _BACKTEST_WEATHER_CARRY = flag
+
+
 @dataclass
 class ProjectSummary:
     game_date: date
@@ -743,6 +756,7 @@ def _project_team_side(
             surface_pressure_hpa=game.surface_pressure_hpa,
             altitude_ft=game.altitude_feet,
         )
+        weather_profile = bb_profile if bb_profile is not None else LEAGUE_AVERAGE_PROFILE
         d_carry = carry_delta_ft(
             temperature_f=game.temperature_f or 70.0,
             wind_speed_mph=game.wind_speed_mph or 0.0,
@@ -755,10 +769,17 @@ def _project_team_side(
             humidity_pct=game.relative_humidity_pct,
             surface_pressure_hpa=game.surface_pressure_hpa,
             altitude_ft=game.altitude_feet,
+            # v2.7: weight the wind across the batter's real spray mix instead of
+            # assuming a 100% pull hitter.
+            spray_weights=(
+                weather_profile.pull_pct,
+                weather_profile.center_pct,
+                weather_profile.oppo_pct,
+            ),
         )
         adj_weather_hr = weather_carry_hr_mult(
             park.geometry,
-            bb_profile if bb_profile is not None else LEAGUE_AVERAGE_PROFILE,
+            weather_profile,
             _effective_bat_side(hitter.bats, pitcher_throws),
             d_carry,
         )
@@ -1364,14 +1385,16 @@ def _project_team_side_backtest(
             continue
 
         pitcher_split, _quality = resolve_pitcher_skill(splits, hitter.bats, pitcher_throws)
-        # Leak-free park personalization for the A/B: prior-season batted-ball profile.
+        # Leak-free personalization for the A/Bs: prior-season batted-ball profile
+        # (entirely before any backtest game).
         bb_profile = (
             _load_batted_ball_profile(conn, hitter.player_id, season - 1)
-            if _BACKTEST_PARK_PERSONALIZED
+            if (_BACKTEST_PARK_PERSONALIZED or _BACKTEST_WEATHER_CARRY)
             else None
         )
         park_adj = compute_park_adjustments(
-            park, hitter.bats, pitcher_throws, profile=bb_profile
+            park, hitter.bats, pitcher_throws,
+            profile=bb_profile if _BACKTEST_PARK_PERSONALIZED else None,
         )
         pitcher_adj = compute_pitcher_adjustments(pitcher_split)
         if weather_skipped:
@@ -1391,6 +1414,36 @@ def _project_team_side_backtest(
                 surface_pressure_hpa=game.surface_pressure_hpa,
                 altitude_ft=game.altitude_feet,
             )
+            if _BACKTEST_WEATHER_CARRY:
+                # Mirror the live v2.6/v2.7 HR path: weather as a fly-ball carry
+                # delta (wind spray-weighted) → change in P(clear the fence).
+                weather_profile = (
+                    bb_profile if bb_profile is not None else LEAGUE_AVERAGE_PROFILE
+                )
+                d_carry = carry_delta_ft(
+                    temperature_f=game.temperature_f or 70.0,
+                    wind_speed_mph=game.wind_speed_mph or 0.0,
+                    wind_from_degrees=game.wind_from_degrees or 0.0,
+                    cf_bearing_degrees=game.cf_bearing_degrees,
+                    bats=hitter.bats,
+                    pitcher_throws=pitcher_throws,
+                    is_dome=game.is_dome,
+                    is_retractable_open=is_retractable_open,
+                    humidity_pct=game.relative_humidity_pct,
+                    surface_pressure_hpa=game.surface_pressure_hpa,
+                    altitude_ft=game.altitude_feet,
+                    spray_weights=(
+                        weather_profile.pull_pct,
+                        weather_profile.center_pct,
+                        weather_profile.oppo_pct,
+                    ),
+                )
+                adj_weather_hr = weather_carry_hr_mult(
+                    park.geometry,
+                    weather_profile,
+                    _effective_bat_side(hitter.bats, pitcher_throws),
+                    d_carry,
+                )
 
         # v2.1: the matchup drives the projection; store it so the backtest is auditable.
         matchup = _resolve_matchup(

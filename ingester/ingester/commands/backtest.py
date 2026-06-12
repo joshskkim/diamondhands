@@ -355,6 +355,13 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         model_version = f"{model_version}-parkgeo"
         print("[backtest] Park personalization: ON (prior-season batted-ball profile)")
 
+    if getattr(args, "weather_carry", False):
+        from ingester.projection.runner import set_backtest_weather_carry
+        set_backtest_weather_carry(True)
+        model_version = f"{model_version}-windspray"
+        print("[backtest] Weather carry HR: ON (trajectory model, spray-weighted wind, "
+              "prior-season profiles)")
+
     print(f"[backtest] Range {start} → {end}  |  Model {model_version}")
 
     conn = get_connection()

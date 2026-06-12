@@ -31,6 +31,8 @@ from ingester.projection.constants import (
     PARK_GEO_BETA,
     PARK_GEO_LOGISTIC_SCALE_FT,
     PARK_GEO_MULT_CLAMP,
+    PARK_HIT_GEO_BETA,
+    PARK_HIT_GEO_MULT_CLAMP,
     PARK_WALL_DIST_PER_FT,
     PARK_WALL_STD_FT,
     WEATHER_CARRY_EV_FLOOR_MPH,
@@ -217,6 +219,35 @@ def weather_carry_hr_mult(
     return _clamp(mult, WEATHER_CARRY_HR_CLAMP)
 
 
+def personalized_park_hit_mult(
+    geo: ParkGeometry | None,
+    profile: BattedBallProfile | None,
+    hand: str,
+) -> float:
+    """Per-batter multiplier on the empirical park HIT factor (v2.7, default OFF).
+
+    Reuses the HR personalization's clear-the-fence ratio at a much smaller exponent
+    (``PARK_HIT_GEO_BETA``): the only hit types fence geometry plausibly moves are
+    wall-ball doubles and deep-gap drives. Ships with beta 0.0 → exactly 1.0 until a
+    backtest shows signal; tightly clamped even when enabled.
+    """
+    if PARK_HIT_GEO_BETA == 0.0 or geo is None or profile is None:
+        return 1.0
+
+    scale = PARK_GEO_LOGISTIC_SCALE_FT
+    batter_fence = _targeted_fence(
+        geo, hand, profile.pull_pct, profile.center_pct, profile.oppo_pct
+    )
+    s_batter = _logistic((_carry_ft(profile.avg_launch_speed) - batter_fence) / scale)
+    ref_fence = _targeted_fence(
+        geo, hand, LEAGUE_PULL_PCT, LEAGUE_CENTER_PCT, LEAGUE_OPPO_PCT
+    )
+    s_ref = _logistic((PARK_CARRY_BASE_FT - ref_fence) / scale)
+    if s_ref <= 0.0:
+        return 1.0
+    return _clamp((s_batter / s_ref) ** PARK_HIT_GEO_BETA, PARK_HIT_GEO_MULT_CLAMP)
+
+
 def compute_park_adjustments(
     factors: ParkFactors,
     bats: str,
@@ -229,7 +260,8 @@ def compute_park_adjustments(
     HR factor is handedness-specific; switch hitters use the side opposite the
     pitcher's throwing hand (same rule as pitcher matchup and weather pull). When
     a batted-ball ``profile`` and the park ``geometry`` are both present, the HR
-    factor is further personalized to the batter's spray + carry (v2.5.0).
+    factor is further personalized to the batter's spray + carry (v2.5.0), and the
+    hit factor by the (default-off) v2.7 spray-hit personalization.
     """
     hand = effective_bats(bats, pitcher_throws)
     adj_hr = (
@@ -239,6 +271,7 @@ def compute_park_adjustments(
     )
     adj_hr *= personalized_park_hr_mult(factors.geometry, profile, hand)
     return ParkAdjustments(
-        hit=factors.park_factor_hits,
+        hit=factors.park_factor_hits
+        * personalized_park_hit_mult(factors.geometry, profile, hand),
         hr=adj_hr,
     )
