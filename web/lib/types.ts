@@ -374,6 +374,27 @@ export interface PropBoard {
   picks: PropBoardPick[]
 }
 
+/** One 10° spray sector: balls in play, homers, average Statcast hit distance. */
+export interface SprayBin {
+  /** 0 = hugs the LF foul line … 8 = hugs the RF line (field-absolute). */
+  bin: number
+  bip: number
+  hr: number
+  avgDistanceFt: number | null
+}
+
+/**
+ * GET /api/players/:playerId/spray — spray-direction bins for the hot-zone
+ * visual. Empty bins = the player is below the 50-BIP aggregation gate.
+ */
+export interface PlayerSpray {
+  playerId: number
+  season: number
+  bats: string | null
+  totalBip: number
+  bins: SprayBin[]
+}
+
 /** GET /api/players/:playerId */
 export interface PlayerDetail {
   id: number

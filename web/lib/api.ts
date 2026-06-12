@@ -13,6 +13,7 @@ import type {
   PitchTypeLeaderboardEntry,
   PitchTypeRef,
   PlayerDetail,
+  PlayerSpray,
   PropBoard,
   TeamBatters,
   RecentStat,
@@ -142,6 +143,13 @@ export function fetchPitchTypes(): Promise<PitchTypeRef[]> {
   return apiGet<PitchTypeRef[]>('/api/leaderboards/pitch-types')
 }
 
+export function fetchPlayerSpray(playerId: number, season?: number): Promise<PlayerSpray> {
+  const params = new URLSearchParams()
+  if (season) params.set('season', String(season))
+  const qs = params.toString()
+  return apiGet<PlayerSpray>(`/api/players/${playerId}/spray${qs ? `?${qs}` : ''}`)
+}
+
 export function fetchPropBoard(date?: string): Promise<PropBoard> {
   const params = new URLSearchParams()
   if (date) params.set('date', date)
@@ -229,6 +237,8 @@ export const queryKeys = {
     detail: (playerId: number) => ['player', 'detail', playerId] as const,
     recent: (playerId: number, limit = 20) =>
       ['player', 'recent', playerId, limit] as const,
+    spray: (playerId: number, season?: number) =>
+      ['player', 'spray', playerId, season ?? 'current'] as const,
   },
   pitchers: {
     skill: (pitcherId: number) => ['pitcher', 'skill', pitcherId] as const,
@@ -320,6 +330,14 @@ export function pitchTypesQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.leaderboards.pitchTypes(),
     queryFn: fetchPitchTypes,
+  })
+}
+
+export function playerSprayQueryOptions(playerId: number, season?: number) {
+  return queryOptions({
+    queryKey: queryKeys.players.spray(playerId, season),
+    queryFn: () => fetchPlayerSpray(playerId, season),
+    enabled: playerId > 0,
   })
 }
 

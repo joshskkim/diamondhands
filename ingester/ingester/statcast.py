@@ -618,3 +618,75 @@ def agg_batter_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
             "barrel_pct": _pct(d["barrel"], bip),
         })
     return rows
+
+
+# Spray-direction bins for the hot-zone visual: 9 × 10° sectors spanning fair
+# territory, FIELD-absolute (bin 0 hugs the LF line, bin 8 the RF line) — the
+# client mirrors for handedness. Fair balls land within ±45°; the rare outlier
+# is clipped into the edge bins.
+SPRAY_BIN_COUNT = 9
+_SPRAY_BIN_WIDTH_DEG = 10.0
+_SPRAY_FAIR_HALF_DEG = 45.0
+
+
+def agg_batter_spray_bins(chunks: list[pd.DataFrame]) -> list[dict]:
+    """
+    Aggregate per-batter spray-direction bins from Statcast chunks: for each ball in
+    play, the spray angle (same hc_x/hc_y conversion the profile aggregation uses,
+    but KEPT instead of collapsed to pull/center/oppo) is bucketed into one of nine
+    10° sectors. Per (batter, bin): balls in play, home runs, and average Statcast
+    hit distance. One dict per (batter, bin) with bip > 0.
+    """
+    acc: dict[tuple[int, int], dict] = {}
+    sum_keys = ("bip", "hr", "dist_sum", "dist_cnt")
+
+    for df in chunks:
+        if df is None or df.empty:
+            continue
+        cols = ["batter", "hc_x", "hc_y", "events", "hit_distance_sc"]
+        sub = df[[c for c in cols if c in df.columns]].copy()
+        if "hc_x" not in sub.columns or "hc_y" not in sub.columns:
+            continue
+        for col in ("events", "hit_distance_sc"):
+            if col not in sub.columns:
+                sub[col] = np.nan
+        hx = _to_float64(sub["hc_x"])
+        hy = _to_float64(sub["hc_y"])
+        sub = sub[hx.notna() & hy.notna()]
+        if sub.empty:
+            continue
+        sub["batter"] = pd.to_numeric(sub["batter"], errors="coerce")
+        sub = sub[sub["batter"].notna()]
+        if sub.empty:
+            continue
+
+        spray = _spray_angle_deg(_to_float64(sub["hc_x"]), _to_float64(sub["hc_y"]))
+        clipped = spray.clip(-_SPRAY_FAIR_HALF_DEG, _SPRAY_FAIR_HALF_DEG - 1e-9)
+        bins = ((clipped + _SPRAY_FAIR_HALF_DEG) // _SPRAY_BIN_WIDTH_DEG).astype(int)
+        dist = _to_float64(sub["hit_distance_sc"])
+
+        per = pd.DataFrame({
+            "batter": sub["batter"].astype("int64").to_numpy(),
+            "bin": bins.to_numpy(),
+            "bip": 1,
+            "hr": sub["events"].astype(str).eq("home_run").astype(int).to_numpy(),
+            "dist_sum": dist.fillna(0.0).to_numpy(),
+            "dist_cnt": dist.notna().astype(int).to_numpy(),
+        })
+        grp = per.groupby(["batter", "bin"]).sum()
+        for (bid, b), row in grp.iterrows():
+            d = acc.setdefault((int(bid), int(b)), {k: 0.0 for k in sum_keys})
+            for k in sum_keys:
+                d[k] += float(row[k])
+
+    rows: list[dict] = []
+    for (bid, b), d in acc.items():
+        rows.append({
+            "player_id": bid,
+            "bin": b,
+            "bip": int(d["bip"]),
+            "hr": int(d["hr"]),
+            "avg_distance_ft": round(d["dist_sum"] / d["dist_cnt"], 1)
+            if d["dist_cnt"] > 0 else None,
+        })
+    return rows
