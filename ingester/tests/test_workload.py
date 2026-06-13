@@ -101,3 +101,31 @@ class TestFitting(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestComputeStarterWorkload(unittest.TestCase):
+    def test_bundle_shape_and_innings_clamp(self):
+        from ingester.projection.workload import (
+            compute_starter_workload, WORKLOAD_OUTS_LINES, WORKLOAD_K_LINES,
+            WORKLOAD_SIM_MIN_INNINGS, WORKLOAD_SIM_MAX_INNINGS,
+        )
+        wl = compute_starter_workload([18, 17, 19], [(7, 24), (6, 22), (8, 25)], PARAMS)
+        self.assertIn("mu_outs", wl)
+        self.assertEqual(set(wl["p_outs"]), {f"{L}" for L in WORKLOAD_OUTS_LINES})
+        self.assertEqual(set(wl["p_k"]), {f"{L}" for L in WORKLOAD_K_LINES})
+        self.assertTrue(WORKLOAD_SIM_MIN_INNINGS <= wl["innings"] <= WORKLOAD_SIM_MAX_INNINGS)
+        # All probabilities in [0,1].
+        for p in list(wl["p_outs"].values()) + list(wl["p_k"].values()):
+            self.assertGreaterEqual(p, 0.0); self.assertLessEqual(p, 1.0)
+
+    def test_deeper_pitcher_more_outs_prob(self):
+        from ingester.projection.workload import compute_starter_workload
+        deep = compute_starter_workload([21, 20, 22], [(6, 26)] * 3, PARAMS)
+        shallow = compute_starter_workload([12, 11, 13], [(2, 18)] * 3, PARAMS)
+        self.assertGreater(float(deep["p_outs"]["17.5"]), float(shallow["p_outs"]["17.5"]))
+        self.assertGreaterEqual(deep["innings"], shallow["innings"])
+
+    def test_empty_history_falls_to_league(self):
+        from ingester.projection.workload import compute_starter_workload
+        wl = compute_starter_workload([], [], PARAMS)
+        self.assertAlmostEqual(wl["mu_outs"], PARAMS.league_mean_outs, places=2)

@@ -23,6 +23,12 @@ from ingester.projection.batter_model import (
     yrfi_probability,
 )
 from ingester.projection.game_sim import GameSim, simulate_game
+from ingester.projection.workload import (
+    WorkloadParams,
+    compute_starter_workload,
+    fit_bf_given_outs,
+    walk_forward_residuals,
+)
 from ingester.projection.constants import (
     EXPECTED_PA_PER_STARTER,
     LINEUP_SIZE_HITTERS,
@@ -69,6 +75,9 @@ class TeamSideProjection:
     expected_runs: float
     starter_projs: list[BatterProjection]
     bullpen_projs: list[BatterProjection]
+    # Workload-model innings for the OPPOSING starter this lineup faces (governs how
+    # long these starter_projs are faced in the sim). None → sim uses its default.
+    opp_starter_innings: int | None = None
 
 # S3: optional per-market probability calibration, applied as a final post-process to
 # every projection. Set by cmd_project/cmd_backtest (--calibrate); None = no-op.
@@ -672,6 +681,59 @@ def _pad_confirmed_projs(
         )
 
 
+def _load_workload_params(conn: psycopg.Connection, as_of: date) -> WorkloadParams | None:
+    """League workload context from pitcher_starts STRICTLY BEFORE the slate (no leak).
+
+    Cheap (one scan), built once per slate. None when there's no prior data at all
+    (pre-2023), in which case callers skip the workload enrichment.
+    """
+    rows = conn.execute(
+        """
+        SELECT player_id, outs, batters_faced, strikeouts, game_date
+        FROM pitcher_starts WHERE game_date < %s ORDER BY player_id, game_date
+        """,
+        (as_of,),
+    ).fetchall()
+    if not rows:
+        return None
+    total_outs = sum(r[1] for r in rows)
+    total_k = sum((r[3] or 0) for r in rows)
+    total_bf = sum((r[2] or 0) for r in rows)
+    league_mean_outs = total_outs / len(rows)
+    league_k_per_bf = (total_k / total_bf) if total_bf else 0.22
+    bf_pairs = [(r[1], r[2]) for r in rows if r[2]]
+    bf_int, bf_slope = fit_bf_given_outs(bf_pairs)
+    by_pitcher_oldest: dict[int, list[int]] = {}
+    for pid, outs, *_ in rows:  # rows already ordered by player_id, game_date
+        by_pitcher_oldest.setdefault(int(pid), []).append(int(outs))
+    residuals = walk_forward_residuals(by_pitcher_oldest, league_mean_outs)
+    return WorkloadParams(
+        league_mean_outs=league_mean_outs,
+        league_k_per_bf=league_k_per_bf,
+        residuals=tuple(residuals),
+        bf_intercept=bf_int,
+        bf_slope=bf_slope,
+    )
+
+
+def _load_pitcher_start_history(
+    conn: psycopg.Connection, pitcher_id: int, as_of: date
+) -> tuple[list[int], list[tuple[int, int]]]:
+    """(outs, (k, bf)) for a pitcher's starts before the slate, MOST-RECENT-FIRST."""
+    rows = conn.execute(
+        """
+        SELECT outs, COALESCE(strikeouts, 0), COALESCE(batters_faced, 0)
+        FROM pitcher_starts
+        WHERE player_id = %s AND game_date < %s
+        ORDER BY game_date DESC
+        """,
+        (pitcher_id, as_of),
+    ).fetchall()
+    outs = [int(r[0]) for r in rows]
+    kbf = [(int(r[1]), int(r[2])) for r in rows]
+    return outs, kbf
+
+
 def _project_team_side(
     conn: psycopg.Connection,
     *,
@@ -684,6 +746,7 @@ def _project_team_side(
     park: ParkFactors,
     summary: ProjectSummary,
     bundle=None,
+    wl_params: WorkloadParams | None = None,
 ) -> TeamSideProjection | None:
     """Project hitters for one team; return expected runs + lineups, or None if insufficient data."""
     hitters = _resolve_lineup(
@@ -863,6 +926,19 @@ def _project_team_side(
         )
         return None
 
+    # Workload model for the opposing starter: how deep he goes + the K distribution
+    # that rides on it (validated out-of-sample, PR #48). Drives the prop board and
+    # the sim's depth for THIS lineup. Falls back silently when no prior starts exist.
+    workload = None
+    opp_starter_innings = None
+    if wl_params is not None:
+        outs_hist, kbf_hist = _load_pitcher_start_history(
+            conn, opposing_pitcher_id, summary.game_date
+        )
+        if outs_hist:
+            workload = compute_starter_workload(outs_hist, kbf_hist, wl_params)
+            opp_starter_innings = workload["innings"]
+
     # The opposing starter's projected line is the aggregate of this lineup vs him.
     # His team is the other side, so is_home flips.
     _upsert_pitcher_projection(
@@ -871,12 +947,14 @@ def _project_team_side(
         opposing_pitcher_id,
         not is_home,
         pitcher_line_from_lineup(starter_projs),
+        workload,
     )
 
     return TeamSideProjection(
         expected_runs=expected_team_runs(starter_projs, bullpen_projs),
         starter_projs=starter_projs,
         bullpen_projs=bullpen_projs,
+        opp_starter_innings=opp_starter_innings,
     )
 
 
@@ -886,14 +964,16 @@ def _upsert_pitcher_projection(
     pitcher_id: int,
     is_home: bool,
     line,
+    workload: dict | None = None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO pitcher_projections (
             game_id, pitcher_id, is_home, expected_bf, expected_outs, expected_ip,
-            expected_k, expected_h, expected_hr, expected_bb, expected_runs, computed_at
+            expected_k, expected_h, expected_hr, expected_bb, expected_runs,
+            workload, computed_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW())
         ON CONFLICT (game_id, pitcher_id) DO UPDATE SET
             is_home       = EXCLUDED.is_home,
             expected_bf   = EXCLUDED.expected_bf,
@@ -904,6 +984,7 @@ def _upsert_pitcher_projection(
             expected_hr   = EXCLUDED.expected_hr,
             expected_bb   = EXCLUDED.expected_bb,
             expected_runs = EXCLUDED.expected_runs,
+            workload      = EXCLUDED.workload,
             computed_at   = NOW()
         """,
         (
@@ -911,6 +992,7 @@ def _upsert_pitcher_projection(
             round(line.expected_bf, 2), round(line.expected_outs, 2), round(line.expected_ip, 2),
             round(line.expected_k, 2), round(line.expected_h, 2), round(line.expected_hr, 2),
             round(line.expected_bb, 2), round(line.expected_runs, 2),
+            json.dumps(workload) if workload is not None else None,
         ),
     )
 
@@ -921,6 +1003,7 @@ def _project_game(
     season: int,
     summary: ProjectSummary,
     bundle=None,
+    wl_params: WorkloadParams | None = None,
 ) -> bool:
     reason = _game_ready(game)
     if reason:
@@ -945,6 +1028,7 @@ def _project_game(
         park=park,
         summary=summary,
         bundle=bundle,
+        wl_params=wl_params,
     )
     away = _project_team_side(
         conn,
@@ -957,6 +1041,7 @@ def _project_game(
         park=park,
         summary=summary,
         bundle=bundle,
+        wl_params=wl_params,
     )
     if home is None or away is None:
         summary.skip_reasons.append(
@@ -1001,6 +1086,9 @@ def _project_game(
         seed=int(game.game_id),
         home_bullpen=home.bullpen_projs,
         away_bullpen=away.bullpen_projs,
+        # Each lineup faces the OPPOSING starter for that starter's projected depth.
+        home_starter_innings=home.opp_starter_innings,
+        away_starter_innings=away.opp_starter_innings,
     )
     _upsert_game_sim_projection(conn, game.game_id, sim)
 
@@ -1128,8 +1216,13 @@ def run_projections(
     if cleared:
         log.info("cleared %d stale/prior batter_projection row(s) before recompute", cleared)
 
+    # League workload context, built once from starts strictly before this slate.
+    wl_params = _load_workload_params(conn, game_date)
+    if wl_params is None:
+        log.info("no pitcher_starts before %s — workload model inactive this slate", game_date)
+
     for game in games:
-        if _project_game(conn, game, season, summary, bundle=bundle):
+        if _project_game(conn, game, season, summary, bundle=bundle, wl_params=wl_params):
             summary.games_projected += 1
         else:
             summary.games_skipped += 1

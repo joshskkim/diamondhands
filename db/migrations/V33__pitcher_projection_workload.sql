@@ -1,0 +1,11 @@
+-- Workload-model outputs attached to each starter's projection.
+--
+-- pitcher_projections.expected_* are a lineup AGGREGATE (this lineup vs the starter,
+-- at a fixed expected BF). The validated workload model (projection/workload.py, PR
+-- #48) instead predicts how DEEP the start goes and the K distribution that rides on
+-- it. Stored as one jsonb blob (like game_sim_projections' histograms) rather than a
+-- column per line:
+--   {"mu_outs": float, "k_rate": float,
+--    "p_outs": {"14.5": p, "17.5": p}, "p_k": {"3.5": p, ..., "6.5": p}}
+-- Feeds the pitcher prop board (outs / K cards) and the sim's per-side starter depth.
+ALTER TABLE pitcher_projections ADD COLUMN IF NOT EXISTS workload jsonb;
