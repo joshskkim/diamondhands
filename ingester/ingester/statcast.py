@@ -59,8 +59,17 @@ SC_TO_MLBAM: dict[str, str] = {
 
 
 def pull_statcast_chunks(season: int, chunk_days: int = 7) -> Iterator[pd.DataFrame]:
-    """Yield weekly chunks of pitch-level Statcast data for a season."""
+    """Yield weekly chunks of pitch-level Statcast data for a season.
+
+    For the in-progress season we stop at today: the rest of the season hasn't
+    been played, so iterating those weeks just makes empty pybaseball calls (for
+    a June run that was ~21 of 34 weekly chunks). Past seasons are unaffected —
+    their end date is already before today, so the clamp is a no-op.
+    """
+    from ingester.db import eastern_today
+
     start, end = season_boundaries(season)
+    end = min(end, eastern_today())
     cur = start
     while cur <= end:
         chunk_end = min(cur + timedelta(days=chunk_days - 1), end)
