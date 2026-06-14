@@ -23,7 +23,9 @@ import os
 # v2.6.0: weather HR effect is a physical fly-ball carry-vs-fence model (carry_delta_ft
 # → weather_carry_hr_mult), replacing the flat density×wind scalar.
 # v2.6.1: Marcel prior regresses each metric by its own constant (K light, ISO heavy).
-MODEL_VERSION: str = "v2.6.1"
+# v2.7.0: thin ISO histories regress toward a bat-speed-implied ISO anchor (Statcast
+# bat tracking) instead of the flat league mean.
+MODEL_VERSION: str = "v2.7.0"
 
 # ---------------------------------------------------------------------------
 # League-average reference (2025 MLB approximations)
@@ -71,6 +73,24 @@ MARCEL_SEASON_WEIGHTS: tuple[int, int, int] = (5, 4, 3)
 MARCEL_REGRESSION_PA_XWOBA: int = 1500
 MARCEL_REGRESSION_PA_K: int = 800
 MARCEL_REGRESSION_PA_ISO: int = 1800
+
+# ---------------------------------------------------------------------------
+# Bat-speed-implied ISO anchor (v2.7.0)
+# ---------------------------------------------------------------------------
+# Thin ISO histories regress toward a bat-speed-implied ISO instead of the flat
+# league mean (prior.bat_speed_iso_anchor). Out-of-sample gate (2024 tracking →
+# 2025 ISO, n=324, 5-fold CV): pooled effect nil — bat speed is redundant with a
+# full Marcel history (corr .61) — but the thin-history half improved ISO MAE by
+# 4.0% (.03361 → .03228), and the anchor architecture confines the influence to
+# exactly that cohort (evidence-rich PA swamps the 1800 phantom). Coefficients
+# from the standalone anchor fit: iso ≈ league + .0187·bs_z + .0082·fast_z
+# (standalone corr .496); feature moments from the 2024 fit population.
+BAT_SPEED_ISO_PER_Z: float = 0.0187
+FAST_SWING_ISO_PER_Z: float = 0.0082
+BAT_SPEED_MEAN: float = 69.6
+BAT_SPEED_SD: float = 2.89
+FAST_SWING_MEAN: float = 0.213
+FAST_SWING_SD: float = 0.170
 
 # ---------------------------------------------------------------------------
 # Personalized park HR factor (v2.5.0)

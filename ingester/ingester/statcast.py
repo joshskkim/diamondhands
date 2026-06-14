@@ -620,6 +620,70 @@ def agg_batter_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
     return rows
 
 
+def agg_batter_bat_tracking(chunks: list[pd.DataFrame]) -> list[dict]:
+    """
+    Aggregate per-batter bat-tracking metrics from Statcast chunks (2024+ only —
+    earlier seasons have no bat-tracking columns and contribute nothing).
+
+    Uses swings with a measured ``bat_speed`` (Statcast reports bat tracking on
+    competitive swings). ``fast_swing_rate`` is the share at >= 75 mph, Statcast's
+    fast-swing convention. attack_angle / swing_length averaged where present.
+    One dict per batter.
+    """
+    sums: dict[int, dict[str, float]] = {}
+
+    for df in chunks:
+        if df is None or df.empty or "bat_speed" not in df.columns:
+            continue
+        cols = ["batter", "bat_speed", "swing_length", "attack_angle"]
+        sub = df[[c for c in cols if c in df.columns]].copy()
+        bs = _to_float64(sub["bat_speed"])
+        sub = sub[bs.notna()]
+        if sub.empty:
+            continue
+        sub["batter"] = pd.to_numeric(sub["batter"], errors="coerce")
+        sub = sub[sub["batter"].notna()]
+        if sub.empty:
+            continue
+
+        bs = _to_float64(sub["bat_speed"])
+        sl = _to_float64(sub["swing_length"]) if "swing_length" in sub.columns \
+            else pd.Series(np.nan, index=sub.index)
+        aa = _to_float64(sub["attack_angle"]) if "attack_angle" in sub.columns \
+            else pd.Series(np.nan, index=sub.index)
+
+        frame = pd.DataFrame({
+            "batter": sub["batter"].astype(int),
+            "swings": 1.0,
+            "bs_sum": bs,
+            "fast": (bs >= 75.0).astype(float),
+            "sl_sum": sl.fillna(0.0),
+            "sl_cnt": sl.notna().astype(float),
+            "aa_sum": aa.fillna(0.0),
+            "aa_cnt": aa.notna().astype(float),
+        })
+        agg = frame.groupby("batter").sum()
+        for pid, row in agg.iterrows():
+            tgt = sums.setdefault(int(pid), {k: 0.0 for k in row.index})
+            for k, v in row.items():
+                tgt[k] += float(v)
+
+    out: list[dict] = []
+    for pid, s in sums.items():
+        n = s["swings"]
+        if n <= 0:
+            continue
+        out.append({
+            "player_id": pid,
+            "swings": int(n),
+            "avg_bat_speed": round(s["bs_sum"] / n, 2),
+            "fast_swing_rate": round(s["fast"] / n, 4),
+            "avg_swing_length": round(s["sl_sum"] / s["sl_cnt"], 2) if s["sl_cnt"] > 0 else None,
+            "avg_attack_angle": round(s["aa_sum"] / s["aa_cnt"], 2) if s["aa_cnt"] > 0 else None,
+        })
+    return out
+
+
 # Spray-direction bins for the hot-zone visual: 9 × 10° sectors spanning fair
 # territory, FIELD-absolute (bin 0 hugs the LF line, bin 8 the RF line) — the
 # client mirrors for handedness. Fair balls land within ±45°; the rare outlier

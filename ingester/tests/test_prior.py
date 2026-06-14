@@ -104,3 +104,33 @@ class TestMarcelPrior(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBatSpeedIsoAnchor(unittest.TestCase):
+    def test_hand_computed_anchor(self):
+        from ingester.projection.constants import (
+            BAT_SPEED_ISO_PER_Z, BAT_SPEED_MEAN, BAT_SPEED_SD,
+            FAST_SWING_ISO_PER_Z, FAST_SWING_MEAN, FAST_SWING_SD,
+        )
+        from ingester.projection.prior import bat_speed_iso_anchor
+        bs, fast = 72.49, 0.383  # +1 SD on both, exactly
+        expected = (LEAGUE_ISO
+                    + BAT_SPEED_ISO_PER_Z * (bs - BAT_SPEED_MEAN) / BAT_SPEED_SD
+                    + FAST_SWING_ISO_PER_Z * (fast - FAST_SWING_MEAN) / FAST_SWING_SD)
+        self.assertAlmostEqual(bat_speed_iso_anchor(bs, fast, LEAGUE_ISO), expected, places=9)
+        self.assertIsNone(bat_speed_iso_anchor(None, 0.2, LEAGUE_ISO))
+        self.assertIsNone(bat_speed_iso_anchor(70.0, None, LEAGUE_ISO))
+
+    def test_iso_anchor_replaces_league_target(self):
+        from ingester.projection.prior import bat_speed_iso_anchor as _anchor  # noqa: F401
+        seasons = {2025: SeasonLine(pa=200, ab=180, hits=45, hr=5, tb=70, k=50, xwoba=0.300)}
+        kw = dict(league_xwoba=LEAGUE_XWOBA, league_k_rate=LEAGUE_K_PER_PA, league_iso=LEAGUE_ISO)
+        plain = compute_marcel_prior(seasons, 2026, **kw)
+        hi = compute_marcel_prior(seasons, 2026, **kw, iso_anchor=LEAGUE_ISO + 0.05)
+        lo = compute_marcel_prior(seasons, 2026, **kw, iso_anchor=LEAGUE_ISO - 0.05)
+        # Thin history (1000 weighted PA vs 1800 phantom): anchor moves ISO a lot.
+        self.assertGreater(hi.iso, plain.iso)
+        self.assertLess(lo.iso, plain.iso)
+        # Other metrics untouched.
+        self.assertAlmostEqual(hi.xwoba, plain.xwoba, places=9)
+        self.assertAlmostEqual(hi.k_rate, plain.k_rate, places=9)
