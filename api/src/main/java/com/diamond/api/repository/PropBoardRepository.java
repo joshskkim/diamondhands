@@ -3,10 +3,14 @@ package com.diamond.api.repository;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Reads the mechanistic model's batter projections (batter_projections) with the full
@@ -72,6 +76,29 @@ public class PropBoardRepository {
         FROM logs
         """;
 
+    // Batched form of RATES_SQL: clear rates for many players in one round-trip. Same
+    // window logic, but PARTITION BY player_id and GROUP BY player_id so a single query
+    // replaces the per-candidate N+1. Player ids are passed as a SQL array (= ANY(?)).
+    private static final String RATES_BATCH_SQL = """
+        WITH logs AS (
+            SELECT player_id, hits, home_runs, strikeouts, game_date,
+                   ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY game_date DESC) AS rn
+            FROM player_game_stats
+            WHERE player_id = ANY(?) AND game_date < ? AND plate_appearances > 0
+        )
+        SELECT
+            player_id,
+            AVG((hits > 0)::int)       FILTER (WHERE rn <= 10) AS hit_l10,
+            AVG((home_runs > 0)::int)  FILTER (WHERE rn <= 10) AS hr_l10,
+            AVG((strikeouts > 0)::int) FILTER (WHERE rn <= 10) AS k_l10,
+            AVG((hits > 0)::int)       FILTER (WHERE game_date >= ?) AS hit_season,
+            AVG((home_runs > 0)::int)  FILTER (WHERE game_date >= ?) AS hr_season,
+            AVG((strikeouts > 0)::int) FILTER (WHERE game_date >= ?) AS k_season,
+            COUNT(*)                   FILTER (WHERE game_date >= ?) AS n_season
+        FROM logs
+        GROUP BY player_id
+        """;
+
     // Best cached over-price for the player's 0.5 line, if odds were ever pulled for
     // this slate. Absence is normal (model-only board).
     private static final String PRICE_SQL = """
@@ -130,6 +157,34 @@ public class PropBoardRepository {
         return jdbc.query(RATES_SQL,
             rs -> rs.next() ? mapRates(rs) : null,
             playerId, date, seasonStart, seasonStart, seasonStart, seasonStart);
+    }
+
+    /** Clear rates for many players in one query (keyed by player_id). Players with no
+     *  qualifying game log are simply absent from the map — same as a null single lookup. */
+    public Map<Integer, ClearRates> findClearRatesBatch(Collection<Integer> playerIds, LocalDate date) {
+        if (playerIds.isEmpty()) {
+            return Map.of();
+        }
+        LocalDate seasonStart = LocalDate.of(date.getYear(), 1, 1);
+        Integer[] ids = playerIds.toArray(new Integer[0]);
+        return jdbc.query(
+            con -> {
+                PreparedStatement ps = con.prepareStatement(RATES_BATCH_SQL);
+                ps.setArray(1, con.createArrayOf("integer", ids));
+                ps.setObject(2, date);
+                ps.setObject(3, seasonStart);
+                ps.setObject(4, seasonStart);
+                ps.setObject(5, seasonStart);
+                ps.setObject(6, seasonStart);
+                return ps;
+            },
+            rs -> {
+                Map<Integer, ClearRates> out = new HashMap<>();
+                while (rs.next()) {
+                    out.put(rs.getInt("player_id"), mapRates(rs));
+                }
+                return out;
+            });
     }
 
     public BestPrice findBestOverPrice(LocalDate date, int playerId, String market) {

@@ -63,6 +63,48 @@
       <artifactId>spring-boot-starter-cache</artifactId>
     </dependency>
 
+    <!-- Observability: Actuator (health probes, /metrics) + Prometheus scrape registry -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+    </dependency>
+
+    <!-- AOP: enables Micrometer's @Observed / ObservedAspect on service methods -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-aop</artifactId>
+    </dependency>
+
+    <!-- Distributed tracing: Micrometer Tracing → OpenTelemetry bridge → OTLP exporter (Jaeger) -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-tracing-bridge-otel</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-exporter-otlp</artifactId>
+    </dependency>
+
+    <!-- Per-JDBC-query observation spans (surfaces the N+1 fan-out in the trace waterfall).
+         Not in the Spring Boot BOM, so the version is pinned explicitly. -->
+    <dependency>
+      <groupId>net.ttddyy.observation</groupId>
+      <artifactId>datasource-micrometer-spring-boot</artifactId>
+      <version>1.0.5</version>
+    </dependency>
+
+    <!-- JSON structured logging with trace context (Spring Boot 3.3 predates built-in
+         structured logging; pinned version). -->
+    <dependency>
+      <groupId>net.logstash.logback</groupId>
+      <artifactId>logstash-logback-encoder</artifactId>
+      <version>7.4</version>
+    </dependency>
+
     <!-- PostgreSQL driver -->
     <dependency>
       <groupId>org.postgresql</groupId>

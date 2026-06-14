@@ -6,6 +6,7 @@ import com.diamond.api.repository.OddsRepository.GameMeta;
 import com.diamond.api.repository.OddsRepository.GameOddRow;
 import com.diamond.api.repository.OddsRepository.PropOddRow;
 import com.diamond.api.repository.OddsRepository.RunProj;
+import io.micrometer.observation.annotation.Observed;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
@@ -94,6 +95,7 @@ public class OddsService {
         return out;
     }
 
+    @Observed(name = "odds.bestPlays", contextualName = "odds.bestPlays")
     @Cacheable(cacheNames = "oddsBest", key = "#date")
     public List<BestPlayDto> bestPlays(LocalDate date) {
         List<BestPlayDto> plays = new ArrayList<>();
