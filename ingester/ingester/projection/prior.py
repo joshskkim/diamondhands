@@ -31,6 +31,9 @@ from ingester.projection.constants import (
     MARCEL_REGRESSION_PA_K,
     MARCEL_REGRESSION_PA_XWOBA,
     MARCEL_SEASON_WEIGHTS,
+    WHIFF_K_PER_Z,
+    WHIFF_MEAN,
+    WHIFF_SD,
 )
 
 
@@ -99,6 +102,7 @@ def compute_marcel_prior(
     regression_pa_k: float = MARCEL_REGRESSION_PA_K,
     regression_pa_iso: float = MARCEL_REGRESSION_PA_ISO,
     iso_anchor: float | None = None,
+    k_rate_anchor: float | None = None,
 ) -> ProjectionPrior | None:
     """Project ``target_season`` from the prior three seasons.
 
@@ -110,6 +114,10 @@ def compute_marcel_prior(
     dominate the phantom 1800); thin histories lean on it hard — which is exactly
     where the out-of-sample gate showed bat tracking helps (thin-half ISO MAE −4%)
     and where it showed redundancy for established hitters.
+    ``k_rate_anchor`` (v2.8): same architecture for K — a whiff-implied K rate (see
+    whiff_k_anchor). Out-of-sample this helped across the board, not just thin
+    histories (deep 300+ PA K-rate MAE −17.5%), because league-shrinking a
+    high-whiff hitter's K over-corrects where whiff is most informative.
     Returns None when the player has no usable prior-season data at all (a true
     debutant — the caller should fall back to the league mean for them).
     """
@@ -139,9 +147,10 @@ def compute_marcel_prior(
             iso_pairs.append((wpa, iso))
 
     iso_target = iso_anchor if iso_anchor is not None else league_iso
+    k_target = k_rate_anchor if k_rate_anchor is not None else league_k_rate
     return ProjectionPrior(
         xwoba=round(_weighted_regress(xwoba_pairs, league_xwoba, regression_pa_xwoba), 4),
-        k_rate=round(_weighted_regress(k_pairs, league_k_rate, regression_pa_k), 4),
+        k_rate=round(_weighted_regress(k_pairs, k_target, regression_pa_k), 4),
         iso=round(_weighted_regress(iso_pairs, iso_target, regression_pa_iso), 4),
         proj_pa=int(weighted_pa),
     )
@@ -165,3 +174,18 @@ def bat_speed_iso_anchor(
     bs_z = (avg_bat_speed - BAT_SPEED_MEAN) / BAT_SPEED_SD
     fast_z = (fast_swing_rate - FAST_SWING_MEAN) / FAST_SWING_SD
     return league_iso + BAT_SPEED_ISO_PER_Z * bs_z + FAST_SWING_ISO_PER_Z * fast_z
+
+
+def whiff_k_anchor(whiff_rate: float | None, league_k_rate: float) -> float | None:
+    """Whiff-implied K rate: the regression target for the K prior (v2.8).
+
+    A batter's overall swinging-strike rate is a more granular contact-skill signal
+    than PA-level K rate. Fit out-of-sample (2024 whiff -> 2025 K, n=322): standalone
+    K ≈ league_k + .0401·whiff_z. Centered on the league K rate (not the fitted
+    intercept, which carries ≥200-PA survivor bias), same as bat_speed_iso_anchor.
+    Returns None without whiff data → caller falls back to the flat league anchor.
+    """
+    if whiff_rate is None:
+        return None
+    whiff_z = (whiff_rate - WHIFF_MEAN) / WHIFF_SD
+    return league_k_rate + WHIFF_K_PER_Z * whiff_z

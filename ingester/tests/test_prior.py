@@ -134,3 +134,28 @@ class TestBatSpeedIsoAnchor(unittest.TestCase):
         # Other metrics untouched.
         self.assertAlmostEqual(hi.xwoba, plain.xwoba, places=9)
         self.assertAlmostEqual(hi.k_rate, plain.k_rate, places=9)
+
+
+class TestWhiffKAnchor(unittest.TestCase):
+    def test_hand_computed_anchor(self):
+        from ingester.projection.constants import WHIFF_K_PER_Z, WHIFF_MEAN, WHIFF_SD
+        from ingester.projection.prior import whiff_k_anchor
+        whiff = WHIFF_MEAN + WHIFF_SD  # exactly +1 SD
+        expected = LEAGUE_K_PER_PA + WHIFF_K_PER_Z
+        self.assertAlmostEqual(whiff_k_anchor(whiff, LEAGUE_K_PER_PA), expected, places=9)
+        # League-average whiff -> league K (no nudge).
+        self.assertAlmostEqual(whiff_k_anchor(WHIFF_MEAN, LEAGUE_K_PER_PA), LEAGUE_K_PER_PA, places=9)
+        self.assertIsNone(whiff_k_anchor(None, LEAGUE_K_PER_PA))
+
+    def test_k_anchor_replaces_league_target(self):
+        seasons = {2025: SeasonLine(pa=200, ab=180, hits=45, hr=5, tb=70, k=50, xwoba=0.300)}
+        kw = dict(league_xwoba=LEAGUE_XWOBA, league_k_rate=LEAGUE_K_PER_PA, league_iso=LEAGUE_ISO)
+        plain = compute_marcel_prior(seasons, 2026, **kw)
+        hi = compute_marcel_prior(seasons, 2026, **kw, k_rate_anchor=LEAGUE_K_PER_PA + 0.05)
+        lo = compute_marcel_prior(seasons, 2026, **kw, k_rate_anchor=LEAGUE_K_PER_PA - 0.05)
+        # Thin history leans on the anchor: a higher K anchor pulls the K prior up.
+        self.assertGreater(hi.k_rate, plain.k_rate)
+        self.assertLess(lo.k_rate, plain.k_rate)
+        # Other metrics untouched.
+        self.assertAlmostEqual(hi.xwoba, plain.xwoba, places=9)
+        self.assertAlmostEqual(hi.iso, plain.iso, places=9)
