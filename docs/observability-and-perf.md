@@ -114,6 +114,33 @@ join cannot change the result):
 A `leaderboard.db.query` counter was added to make the single-flight effect directly
 observable (it increments only on an actual heavy-query execution).
 
+## 4. SLOs & alerting
+
+`monitoring/alert-rules.yml` (loaded by Prometheus, firing alerts visible at
+`http://localhost:9090/alerts`) encodes the service SLOs:
+
+| Alert | Condition | SLO |
+|---|---|---|
+| `HighErrorRate` | 5xx ratio > 5% for 5m | availability < 1% errors |
+| `HighRequestLatencyP95` | p95 `http.server.requests` > 1s for 5m | latency p95 < 1s |
+| `HikariConnectionsWaiting` | `hikaricp_connections_pending` > 0 for 2m | no pool starvation |
+| `HikariPoolExhausted` | `active >= max` for 1m | — (the leaderboard meltdown signature) |
+
+The two HikariCP rules would have paged on the leaderboard meltdown before users saw timeouts.
+Routing/paging would add an Alertmanager; the Prometheus Alerts tab is enough locally.
+
+## 5. CI
+
+`.github/workflows/api-ci.yml` runs on PRs touching `api/**` or `db/migrations/**`:
+1. **Verify Flyway migrations apply from an empty database.** This caught (and now guards) a
+   real main bug: two `V32__` files → `Found more than one migration with version 32`, which
+   broke every fresh environment but was invisible to anyone with an already-populated dev DB.
+   (Fixed by renumbering one to `V32_1`.)
+2. **Build & test** (`mvn -B verify`) against Postgres + Redis service containers, so the
+   `@SpringBootTest` integration tests exercise real datasource/redis wiring. The
+   data-dependent equivalence assertions `assumeTrue`-skip on an empty CI database; the unit
+   tests and context/health checks run fully.
+
 ## Reproducing the measurements
 ```bash
 # under the loadtest profile (cache off) so the DB path is actually exercised:

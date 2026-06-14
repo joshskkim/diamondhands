@@ -1,0 +1,64 @@
+name: API CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "api/**"
+      - "db/migrations/**"
+      - ".github/workflows/api-ci.yml"
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+
+    # Real Postgres + Redis so the @SpringBootTest integration tests exercise the actual
+    # wiring (datasource/redis health, repository SQL) rather than mocks.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: diamond
+          POSTGRES_USER: diamond
+          POSTGRES_PASSWORD: diamond
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U diamond -d diamond"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    env:
+      # No OTLP collector in CI; disable tracing export so it can't add noise/latency.
+      MANAGEMENT_TRACING_ENABLED: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # Headline guard: the migrations must apply cleanly from an empty database. This is
+      # exactly the failure mode that shipped to main (two V32__ files -> "more than one
+      # migration with version 32"), invisible to anyone whose dev DB was already populated.
+      - name: Verify Flyway migrations apply from scratch
+        run: |
+          docker run --rm --network host \
+            -v "${{ github.workspace }}/db/migrations:/flyway/sql" \
+            flyway/flyway:10 \
+            -url=jdbc:postgresql://localhost:5432/diamond \
+            -user=diamond -password=diamond \
+            -locations=filesystem:/flyway/sql \
+            -connectRetries=10 migrate
+
+      - name: Build & test
+        working-directory: api
+        run: mvn -B -ntp verify
