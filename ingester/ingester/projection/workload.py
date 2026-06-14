@@ -36,6 +36,15 @@ K_RATE_PRIOR_BF: float = 100.0
 # Physical bounds on a start's outs.
 MAX_OUTS: int = 27
 
+# Standard sportsbook lines we precompute P(over) for (the prop board / picks read
+# these). Outs 14.5/17.5 ≈ "5 IP" / "6 IP"; the K ladder spans common K props.
+WORKLOAD_OUTS_LINES: tuple[float, ...] = (14.5, 17.5)
+WORKLOAD_K_LINES: tuple[float, ...] = (3.5, 4.5, 5.5, 6.5)
+# Clamp the sim's per-side starter innings to a sane range (a μ of 16 outs ≈ 5 IP;
+# never let a noisy estimate pull a starter below 3 or above 8 innings in the sim).
+WORKLOAD_SIM_MIN_INNINGS: int = 3
+WORKLOAD_SIM_MAX_INNINGS: int = 8
+
 
 @dataclass(frozen=True)
 class WorkloadParams:
@@ -157,3 +166,29 @@ def walk_forward_residuals(
             residuals.append(o - mu)
             history.insert(0, o)
     return residuals
+
+
+def compute_starter_workload(
+    outs_history: list[int],
+    kbf_history: list[tuple[int, int]],
+    params: WorkloadParams,
+) -> dict:
+    """Bundle the workload model's outputs for one starter into a JSON-ready dict.
+
+    Histories are most-recent-first. Returns mu_outs, the blended per-BF K rate,
+    P(outs > line) for each WORKLOAD_OUTS_LINES, P(K > line) for each
+    WORKLOAD_K_LINES, and the sim-clamped starter innings.
+    """
+    mu = expected_outs(outs_history, params.league_mean_outs)
+    kr = k_rate_blend(kbf_history, params.league_k_per_bf)
+    innings = max(
+        WORKLOAD_SIM_MIN_INNINGS,
+        min(WORKLOAD_SIM_MAX_INNINGS, int(round(mu / 3.0))),
+    )
+    return {
+        "mu_outs": round(mu, 2),
+        "k_rate": round(kr, 4),
+        "innings": innings,
+        "p_outs": {f"{L}": round(p_outs_over(L, mu, params), 4) for L in WORKLOAD_OUTS_LINES},
+        "p_k": {f"{L}": round(p_strikeouts_over(L, mu, kr, params), 4) for L in WORKLOAD_K_LINES},
+    }

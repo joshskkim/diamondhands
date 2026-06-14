@@ -318,12 +318,19 @@ def simulate_game(
     home_bullpen: list[BatterProjection] | None = None,
     away_bullpen: list[BatterProjection] | None = None,
     starter_innings: int = 5,
+    home_starter_innings: int | None = None,
+    away_starter_innings: int | None = None,
 ) -> GameSim:
     """Simulate a full game n_sims times; derive per-period markets and props.
 
     `home_bullpen`/`away_bullpen` are the same lineups re-projected against the opposing
     bullpen; when given, the bullpen is faced after `starter_innings` innings so the
     full-game output is bullpen-aware while F1/F3/F5 stay starter-driven.
+
+    `home_starter_innings`/`away_starter_innings` (v2.8): the depth of the OPPOSING
+    starter each lineup faces, from the workload model — the home lineup faces the away
+    starter, so `home_starter_innings` is the away starter's projected innings. Both
+    default to the flat `starter_innings` when not supplied.
     """
     # Independent RNG streams per team so one team's late innings (bullpen) can't shift
     # the other team's draws — this keeps F1/F5 invariant to the bullpen inputs.
@@ -331,9 +338,11 @@ def simulate_game(
     home_pen = lineup_probs(home_bullpen) if home_bullpen is not None else None
     away_pen = lineup_probs(away_bullpen) if away_bullpen is not None else None
     home = _sim_team(lineup_probs(home_lineup), n_sims, rng_home,
-                     bullpen_probs=home_pen, starter_innings=starter_innings)
+                     bullpen_probs=home_pen,
+                     starter_innings=home_starter_innings or starter_innings)
     away = _sim_team(lineup_probs(away_lineup), n_sims, rng_away,
-                     bullpen_probs=away_pen, starter_innings=starter_innings)
+                     bullpen_probs=away_pen,
+                     starter_innings=away_starter_innings or starter_innings)
 
     periods = {
         p: PeriodMarket(innings=p, home_runs=home.period_runs[p], away_runs=away.period_runs[p])
