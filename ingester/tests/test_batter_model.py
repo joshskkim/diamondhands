@@ -133,6 +133,24 @@ class TestBatterModelHandComputed(unittest.TestCase):
         self.assertAlmostEqual(base.hr_per_pa, LEAGUE_HR_PER_PA * (0.120 / LEAGUE_ISO))
         self.assertNotAlmostEqual(base.hr_per_pa, xwoba_only_hr, places=3)
 
+    def test_hr_barrel_blend(self) -> None:
+        from ingester.projection.constants import HR_BARREL_BLEND_W, LEAGUE_BARREL_RATE
+        kw = dict(xwoba=0.32, k_rate=0.22, iso=LEAGUE_ISO, weight_l30=0.0)
+        # No barrel -> pure ISO basis (league ISO -> league HR).
+        self.assertAlmostEqual(
+            base_rates_from_blend(SkillBlends(**kw)).hr_per_pa, LEAGUE_HR_PER_PA
+        )
+        # Barrel at the league rate leaves HR at league (no nudge).
+        self.assertAlmostEqual(
+            base_rates_from_blend(SkillBlends(**kw, barrel_rate=LEAGUE_BARREL_RATE)).hr_per_pa,
+            LEAGUE_HR_PER_PA,
+        )
+        # High barrel scales HR up by the blended factor (ISO held at league).
+        hi = base_rates_from_blend(SkillBlends(**kw, barrel_rate=0.13))
+        expected_scale = (1 - HR_BARREL_BLEND_W) * 1.0 + HR_BARREL_BLEND_W * (0.13 / LEAGUE_BARREL_RATE)
+        self.assertAlmostEqual(hi.hr_per_pa, LEAGUE_HR_PER_PA * expected_scale)
+        self.assertGreater(hi.hr_per_pa, LEAGUE_HR_PER_PA)
+
     def test_base_rates(self) -> None:
         blends = SkillBlends(
             xwoba=self.XWOBA_BLEND,

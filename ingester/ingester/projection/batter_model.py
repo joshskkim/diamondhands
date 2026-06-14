@@ -14,9 +14,11 @@ from ingester.projection.constants import (
     AVG_BASES_PER_HIT_ISO_MULT,
     EXPECTED_PA_PER_STARTER,
     FIRST_INNING_RUN_SHARE,
+    HR_BARREL_BLEND_W,
     LEAGUE_1B_SHARE,
     LEAGUE_2B_SHARE,
     LEAGUE_3B_SHARE,
+    LEAGUE_BARREL_RATE,
     LEAGUE_BB_PER_PA,
     LEAGUE_HIT_PER_PA,
     LEAGUE_HR_PER_PA,
@@ -50,6 +52,9 @@ class BatterSkillInput:
     iso: float
     iso_l30: float
     pa_l30: int
+    # v2.9: prior-season regressed barrel rate (true-talent HR signal). None →
+    # the HR rate falls back to the pure-ISO basis (pre-v2.9 behaviour).
+    barrel_rate: float | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +63,8 @@ class SkillBlends:
     k_rate: float
     iso: float
     weight_l30: float
+    # Carried through from skill (no L30 blend — it's a season-constant prior).
+    barrel_rate: float | None = None
 
 
 @dataclass(frozen=True)
@@ -124,16 +131,28 @@ def blend_batter_skills(skill: BatterSkillInput) -> SkillBlends:
         k_rate=blend_metric(skill.k_rate, l30_k, skill.pa_l30),
         iso=blend_metric(skill.iso, l30_iso, skill.pa_l30),
         weight_l30=w_l30,
+        barrel_rate=skill.barrel_rate,
     )
 
 
 def base_rates_from_blend(blends: SkillBlends) -> BaseRates:
-    """Hit rate from xwOBA; HR rate from ISO (power), not overall offensive value."""
+    """Hit rate from xwOBA; HR rate from a barrel+ISO blend (v2.9).
+
+    ISO alone conflates doubles/triples power with true HR power; barrel rate is the
+    canonical HR predictor (see HR_BARREL_BLEND_W). When a prior-season barrel rate
+    is present, the HR scale blends barrel and ISO; otherwise it falls back to the
+    pre-v2.9 pure-ISO basis.
+    """
     hit_scale = blends.xwoba / LEAGUE_XWOBA if LEAGUE_XWOBA > 0 else 1.0
     iso_scale = blends.iso / LEAGUE_ISO if LEAGUE_ISO > 0 else 1.0
+    if blends.barrel_rate is not None and LEAGUE_BARREL_RATE > 0:
+        barrel_scale = blends.barrel_rate / LEAGUE_BARREL_RATE
+        hr_scale = (1.0 - HR_BARREL_BLEND_W) * iso_scale + HR_BARREL_BLEND_W * barrel_scale
+    else:
+        hr_scale = iso_scale
     return BaseRates(
         hit_per_pa=LEAGUE_HIT_PER_PA * hit_scale,
-        hr_per_pa=LEAGUE_HR_PER_PA * iso_scale,
+        hr_per_pa=LEAGUE_HR_PER_PA * hr_scale,
         k_per_pa=blends.k_rate,
     )
 
@@ -261,6 +280,7 @@ def project_batter(
             k_rate=matchup_k_rate if matchup_k_rate is not None else blends.k_rate,
             iso=matchup_iso if matchup_iso is not None else blends.iso,
             weight_l30=blends.weight_l30,
+            barrel_rate=blends.barrel_rate,
         )
     base = base_rates_from_blend(blends)
     adjusted = adjusted_rates_from_factors(
