@@ -66,6 +66,7 @@ ON CONFLICT (player_id, as_of_date) DO UPDATE SET
     bb_rate           = EXCLUDED.bb_rate,
     iso               = EXCLUDED.iso,
     babip             = EXCLUDED.babip,
+    barrel_rate       = EXCLUDED.barrel_rate,
     xwoba_l30         = EXCLUDED.xwoba_l30,
     k_rate_l30        = EXCLUDED.k_rate_l30,
     iso_l30           = EXCLUDED.iso_l30,
