@@ -84,6 +84,43 @@ public class PropBoardRepository {
         LIMIT 1
         """;
 
+    // Starting-pitcher projections + workload distribution for the pitcher-prop cards.
+    // p_k thresholds are 4.5/5.5/6.5; p_outs are 14.5/17.5 (fixed by the workload model).
+    // opponent = the lineup this starter faces.
+    private static final String PITCHER_SQL = """
+        SELECT pp.game_id, at2.abbreviation || ' @ ' || ht.abbreviation AS matchup,
+               pp.pitcher_id, p.full_name, t.abbreviation AS team,
+               opp.abbreviation AS opponent,
+               pp.expected_k, pp.expected_outs, pp.expected_ip,
+               (pp.workload->'p_k'->>'4.5')::float     AS pk_45,
+               (pp.workload->'p_k'->>'5.5')::float     AS pk_55,
+               (pp.workload->'p_k'->>'6.5')::float     AS pk_65,
+               (pp.workload->'p_outs'->>'14.5')::float AS po_145,
+               (pp.workload->'p_outs'->>'17.5')::float AS po_175
+        FROM pitcher_projections pp
+        JOIN games g   ON g.id  = pp.game_id
+        JOIN players p ON p.id  = pp.pitcher_id
+        JOIN teams t   ON t.id  = CASE WHEN pp.is_home THEN g.home_team_id ELSE g.away_team_id END
+        JOIN teams opp ON opp.id = CASE WHEN pp.is_home THEN g.away_team_id ELSE g.home_team_id END
+        JOIN teams ht  ON ht.id = g.home_team_id
+        JOIN teams at2 ON at2.id = g.away_team_id
+        WHERE g.game_date = ?
+        """;
+
+    // Consensus over-line for a starter's prop: most-quoted line, best over price there.
+    private static final String PITCHER_PRICE_SQL = """
+        WITH quotes AS (
+            SELECT line, bookmaker, price_american, price_decimal,
+                   COUNT(*) OVER (PARTITION BY line) AS books_at_line
+            FROM player_prop_odds
+            WHERE game_id = ? AND player_id = ? AND market = ? AND side = 'over'
+        )
+        SELECT line, bookmaker, price_american, price_decimal
+        FROM quotes
+        ORDER BY books_at_line DESC, price_decimal DESC
+        LIMIT 1
+        """;
+
     public List<SlateRow> findSlateRows(LocalDate date) {
         return jdbc.query(SLATE_SQL, this::mapSlate, date);
     }
@@ -102,6 +139,27 @@ public class PropBoardRepository {
                 rs.getInt("price_american"),
                 rs.getDouble("price_decimal")),
             date, playerId, market);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    public List<PitcherRow> findPitcherRows(LocalDate date) {
+        return jdbc.query(PITCHER_SQL, (rs, n) -> new PitcherRow(
+            rs.getLong("game_id"), rs.getString("matchup"),
+            rs.getInt("pitcher_id"), rs.getString("full_name"),
+            rs.getString("team"), rs.getString("opponent"),
+            dbl(rs, "expected_k"), dbl(rs, "expected_outs"), dbl(rs, "expected_ip"),
+            dbl(rs, "pk_45"), dbl(rs, "pk_55"), dbl(rs, "pk_65"),
+            dbl(rs, "po_145"), dbl(rs, "po_175")),
+            date);
+    }
+
+    /** Consensus over-line + best price for a starter's prop; null when no odds. */
+    public PitcherPrice findPitcherOverPrice(long gameId, int pitcherId, String market) {
+        List<PitcherPrice> rows = jdbc.query(PITCHER_PRICE_SQL,
+            (rs, n) -> new PitcherPrice(
+                dbl(rs, "line"), rs.getString("bookmaker"),
+                rs.getInt("price_american"), rs.getDouble("price_decimal")),
+            gameId, pitcherId, market);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
@@ -170,4 +228,15 @@ public class PropBoardRepository {
     ) {}
 
     public record BestPrice(String bookmaker, int priceAmerican, double priceDecimal) {}
+
+    public record PitcherRow(
+        long gameId, String matchup,
+        int pitcherId, String pitcher, String team, String opponent,
+        Double expectedK, Double expectedOuts, Double expectedIp,
+        Double pk45, Double pk55, Double pk65,
+        Double po145, Double po175
+    ) {}
+
+    /** Best cached over-price for a pitcher prop, with the line it sits on. */
+    public record PitcherPrice(Double line, String bookmaker, int priceAmerican, double priceDecimal) {}
 }

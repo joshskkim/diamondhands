@@ -1,10 +1,13 @@
 package com.diamond.api.service;
 
+import com.diamond.api.dto.PitcherPropPickDto;
 import com.diamond.api.dto.PropBoardPickDto;
 import com.diamond.api.dto.PropBoardResponse;
 import com.diamond.api.repository.PropBoardRepository;
 import com.diamond.api.repository.PropBoardRepository.BestPrice;
 import com.diamond.api.repository.PropBoardRepository.ClearRates;
+import com.diamond.api.repository.PropBoardRepository.PitcherPrice;
+import com.diamond.api.repository.PropBoardRepository.PitcherRow;
 import com.diamond.api.repository.PropBoardRepository.SlateRow;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
@@ -109,7 +112,80 @@ public class PropBoardService {
                 .toList();
             picks.add(toPick(m, top, runnersUp, date));
         }
-        return new PropBoardResponse(date.toString(), rows.size(), picks);
+        return new PropBoardResponse(
+            date.toString(), rows.size(), picks, pitcherPicks(date));
+    }
+
+    // ── Pitcher props ───────────────────────────────────────────────────────────
+    // Ranked by EXPECTED VOLUME (expected Ks / outs), not P(clear): pitcher lines
+    // vary by arm, so "most likely to clear his line" would surface soft-tossers with
+    // low lines, not the aces. One card per market; the distribution is the reasoning.
+
+    private record PitcherMarket(
+        String key,                                  // odds market key
+        Function<PitcherRow, Double> volume,         // ranking metric
+        List<Double> lines,                          // distribution thresholds shown
+        Function<PitcherRow, List<Double>> probs) {} // P(over each line), aligned to lines
+
+    private static final List<PitcherMarket> PITCHER_MARKETS = List.of(
+        new PitcherMarket("pitcher_k", PitcherRow::expectedK, List.of(4.5, 5.5, 6.5),
+            r -> List.of(nz(r.pk45()), nz(r.pk55()), nz(r.pk65()))),
+        new PitcherMarket("pitcher_outs", PitcherRow::expectedOuts, List.of(14.5, 17.5),
+            r -> List.of(nz(r.po145()), nz(r.po175()))));
+
+    private List<PitcherPropPickDto> pitcherPicks(LocalDate date) {
+        List<PitcherRow> rows = repo.findPitcherRows(date);
+        List<PitcherPropPickDto> out = new ArrayList<>();
+        for (PitcherMarket m : PITCHER_MARKETS) {
+            List<PitcherRow> ranked = rows.stream()
+                .filter(r -> m.volume().apply(r) != null)
+                .sorted(Comparator.comparingDouble((PitcherRow r) -> m.volume().apply(r)).reversed())
+                .toList();
+            if (ranked.isEmpty()) continue;
+            // A starter can legitimately top both Ks and outs (the workhorse ace) —
+            // these are distinct stats, so we don't dedupe across the two cards.
+            out.add(toPitcherPick(m, ranked.get(0), ranked.stream().skip(1).limit(2).toList()));
+        }
+        return out;
+    }
+
+    private PitcherPropPickDto toPitcherPick(PitcherMarket m, PitcherRow top, List<PitcherRow> next) {
+        List<Double> lines = m.lines();
+        List<Double> probs = m.probs().apply(top);
+        List<PitcherPropPickDto.Threshold> dist = new ArrayList<>();
+        for (int i = 0; i < lines.size(); i++) {
+            dist.add(new PitcherPropPickDto.Threshold(lines.get(i), round(probs.get(i), 4)));
+        }
+
+        PitcherPrice price = repo.findPitcherOverPrice(top.gameId(), top.pitcherId(), m.key());
+        // EV only when the book line matches a modeled threshold (so we have P(over)).
+        Double evPct = null;
+        if (price != null && price.line() != null) {
+            int idx = lines.indexOf(price.line());
+            if (idx >= 0) {
+                evPct = round(probs.get(idx) * price.priceDecimal() - 1.0, 4);
+            }
+        }
+
+        List<PitcherPropPickDto.RunnerUp> runnersUp = next.stream()
+            .map(r -> new PitcherPropPickDto.RunnerUp(
+                r.pitcherId(), r.pitcher(), r.team(), round(m.volume().apply(r), 2)))
+            .toList();
+
+        return new PitcherPropPickDto(
+            m.key(), top.gameId(), top.matchup(), top.pitcherId(), top.pitcher(),
+            top.team(), top.opponent(),
+            round(m.volume().apply(top), 2), round(top.expectedIp(), 2),
+            dist,
+            price == null ? null : price.line(),
+            price == null ? null : price.bookmaker(),
+            price == null ? null : price.priceAmerican(),
+            evPct,
+            runnersUp);
+    }
+
+    private static double nz(Double v) {
+        return v == null ? 0.0 : v;
     }
 
     /** Blend the model's probability toward a league-stabilized empirical clear rate. */
@@ -198,5 +274,9 @@ public class PropBoardService {
     private static double round(double v, int places) {
         double f = Math.pow(10, places);
         return Math.round(v * f) / f;
+    }
+
+    private static Double round(Double v, int places) {
+        return v == null ? null : round((double) v, places);
     }
 }

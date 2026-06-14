@@ -367,11 +367,52 @@ export interface PropBoardRunnerUp {
   prob: number
 }
 
+/** One over-threshold from a pitcher's workload distribution: P(over `line`). */
+export interface PitcherThreshold {
+  line: number
+  prob: number
+}
+
+/** An honorable-mention pitcher: same expected-volume ranking, no distribution. */
+export interface PitcherRunnerUp {
+  pitcherId: number
+  pitcher: string
+  team: string
+  expectedValue: number
+}
+
+/**
+ * The model's headline starting pitcher for one pitcher-prop market, ranked by
+ * EXPECTED VOLUME (expected Ks / outs) rather than P(clear) — pitcher lines vary by
+ * arm, so ranking on clear-probability would surface soft-tossers, not aces. Odds
+ * fields are the best cached over-price and are null when odds haven't been pulled.
+ */
+export interface PitcherPropPick {
+  /** 'pitcher_k' | 'pitcher_outs' */
+  market: string
+  gameId: number
+  matchup: string
+  pitcherId: number
+  pitcher: string
+  team: string
+  /** Team (lineup) the starter faces. */
+  opponent: string
+  expectedValue: number
+  expectedIp: number | null
+  distribution: PitcherThreshold[]
+  bookLine: number | null
+  bestBook: string | null
+  priceAmerican: number | null
+  evPct: number | null
+  runnersUp: PitcherRunnerUp[]
+}
+
 /** GET /api/props/board — model-first prop board for a slate. */
 export interface PropBoard {
   date: string
   battersConsidered: number
   picks: PropBoardPick[]
+  pitcherPicks: PitcherPropPick[]
 }
 
 /** One 10° spray sector: balls in play, homers, average Statcast hit distance. */
