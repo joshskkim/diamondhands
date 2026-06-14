@@ -1,0 +1,55 @@
+# SLO-based alerting for the Diamond API. Prometheus evaluates these and surfaces firing
+# alerts at http://localhost:9090/alerts. (Routing/paging would add an Alertmanager; for
+# local dev the Prometheus Alerts tab is enough to demonstrate the rules.)
+#
+# SLOs:
+#   - Availability: 5xx error ratio < 1% (page at > 5%).
+#   - Latency:      p95 of http.server.requests < 1s.
+#   - Saturation:   no sustained HikariCP connection waiting (the leaderboard meltdown).
+groups:
+  - name: diamond-api-slo
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_server_requests_seconds_count{application="diamond-api", outcome="SERVER_ERROR"}[5m]))
+          /
+          sum(rate(http_server_requests_seconds_count{application="diamond-api"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "API 5xx error ratio above 5% for 5m"
+          description: "Availability SLO breach (target < 1% errors)."
+
+      - alert: HighRequestLatencyP95
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_server_requests_seconds_bucket{application="diamond-api"}[5m])) by (le)) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API p95 latency above 1s for 5m"
+          description: "Latency SLO breach (target p95 < 1s). Check the slow-endpoint and HikariCP panels."
+
+      # Directly targets the failure mode behind the leaderboard meltdown: requests blocking
+      # because every pooled DB connection is in use.
+      - alert: HikariConnectionsWaiting
+        expr: hikaricp_connections_pending{application="diamond-api"} > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Threads waiting for a DB connection for 2m"
+          description: "HikariCP pool saturation — a slow query or traffic spike is starving the pool."
+
+      - alert: HikariPoolExhausted
+        expr: |
+          hikaricp_connections_active{application="diamond-api"}
+          >= hikaricp_connections_max{application="diamond-api"}
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "HikariCP pool fully utilized (active == max) for 1m"
+          description: "Imminent connection-timeout errors; investigate slow queries (Jaeger) immediately."

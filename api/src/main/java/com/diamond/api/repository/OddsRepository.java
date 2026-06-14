@@ -7,7 +7,10 @@ import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Reads stored sportsbook odds (game_odds / player_prop_odds) joined to the context the
@@ -30,7 +33,7 @@ public class OddsRepository {
         SELECT market, side, line, bookmaker, price_american, price_decimal, implied_prob
         FROM game_odds
         WHERE game_id = ?
-        ORDER BY market, side, price_decimal DESC
+        ORDER BY market, side, price_decimal DESC, bookmaker
         """;
 
     private static final String PROP_ODDS_SQL = """
@@ -43,7 +46,7 @@ public class OddsRepository {
         LEFT JOIN batter_projections bp
                ON bp.game_id = po.game_id AND bp.player_id = po.player_id
         WHERE po.game_id = ?
-        ORDER BY po.market, po.player_name, po.line, po.side, po.price_decimal DESC
+        ORDER BY po.market, po.player_name, po.line, po.side, po.price_decimal DESC, po.bookmaker
         """;
 
     private static final String RUN_PROJ_SQL = """
@@ -88,6 +91,88 @@ public class OddsRepository {
 
     public List<Long> findGameIdsWithOdds(LocalDate date) {
         return jdbc.queryForList(GAME_IDS_SQL, Long.class, date);
+    }
+
+    // ── Date-scoped batch reads for bestPlays() ──────────────────────────────────────
+    // bestPlays() used to call the four per-game reads above once per game (an N+1 over the
+    // slate's games). These fetch the whole slate in one query each, keyed by game_id; the
+    // per-game row order matches the single-game queries so the built responses are identical.
+
+    private static final String GAME_ODDS_BY_DATE_SQL = """
+        SELECT go.game_id, go.market, go.side, go.line, go.bookmaker,
+               go.price_american, go.price_decimal, go.implied_prob
+        FROM game_odds go
+        JOIN games g ON g.id = go.game_id AND g.game_date = ?
+        ORDER BY go.game_id, go.market, go.side, go.price_decimal DESC, go.bookmaker
+        """;
+
+    private static final String PROP_ODDS_BY_DATE_SQL = """
+        SELECT po.game_id, po.player_id, po.player_name, p.bats, p.position,
+               po.market, po.side, po.line, po.bookmaker,
+               po.price_american, po.price_decimal, po.implied_prob,
+               bp.p_hit_1plus, bp.p_hit_2plus, bp.p_hr
+        FROM player_prop_odds po
+        JOIN games g ON g.id = po.game_id AND g.game_date = ?
+        JOIN players p ON p.id = po.player_id
+        LEFT JOIN batter_projections bp
+               ON bp.game_id = po.game_id AND bp.player_id = po.player_id
+        ORDER BY po.game_id, po.market, po.player_name, po.line, po.side, po.price_decimal DESC, po.bookmaker
+        """;
+
+    private static final String RUN_PROJ_BY_DATE_SQL = """
+        SELECT gp.game_id, gp.expected_home_runs, gp.expected_away_runs
+        FROM game_projections gp
+        JOIN games g ON g.id = gp.game_id AND g.game_date = ?
+        """;
+
+    private static final String META_BY_DATE_SQL = """
+        SELECT g.id AS game_id, ht.abbreviation AS home_abbr, at2.abbreviation AS away_abbr
+        FROM games g
+        JOIN teams ht  ON ht.id  = g.home_team_id
+        JOIN teams at2 ON at2.id = g.away_team_id
+        WHERE g.game_date = ?
+        """;
+
+    public Map<Long, List<GameOddRow>> findGameOddsByDate(LocalDate date) {
+        return jdbc.query(GAME_ODDS_BY_DATE_SQL, rs -> {
+            Map<Long, List<GameOddRow>> out = new HashMap<>();
+            while (rs.next()) {
+                out.computeIfAbsent(rs.getLong("game_id"), k -> new ArrayList<>()).add(mapGameOdd(rs, 0));
+            }
+            return out;
+        }, date);
+    }
+
+    public Map<Long, List<PropOddRow>> findPropOddsByDate(LocalDate date) {
+        return jdbc.query(PROP_ODDS_BY_DATE_SQL, rs -> {
+            Map<Long, List<PropOddRow>> out = new HashMap<>();
+            while (rs.next()) {
+                out.computeIfAbsent(rs.getLong("game_id"), k -> new ArrayList<>()).add(mapPropOdd(rs, 0));
+            }
+            return out;
+        }, date);
+    }
+
+    public Map<Long, RunProj> findRunProjByDate(LocalDate date) {
+        return jdbc.query(RUN_PROJ_BY_DATE_SQL, rs -> {
+            Map<Long, RunProj> out = new HashMap<>();
+            while (rs.next()) {
+                out.put(rs.getLong("game_id"),
+                    new RunProj(rs.getDouble("expected_home_runs"), rs.getDouble("expected_away_runs")));
+            }
+            return out;
+        }, date);
+    }
+
+    public Map<Long, GameMeta> findGameMetaByDate(LocalDate date) {
+        return jdbc.query(META_BY_DATE_SQL, rs -> {
+            Map<Long, GameMeta> out = new HashMap<>();
+            while (rs.next()) {
+                out.put(rs.getLong("game_id"),
+                    new GameMeta(rs.getString("home_abbr"), rs.getString("away_abbr")));
+            }
+            return out;
+        }, date);
     }
 
     // ── slate-wide batter prop over-prices, one row per game+player+market ──
