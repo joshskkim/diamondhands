@@ -6,6 +6,7 @@ import com.diamond.api.repository.PropBoardRepository;
 import com.diamond.api.repository.PropBoardRepository.BestPrice;
 import com.diamond.api.repository.PropBoardRepository.ClearRates;
 import com.diamond.api.repository.PropBoardRepository.SlateRow;
+import com.diamond.api.repository.PropBoardRepository.StarterRow;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
@@ -62,6 +63,20 @@ public class PropBoardService {
         new Market("hr",  "hr",  SlateRow::pHr,   SlateRow::adjWeatherHr,   0.08, 0.15),
         new Market("k",   null,  SlateRow::pK1,   r -> null,                null, 0.66));
 
+    // Starter-prop markets, ranked directly by the workload model's P(over) — the
+    // model is already a validated, regressed estimate (PR #48), so unlike the
+    // batter cards it is NOT shrunk toward the thin (~15-30 start) season rate; that
+    // rate rides along as displayed context. line/oddsMarket match the books.
+    private record PitcherMarket(String key, String oddsMarket, double line,
+                                 java.util.function.Function<StarterRow, Double> prob,
+                                 java.util.function.Function<StarterRow, Double> seasonRate) {}
+
+    private static final List<PitcherMarket> PITCHER_MARKETS = List.of(
+        new PitcherMarket("pitcher_outs", "pitcher_outs", 17.5,
+            StarterRow::pOuts175, StarterRow::outsRateSeason),
+        new PitcherMarket("pitcher_k", "pitcher_k", 5.5,
+            StarterRow::pK55, StarterRow::kRateSeason));
+
     private final PropBoardRepository repo;
 
     public PropBoardService(PropBoardRepository repo) {
@@ -109,7 +124,60 @@ public class PropBoardService {
                 .toList();
             picks.add(toPick(m, top, runnersUp, date));
         }
+
+        picks.addAll(buildPitcherPicks(date));
         return new PropBoardResponse(date.toString(), rows.size(), picks);
+    }
+
+    /** Starter outs/K cards from the workload model, with honorable-mention runner-ups. */
+    private List<PropBoardPickDto> buildPitcherPicks(LocalDate date) {
+        List<StarterRow> starters = repo.findStarterWorkloads(date);
+        List<PropBoardPickDto> picks = new ArrayList<>();
+        Set<Integer> used = new HashSet<>();  // a deep ace shouldn't headline both cards
+
+        for (PitcherMarket m : PITCHER_MARKETS) {
+            List<StarterRow> ranked = starters.stream()
+                .filter(s -> m.prob().apply(s) != null && !used.contains(s.pitcherId()))
+                .sorted(Comparator.comparingDouble((StarterRow s) -> m.prob().apply(s)).reversed())
+                .toList();
+            if (ranked.isEmpty()) continue;
+            StarterRow top = ranked.get(0);
+            used.add(top.pitcherId());
+            List<PropBoardPickDto.RunnerUp> runnersUp = ranked.stream()
+                .skip(1).limit(2)
+                .map(s -> new PropBoardPickDto.RunnerUp(
+                    s.pitcherId(), s.player(), s.team(), round(m.prob().apply(s), 4)))
+                .toList();
+            picks.add(toPitcherPick(m, top, runnersUp, date));
+        }
+        return picks;
+    }
+
+    private PropBoardPickDto toPitcherPick(PitcherMarket m, StarterRow s,
+                                           List<PropBoardPickDto.RunnerUp> runnersUp,
+                                           LocalDate date) {
+        double prob = m.prob().apply(s);
+        BestPrice price = repo.findBestOverPrice(date, s.pitcherId(), m.oddsMarket());
+        Double seasonRate = m.seasonRate().apply(s);
+        return new PropBoardPickDto(
+            m.key(), m.line(),
+            s.gameId(), s.matchup(),
+            s.pitcherId(), s.player(), s.team(),
+            null, null, null,                       // lineup slot / confirmed / expected PA (batter-only)
+            round(prob, 4), round(prob, 4),         // prob == probModel (no shrink on the workload model)
+            null, null, null,                       // opposing pitcher / matchup quality (batter-only)
+            null, null,                             // matchup xwOBA / quality
+            null, null, null,                       // park / pitcher / weather adj
+            null,                                   // stadium
+            null, null, null, null,                 // bats / pull / fb / EV
+            null, null,                             // pull fence / wall
+            null,                                   // rateL10 (recency demoted)
+            seasonRate, s.nStarts(),                // season clear rate + start count
+            price == null ? null : price.bookmaker(),
+            price == null ? null : price.priceAmerican(),
+            price == null ? null : price.priceDecimal(),
+            price == null ? null : round(prob * price.priceDecimal() - 1.0, 4),
+            runnersUp);
     }
 
     /** Blend the model's probability toward a league-stabilized empirical clear rate. */

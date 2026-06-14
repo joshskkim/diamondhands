@@ -17,6 +17,18 @@ const MARKET_META: Record<string, { chip: string; verb: string }> = {
   hit: { chip: 'Hit', verb: 'to record a hit' },
   hr: { chip: 'Home Run', verb: 'to homer' },
   k: { chip: 'Strikeout', verb: 'to strike out at least once' },
+  pitcher_outs: { chip: 'Outs', verb: 'recorded outs' },
+  pitcher_k: { chip: 'Pitcher Ks', verb: 'strikeouts' },
+}
+
+const PITCHER_MARKETS = new Set(['pitcher_outs', 'pitcher_k'])
+
+// Card title — pitcher cards carry the line ("Skenes over 17.5 outs"); batter
+// cards use the static verb ("Judge to homer").
+function cardTitle(p: PropBoardPick): string {
+  if (p.market === 'pitcher_outs') return `${p.player} over ${p.line} outs`
+  if (p.market === 'pitcher_k') return `${p.player} over ${p.line} Ks`
+  return `${p.player} ${MARKET_META[p.market]?.verb ?? p.market}`
 }
 
 function pct(v: number) {
@@ -41,6 +53,15 @@ function ordinal(n: number) {
 // The reasoning bullets, built from the projection's own factors — no odds required.
 function buildReasons(p: PropBoardPick): string[] {
   const reasons: string[] = []
+
+  // Pitcher cards: the workload model is the headline. Batter-shaped bullets below
+  // (lineup slot, opposing pitcher, park, park-fit) are all null-gated and skipped.
+  if (PITCHER_MARKETS.has(p.market)) {
+    const noun = p.market === 'pitcher_k' ? 'strikeouts' : 'recorded outs'
+    reasons.push(
+      `Workload model puts him at ${pct(p.prob)} to clear ${p.line} ${noun} — from his recent start depth and per-batter strikeout rate (validated out-of-sample).`,
+    )
+  }
 
   if (p.expectedPa != null && p.lineupPosition != null) {
     reasons.push(
@@ -98,20 +119,14 @@ function buildReasons(p: PropBoardPick): string[] {
     )
   }
 
-  if (p.rateL10 != null) {
-    const l10 = Math.round(p.rateL10 * 10)
-    const season =
-      p.rateSeason != null && p.nSeason != null
-        ? `, ${pct(p.rateSeason)} across ${p.nSeason} games this season`
-        : ''
-    reasons.push(`Has cleared in ${l10} of his last 10 games${season}.`)
   // Season rate leads — it's the meaningful base rate. The last-10 count is
   // appended as context only (short windows are hot-hand noise, not signal).
   if (p.rateSeason != null && p.nSeason != null) {
+    const unit = PITCHER_MARKETS.has(p.market) ? 'starts' : 'games'
     const l10 =
       p.rateL10 != null ? ` (${Math.round(p.rateL10 * 10)} of his last 10)` : ''
     reasons.push(
-      `Has cleared in ${pct(p.rateSeason)} of his ${p.nSeason} games this season${l10}.`,
+      `Has cleared in ${pct(p.rateSeason)} of his ${p.nSeason} ${unit} this season${l10}.`,
     )
   } else if (p.rateL10 != null) {
     reasons.push(`Has cleared in ${Math.round(p.rateL10 * 10)} of his last 10 games.`)
@@ -158,7 +173,7 @@ function PropCard({ pick }: { pick: PropBoardPick }) {
           href={`/mlb/players/${pick.playerId}`}
           className="text-base font-bold tracking-tight text-zinc-100 hover:text-cyan-300 transition-colors"
         >
-          {pick.player} {meta.verb}
+          {cardTitle(pick)}
         </Link>
         <span className="shrink-0 font-mono tabular-nums text-lg text-cyan-300">
           {pct(pick.prob)}
@@ -168,8 +183,8 @@ function PropCard({ pick }: { pick: PropBoardPick }) {
       <div className="grid grid-cols-3 gap-2">
         <Stat label="Team" value={pick.team} />
         <Stat
-          label="Last 10"
-          value={pick.rateL10 == null ? '—' : `${Math.round(pick.rateL10 * 10)}/10`}
+          label="Season"
+          value={pick.rateSeason == null ? '—' : `${Math.round(pick.rateSeason * 100)}%`}
         />
         <Stat
           label="Best price"
