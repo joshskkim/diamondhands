@@ -25,7 +25,7 @@ import os
 # v2.6.1: Marcel prior regresses each metric by its own constant (K light, ISO heavy).
 # v2.7.0: thin ISO histories regress toward a bat-speed-implied ISO anchor (Statcast
 # bat tracking) instead of the flat league mean.
-MODEL_VERSION: str = "v2.7.0"
+MODEL_VERSION: str = "v2.8.0"
 
 # ---------------------------------------------------------------------------
 # League-average reference (2025 MLB approximations)
@@ -91,6 +91,20 @@ BAT_SPEED_MEAN: float = 69.6
 BAT_SPEED_SD: float = 2.89
 FAST_SWING_MEAN: float = 0.213
 FAST_SWING_SD: float = 0.170
+
+# Whiff-implied K anchor (v2.8) — the K-rate analogue of the bat-speed ISO anchor.
+# A batter's pitch-level whiff rate carries contact skill that PA-level K rate does
+# not fully capture. Out-of-sample (2024 whiff -> 2025 K, n=322): adding whiff to a
+# regressed prior cut K-rate MAE 1.5% in free regression and -13.2% when wired as
+# the regression target for the K prior (no refit) — and unlike bat speed the gain
+# is NOT confined to thin histories (deep 300+ PA: -17.5%), because league-shrinking
+# a high-whiff hitter's K toward the mean over-corrects exactly where whiff is most
+# informative. Standalone anchor fit: K ≈ league_k + .0401·whiff_z; whiff moments
+# from the 2024 qualified population. Self-limiting: own weighted PA swamps the
+# 800 phantom for evidence-rich batters.
+WHIFF_K_PER_Z: float = float(os.environ.get("DIAMOND_WHIFF_K_PER_Z", "0.0401"))
+WHIFF_MEAN: float = 0.2262
+WHIFF_SD: float = 0.0594
 
 # ---------------------------------------------------------------------------
 # Personalized park HR factor (v2.5.0)

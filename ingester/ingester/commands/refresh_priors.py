@@ -21,7 +21,12 @@ from ingester.projection.constants import (
     MARCEL_REGRESSION_PA_XWOBA,
     MARCEL_SEASON_WEIGHTS,
 )
-from ingester.projection.prior import SeasonLine, bat_speed_iso_anchor, compute_marcel_prior
+from ingester.projection.prior import (
+    SeasonLine,
+    bat_speed_iso_anchor,
+    compute_marcel_prior,
+    whiff_k_anchor,
+)
 
 
 def _load_prior_seasons(conn, target_season: int) -> dict[int, dict[int, SeasonLine]]:
@@ -88,12 +93,48 @@ def _load_iso_anchors(conn, target_season: int) -> dict[int, float]:
     return out
 
 
+def _load_k_anchors(conn, target_season: int) -> dict[int, float]:
+    """Whiff-implied K anchors from the PRIOR season's pitch-level whiff (leak-free).
+
+    Overall whiff rate = swing-weighted mean of the per-pitch-type whiff rates from
+    the latest snapshot of season target-1 (vs_handedness 'A' = both sides). A min
+    pitch threshold keeps thin, noisy whiff samples out of the anchor. Empty for
+    pre-2024 targets (pitch-type stats start 2023) — callers fall back to the flat
+    league anchor, i.e. pre-v2.8 behaviour.
+    """
+    rows = conn.execute(
+        """
+        WITH latest AS (
+            SELECT MAX(as_of_date) AS d
+            FROM batter_pitch_type_stats
+            WHERE season = %s AND vs_handedness = 'A'
+        )
+        SELECT player_id,
+               SUM(whiff_rate * swing_rate * pitches_seen)
+                   / NULLIF(SUM(swing_rate * pitches_seen), 0) AS whiff,
+               SUM(pitches_seen) AS pitches
+        FROM batter_pitch_type_stats, latest
+        WHERE season = %s AND vs_handedness = 'A' AND as_of_date = latest.d
+        GROUP BY player_id
+        HAVING SUM(pitches_seen) >= 300
+        """,
+        (target_season - 1, target_season - 1),
+    ).fetchall()
+    out: dict[int, float] = {}
+    for pid, whiff, _pitches in rows:
+        anchor = whiff_k_anchor(float(whiff) if whiff is not None else None, LEAGUE_K_PER_PA)
+        if anchor is not None:
+            out[int(pid)] = anchor
+    return out
+
+
 def cmd_refresh_priors(args: argparse.Namespace) -> None:
     target: int = getattr(args, "season", 2026)
 
     conn = get_connection()
     by_player = _load_prior_seasons(conn, target)
     iso_anchors = _load_iso_anchors(conn, target)
+    k_anchors = _load_k_anchors(conn, target)
 
     rows: list[dict] = []
     for pid, seasons in by_player.items():
@@ -104,6 +145,7 @@ def cmd_refresh_priors(args: argparse.Namespace) -> None:
             league_k_rate=LEAGUE_K_PER_PA,
             league_iso=LEAGUE_ISO,
             iso_anchor=iso_anchors.get(pid),
+            k_rate_anchor=k_anchors.get(pid),
         )
         if prior is None:
             continue
@@ -143,5 +185,6 @@ def cmd_refresh_priors(args: argparse.Namespace) -> None:
     print(
         f"[refresh-priors] Wrote {len(rows)} batter priors for {target} "
         f"(Marcel {MARCEL_SEASON_WEIGHTS}, regression xwOBA/K/ISO="
-        f"{MARCEL_REGRESSION_PA_XWOBA}/{MARCEL_REGRESSION_PA_K}/{MARCEL_REGRESSION_PA_ISO} PA)."
+        f"{MARCEL_REGRESSION_PA_XWOBA}/{MARCEL_REGRESSION_PA_K}/{MARCEL_REGRESSION_PA_ISO} PA; "
+        f"{len(iso_anchors)} bat-speed ISO anchors, {len(k_anchors)} whiff K anchors)."
     )
