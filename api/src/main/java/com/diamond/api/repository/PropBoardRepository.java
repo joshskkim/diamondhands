@@ -170,4 +170,56 @@ public class PropBoardRepository {
     ) {}
 
     public record BestPrice(String bookmaker, int priceAmerican, double priceDecimal) {}
+
+    // ── Starter workload cards (pitcher props) ──
+    // One row per slate starter that has a workload projection: the model's P(over)
+    // for the standard outs/K lines (from pitcher_projections.workload, written by
+    // the workload model) plus the pitcher's current-season clear rates and start
+    // count (from pitcher_starts, strictly before the slate) for context.
+    private static final String STARTER_WORKLOAD_SQL = """
+        SELECT pp.game_id, pp.pitcher_id, pl.full_name,
+               CASE WHEN pp.is_home THEN ht.abbreviation ELSE at2.abbreviation END AS team,
+               at2.abbreviation || ' @ ' || ht.abbreviation AS matchup,
+               (pp.workload->>'mu_outs')::numeric          AS mu_outs,
+               (pp.workload->'p_outs'->>'17.5')::numeric   AS p_outs_175,
+               (pp.workload->'p_k'->>'5.5')::numeric       AS p_k_55,
+               sr.outs_rate, sr.k_rate, sr.n_starts
+        FROM pitcher_projections pp
+        JOIN games g    ON g.id  = pp.game_id AND g.game_date = ?
+        JOIN players pl ON pl.id = pp.pitcher_id
+        JOIN teams ht   ON ht.id = g.home_team_id
+        JOIN teams at2  ON at2.id = g.away_team_id
+        LEFT JOIN LATERAL (
+            SELECT avg((outs > 17.5)::int)::float       AS outs_rate,
+                   avg((strikeouts > 5.5)::int)::float  AS k_rate,
+                   count(*)                             AS n_starts
+            FROM pitcher_starts ps
+            WHERE ps.player_id = pp.pitcher_id
+              AND ps.game_date >= ? AND ps.game_date < ?
+        ) sr ON true
+        WHERE pp.workload IS NOT NULL
+        """;
+
+    public List<StarterRow> findStarterWorkloads(LocalDate date) {
+        LocalDate seasonStart = LocalDate.of(date.getYear(), 1, 1);
+        return jdbc.query(STARTER_WORKLOAD_SQL, (rs, n) -> new StarterRow(
+                rs.getLong("game_id"),
+                rs.getString("matchup"),
+                rs.getInt("pitcher_id"),
+                rs.getString("full_name"),
+                rs.getString("team"),
+                dbl(rs, "mu_outs"),
+                dbl(rs, "p_outs_175"),
+                dbl(rs, "p_k_55"),
+                dbl(rs, "outs_rate"),
+                dbl(rs, "k_rate"),
+                rs.getInt("n_starts")),
+            date, seasonStart, date);
+    }
+
+    public record StarterRow(
+        long gameId, String matchup, int pitcherId, String player, String team,
+        Double muOuts, Double pOuts175, Double pK55,
+        Double outsRateSeason, Double kRateSeason, int nStarts
+    ) {}
 }
