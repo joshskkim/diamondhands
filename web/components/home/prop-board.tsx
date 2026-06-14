@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { Target } from 'lucide-react'
 import { propBoardQueryOptions } from '@/lib/api'
-import type { PropBoardPick } from '@/lib/types'
+import type { PitcherPropPick, PropBoardPick } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
 
@@ -17,6 +17,11 @@ const MARKET_META: Record<string, { chip: string; verb: string }> = {
   hit: { chip: 'Hit', verb: 'to record a hit' },
   hr: { chip: 'Home Run', verb: 'to homer' },
   k: { chip: 'Strikeout', verb: 'to strike out at least once' },
+}
+
+const PITCHER_MARKET_META: Record<string, { chip: string; unit: string; noun: string }> = {
+  pitcher_k: { chip: 'Pitcher Ks', unit: 'K', noun: 'strikeouts' },
+  pitcher_outs: { chip: 'Outs', unit: 'outs', noun: 'outs recorded' },
 }
 
 function pct(v: number) {
@@ -98,13 +103,6 @@ function buildReasons(p: PropBoardPick): string[] {
     )
   }
 
-  if (p.rateL10 != null) {
-    const l10 = Math.round(p.rateL10 * 10)
-    const season =
-      p.rateSeason != null && p.nSeason != null
-        ? `, ${pct(p.rateSeason)} across ${p.nSeason} games this season`
-        : ''
-    reasons.push(`Has cleared in ${l10} of his last 10 games${season}.`)
   // Season rate leads — it's the meaningful base rate. The last-10 count is
   // appended as context only (short windows are hot-hand noise, not signal).
   if (p.rateSeason != null && p.nSeason != null) {
@@ -209,6 +207,97 @@ function PropCard({ pick }: { pick: PropBoardPick }) {
   )
 }
 
+// Pitcher cards are AMBER (batter cards are cyan) so "whose prop is this" is never
+// ambiguous — these are the starter's line, ranked by expected volume, not P(clear).
+function PitcherCard({ pick }: { pick: PitcherPropPick }) {
+  const meta =
+    PITCHER_MARKET_META[pick.market] ?? { chip: pick.market, unit: '', noun: pick.market }
+
+  const reasons: string[] = [
+    `Projects for ${pick.expectedValue.toFixed(1)} ${meta.noun}${
+      pick.expectedIp != null ? ` across ~${pick.expectedIp.toFixed(1)} innings` : ''
+    } against ${pick.opponent}.`,
+  ]
+  if (pick.priceAmerican != null && pick.bookLine != null) {
+    const ev =
+      pick.evPct != null
+        ? ` — ${pick.evPct > 0 ? '+' : ''}${(pick.evPct * 100).toFixed(1)}% EV at the model's number`
+        : ''
+    reasons.push(
+      `Book line ${pick.bookLine} at ${formatAmerican(pick.priceAmerican)} (${bookLabel(
+        pick.bestBook,
+      )})${ev}. Cached lines can be stale; treat as context.`,
+    )
+  }
+
+  return (
+    <div className="rounded-xl border border-amber-400/20 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-300 border-amber-400/40 bg-amber-500/10">
+          {meta.chip}
+        </span>
+        <span className="text-[10px] uppercase tracking-[0.12em] text-zinc-600">Pitcher</span>
+        <Link
+          href={`/mlb/games/${pick.gameId}`}
+          className="ml-auto font-mono text-xs text-zinc-500 hover:text-amber-300 transition-colors"
+        >
+          {pick.matchup}
+        </Link>
+      </div>
+
+      <div className="flex items-baseline justify-between gap-3">
+        <Link
+          href={`/mlb/players/${pick.pitcherId}`}
+          className="text-base font-bold tracking-tight text-zinc-100 hover:text-amber-200 transition-colors"
+        >
+          {pick.pitcher}{' '}
+          <span className="text-sm font-normal text-zinc-500">vs {pick.opponent}</span>
+        </Link>
+        <span className="shrink-0 font-mono tabular-nums text-lg text-amber-300">
+          {pick.expectedValue.toFixed(1)}{' '}
+          <span className="text-zinc-500 text-xs">{meta.unit}</span>
+        </span>
+      </div>
+
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        {pick.distribution.map((t) => (
+          <div key={t.line}>
+            <div className={microLabel}>over {t.line}</div>
+            <div className="text-[13px] font-mono tabular-nums text-zinc-300">{pct(t.prob)}</div>
+          </div>
+        ))}
+      </div>
+
+      <ul className="space-y-1.5 text-[13px] leading-relaxed text-zinc-400 list-disc pl-4 marker:text-zinc-600">
+        {reasons.map((r, i) => (
+          <li key={i}>{r}</li>
+        ))}
+      </ul>
+
+      {pick.runnersUp.length > 0 && (
+        <div className="pt-2 border-t border-white/5 text-xs text-zinc-500">
+          <span className={microLabel}>Also&nbsp;</span>
+          {pick.runnersUp.map((ru, i) => (
+            <span key={ru.pitcherId}>
+              {i > 0 && <span className="text-zinc-700"> · </span>}
+              <Link
+                href={`/mlb/players/${ru.pitcherId}`}
+                className="text-zinc-400 hover:text-amber-300 transition-colors"
+              >
+                {ru.pitcher}
+              </Link>{' '}
+              <span className="text-zinc-600">{ru.team}</span>{' '}
+              <span className="font-mono tabular-nums text-zinc-400">
+                {ru.expectedValue.toFixed(1)}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Skeleton({ className = '' }: { className?: string }) {
   return <div className={cn('animate-pulse bg-white/5 rounded', className)} />
 }
@@ -261,6 +350,25 @@ export function PropBoard() {
           {data.picks.map((pick) => (
             <PropCard key={pick.market} pick={pick} />
           ))}
+        </div>
+      )}
+
+      {!isPending && !isError && data.pitcherPicks.length > 0 && (
+        <div className="mt-6">
+          <p className={cn(microLabel, 'mb-2')}>
+            Pitcher props — ranked by projected volume, not clear-rate
+          </p>
+          <div
+            className={cn(
+              'grid gap-4',
+              data.pitcherPicks.length === 1 && 'lg:max-w-xl',
+              data.pitcherPicks.length >= 2 && 'lg:grid-cols-2',
+            )}
+          >
+            {data.pitcherPicks.map((pick) => (
+              <PitcherCard key={pick.market} pick={pick} />
+            ))}
+          </div>
         </div>
       )}
     </section>
