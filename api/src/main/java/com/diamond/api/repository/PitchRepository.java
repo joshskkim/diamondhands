@@ -236,20 +236,34 @@ public class PitchRepository {
     // the subquery hundreds of thousands of times (~15s, 1.6M buffer hits, for a busy
     // pitch like FF). Since the whole leaderboard is pinned to a single date, we instead
     // resolve each player's latest snapshot once via DISTINCT ON CTEs, then join plainly.
-    // Identical result set, ~10x faster (verified by row-level diff).
+    //
+    // The DISTINCT ON CTEs originally scanned the *entire* snapshot history (as_of_date
+    // matches nearly every row). As those tables grew past ~500k rows that regressed to
+    // ~98s. The result only ever includes players on the date's slate, so we restrict the
+    // snapshot resolution to the slate's pitchers/batters up front — identical result set,
+    // ~98s -> ~70ms. Backed by the (player_id, vs_handedness, as_of_date DESC, season DESC)
+    // indexes added in V34 that match the DISTINCT ON ordering.
     private static final String LEADERBOARD_SQL = """
-        WITH ars_snap AS (
+        WITH slate_pitchers AS (
+            SELECT DISTINCT bp.opposing_pitcher_id AS id
+            FROM batter_projections bp JOIN games g ON g.id = bp.game_id AND g.game_date = ?
+        ),
+        slate_batters AS (
+            SELECT DISTINCT bp.player_id AS id
+            FROM batter_projections bp JOIN games g ON g.id = bp.game_id AND g.game_date = ?
+        ),
+        ars_snap AS (
             SELECT DISTINCT ON (player_id, vs_handedness)
                    player_id, vs_handedness, season, as_of_date
             FROM pitcher_arsenal
-            WHERE as_of_date <= ?
+            WHERE as_of_date <= ? AND player_id IN (SELECT id FROM slate_pitchers)
             ORDER BY player_id, vs_handedness, as_of_date DESC, season DESC
         ),
         bs_snap AS (
             SELECT DISTINCT ON (player_id, vs_handedness)
                    player_id, vs_handedness, season, as_of_date
             FROM batter_pitch_type_stats
-            WHERE as_of_date <= ?
+            WHERE as_of_date <= ? AND player_id IN (SELECT id FROM slate_batters)
             ORDER BY player_id, vs_handedness, as_of_date DESC, season DESC
         )
         SELECT
@@ -290,7 +304,8 @@ public class PitchRepository {
                 rs.getBigDecimal("usage_rate").doubleValue(),
                 toDouble(rs.getBigDecimal("raw_xwoba")), rs.getInt("pitches_seen"),
                 toDouble(rs.getBigDecimal("league_xwoba"))),
-            date, date, date, pitch, pitch, pitch);
+            // slate_pitchers, slate_batters, ars_snap as_of, bs_snap as_of, games; then pitch x3
+            date, date, date, date, date, pitch, pitch, pitch);
     }
 
     private static Double toDouble(BigDecimal bd) {

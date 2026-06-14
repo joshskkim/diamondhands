@@ -41,9 +41,17 @@ public class OddsService {
         if (gameRows.isEmpty() && propRows.isEmpty()) {
             return new GameOddsResponse(gameId, false, List.of(), List.of());
         }
-        RunProj proj = repo.findRunProj(gameId);
-        OddsModel model = proj == null ? null : new OddsModel(proj.expHome(), proj.expAway());
+        return buildGameOdds(gameId, gameRows, propRows, repo.findRunProj(gameId));
+    }
 
+    /** Build a game's odds response from already-fetched rows (shared by the per-game and
+     *  slate-batch paths). */
+    private GameOddsResponse buildGameOdds(long gameId, List<GameOddRow> gameRows,
+                                           List<PropOddRow> propRows, RunProj proj) {
+        if (gameRows.isEmpty() && propRows.isEmpty()) {
+            return new GameOddsResponse(gameId, false, List.of(), List.of());
+        }
+        OddsModel model = proj == null ? null : new OddsModel(proj.expHome(), proj.expAway());
         return new GameOddsResponse(gameId, true, buildGameMarkets(gameRows, model), buildProps(propRows));
     }
 
@@ -98,11 +106,21 @@ public class OddsService {
     @Observed(name = "odds.bestPlays", contextualName = "odds.bestPlays")
     @Cacheable(cacheNames = "oddsBest", key = "#date")
     public List<BestPlayDto> bestPlays(LocalDate date) {
+        // Fetch the whole slate's odds/props/projections/meta in four queries, instead of
+        // ~five queries per game (the old per-game gameOdds() loop was an N+1 over the slate).
+        Map<Long, List<GameOddRow>> oddsByGame = repo.findGameOddsByDate(date);
+        Map<Long, List<PropOddRow>> propsByGame = repo.findPropOddsByDate(date);
+        Map<Long, RunProj> projByGame = repo.findRunProjByDate(date);
+        Map<Long, GameMeta> metaByGame = repo.findGameMetaByDate(date);
+
         List<BestPlayDto> plays = new ArrayList<>();
         for (long gameId : repo.findGameIdsWithOdds(date)) {
-            GameOddsResponse odds = gameOdds(gameId);
+            GameOddsResponse odds = buildGameOdds(gameId,
+                oddsByGame.getOrDefault(gameId, List.of()),
+                propsByGame.getOrDefault(gameId, List.of()),
+                projByGame.get(gameId));
             if (!odds.hasOdds()) continue;
-            GameMeta meta = repo.findGameMeta(gameId);
+            GameMeta meta = metaByGame.get(gameId);
             String matchup = meta == null ? "" : meta.awayAbbr() + " @ " + meta.homeAbbr();
 
             for (GameMarketDto market : odds.game()) {

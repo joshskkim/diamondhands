@@ -32,6 +32,7 @@ class RepositoryBatchEquivalenceTest {
     @Autowired private PitchRepository pitchRepo;
     @Autowired private PropBoardRepository propRepo;
     @Autowired private ProjectionRepository projRepo;
+    @Autowired private OddsRepository oddsRepo;
     @Autowired private JdbcTemplate jdbc;
 
     private final LocalDate date = LocalDate.now();
@@ -101,6 +102,34 @@ class RepositoryBatchEquivalenceTest {
             assertThat(bpBatch.getOrDefault(batterId + "|" + pitcherHand, Map.of()))
                 .as("batter pitch stats for %s vs %s", batterId, pitcherHand)
                 .isEqualTo(single);
+        }
+    }
+
+    @Test
+    void oddsByDateBatchMatchesPerGame() {
+        java.sql.Date d = jdbc.query(
+            "SELECT max(g.game_date) FROM game_odds go JOIN games g ON g.id = go.game_id",
+            rs -> rs.next() ? rs.getDate(1) : null);
+        assumeTrue(d != null, "no stored game odds");
+        LocalDate oddsDate = d.toLocalDate();
+
+        var gameOddsByGame = oddsRepo.findGameOddsByDate(oddsDate);
+        var propsByGame = oddsRepo.findPropOddsByDate(oddsDate);
+        var projByGame = oddsRepo.findRunProjByDate(oddsDate);
+        var metaByGame = oddsRepo.findGameMetaByDate(oddsDate);
+
+        List<Long> gameIds = oddsRepo.findGameIdsWithOdds(oddsDate);
+        assumeTrue(!gameIds.isEmpty(), "no games with odds on " + oddsDate);
+
+        for (Long gid : gameIds) {
+            assertThat(gameOddsByGame.getOrDefault(gid, List.of()))
+                .as("game odds for %s", gid).isEqualTo(oddsRepo.findGameOdds(gid));
+            assertThat(propsByGame.getOrDefault(gid, List.of()))
+                .as("prop odds for %s", gid).isEqualTo(oddsRepo.findPropOdds(gid));
+            assertThat(projByGame.get(gid))
+                .as("run proj for %s", gid).isEqualTo(oddsRepo.findRunProj(gid));
+            assertThat(metaByGame.get(gid))
+                .as("meta for %s", gid).isEqualTo(oddsRepo.findGameMeta(gid));
         }
     }
 
