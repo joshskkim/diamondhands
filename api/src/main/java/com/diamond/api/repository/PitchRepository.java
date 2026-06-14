@@ -5,10 +5,15 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Pitch-mix matchup queries (v2.1). All read from the point-in-time snapshot
@@ -91,6 +96,132 @@ public class PitchRepository {
                 rs.getInt("pitches_seen"),
                 toDouble(rs.getBigDecimal("league_xwoba"))),
             batterId, pitcherHand, batterId, pitcherHand, asOf);
+    }
+
+    // ── Batched forms for a whole game (≤2 opposing pitchers) ─────────────────────────
+    // Each batter projection used to fire two snapshot queries (arsenal + batter pitch
+    // stats) — an N+1 of ~2 queries per batter. These resolve each player's latest
+    // snapshot once with a DISTINCT ON CTE (the same pattern proven on LEADERBOARD_SQL)
+    // and fetch every batter/pitcher in one round-trip. Keys are "id|vs_handedness".
+
+    private static String key(int id, String hand) {
+        return id + "|" + hand;
+    }
+
+    // The single-row arsenal() joins the league baseline on the *pitcher's* throwing hand
+    // (its first bind param), not the arsenal row's vs_handedness. We reproduce that exactly
+    // via an unnest(pitcherId, pitcherHand) mapping so league_xwoba is byte-identical.
+    private static final String ARSENAL_BATCH_SQL = """
+        WITH ph AS (
+            SELECT * FROM unnest(?::int[], ?::varchar[]) AS t(player_id, pitcher_hand)
+        ),
+        ars_snap AS (
+            SELECT DISTINCT ON (player_id, vs_handedness)
+                   player_id, vs_handedness, season, as_of_date
+            FROM pitcher_arsenal
+            WHERE player_id = ANY(?) AND vs_handedness = ANY(?) AND as_of_date <= ?
+            ORDER BY player_id, vs_handedness, as_of_date DESC, season DESC
+        )
+        SELECT a.player_id, a.vs_handedness, a.pitch_type, a.usage_rate, a.xwoba_against,
+               a.whiff_rate, a.avg_velocity, b.league_xwoba
+        FROM pitcher_arsenal a
+        JOIN ars_snap s ON s.player_id = a.player_id AND s.vs_handedness = a.vs_handedness
+                       AND s.season = a.season AND s.as_of_date = a.as_of_date
+        JOIN ph ON ph.player_id = a.player_id
+        LEFT JOIN pitch_type_league_baselines b
+          ON b.season = a.season AND b.pitch_type = a.pitch_type AND b.vs_handedness = ph.pitcher_hand
+        ORDER BY a.player_id, a.vs_handedness, a.usage_rate DESC
+        """;
+
+    /** Arsenal per (pitcherId, batterHand), ordered by usage desc — keyed "pitcherId|batterHand".
+     *  {@code pitcherHandById} maps each pitcher to its throwing hand (for the baseline join). */
+    public Map<String, List<PitchArsenalDto>> arsenalBatch(
+            Map<Integer, String> pitcherHandById, Collection<String> batterHands, LocalDate asOf) {
+        if (pitcherHandById.isEmpty() || batterHands.isEmpty()) {
+            return Map.of();
+        }
+        int n = pitcherHandById.size();
+        Integer[] ids = new Integer[n];
+        String[] pHands = new String[n];
+        int i = 0;
+        for (Map.Entry<Integer, String> e : pitcherHandById.entrySet()) {
+            ids[i] = e.getKey();
+            pHands[i] = e.getValue();
+            i++;
+        }
+        String[] bHands = batterHands.toArray(new String[0]);
+        return jdbc.query(
+            con -> {
+                PreparedStatement ps = con.prepareStatement(ARSENAL_BATCH_SQL);
+                ps.setArray(1, con.createArrayOf("integer", ids));
+                ps.setArray(2, con.createArrayOf("varchar", pHands));
+                ps.setArray(3, con.createArrayOf("integer", ids));
+                ps.setArray(4, con.createArrayOf("varchar", bHands));
+                ps.setObject(5, asOf);
+                return ps;
+            },
+            rs -> {
+                Map<String, List<PitchArsenalDto>> out = new HashMap<>();
+                while (rs.next()) {
+                    String k = key(rs.getInt("player_id"), rs.getString("vs_handedness"));
+                    out.computeIfAbsent(k, x -> new ArrayList<>()).add(new PitchArsenalDto(
+                        rs.getString("pitch_type"),
+                        toDouble(rs.getBigDecimal("usage_rate")),
+                        toDouble(rs.getBigDecimal("league_xwoba")),
+                        toDouble(rs.getBigDecimal("xwoba_against")),
+                        toDouble(rs.getBigDecimal("whiff_rate")),
+                        toDouble(rs.getBigDecimal("avg_velocity"))));
+                }
+                return out;
+            });
+    }
+
+    private static final String BATTER_PITCH_BATCH_SQL = """
+        WITH bs_snap AS (
+            SELECT DISTINCT ON (player_id, vs_handedness)
+                   player_id, vs_handedness, season, as_of_date
+            FROM batter_pitch_type_stats
+            WHERE player_id = ANY(?) AND vs_handedness = ANY(?) AND as_of_date <= ?
+            ORDER BY player_id, vs_handedness, as_of_date DESC, season DESC
+        )
+        SELECT s.player_id, s.vs_handedness, s.pitch_type, s.xwoba, s.pitches_seen, b.league_xwoba
+        FROM batter_pitch_type_stats s
+        JOIN bs_snap sn ON sn.player_id = s.player_id AND sn.vs_handedness = s.vs_handedness
+                       AND sn.season = s.season AND sn.as_of_date = s.as_of_date
+        LEFT JOIN pitch_type_league_baselines b
+          ON b.season = s.season AND b.pitch_type = s.pitch_type AND b.vs_handedness = s.vs_handedness
+        """;
+
+    /** Batter per-pitch-type rows keyed "batterId|pitcherHand", each as a pitchType→row map. */
+    public Map<String, Map<String, BatterPitchRow>> batterPitchStatsBatch(
+            Collection<Integer> batterIds, Collection<String> pitcherHands, LocalDate asOf) {
+        if (batterIds.isEmpty() || pitcherHands.isEmpty()) {
+            return Map.of();
+        }
+        Integer[] ids = batterIds.toArray(new Integer[0]);
+        String[] hands = pitcherHands.toArray(new String[0]);
+        return jdbc.query(
+            con -> {
+                PreparedStatement ps = con.prepareStatement(BATTER_PITCH_BATCH_SQL);
+                ps.setArray(1, con.createArrayOf("integer", ids));
+                ps.setArray(2, con.createArrayOf("varchar", hands));
+                ps.setObject(3, asOf);
+                return ps;
+            },
+            rs -> {
+                Map<String, Map<String, BatterPitchRow>> out = new HashMap<>();
+                while (rs.next()) {
+                    String k = key(rs.getInt("player_id"), rs.getString("vs_handedness"));
+                    out.computeIfAbsent(k, x -> new HashMap<>()).put(
+                        rs.getString("pitch_type"),
+                        new BatterPitchRow(
+                            rs.getString("pitch_type"),
+                            toDouble(rs.getBigDecimal("xwoba")),
+                            rs.getInt("pitches_seen"),
+                            toDouble(rs.getBigDecimal("league_xwoba"))));
+                }
+                return out;
+            });
     }
 
     // ── leaderboard: batters playing on `date` vs a given pitch type ──

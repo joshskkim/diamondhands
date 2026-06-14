@@ -73,6 +73,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/auth/signup", "/api/auth/signin", "/api/auth/signout").permitAll()
                 .requestMatchers("/health").permitAll()
+                // Health probes + Prometheus scrape are unauthenticated on the local
+                // network; other actuator endpoints stay behind auth.
+                .requestMatchers("/actuator/health/**", "/actuator/prometheus", "/actuator/info").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/**").permitAll()
                 .anyRequest().authenticated())
             .exceptionHandling(e -> e.authenticationEntryPoint(

@@ -6,6 +6,7 @@ import com.diamond.api.repository.PropBoardRepository;
 import com.diamond.api.repository.PropBoardRepository.BestPrice;
 import com.diamond.api.repository.PropBoardRepository.ClearRates;
 import com.diamond.api.repository.PropBoardRepository.SlateRow;
+import io.micrometer.observation.annotation.Observed;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
@@ -14,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -71,6 +73,7 @@ public class PropBoardService {
     /** A candidate scored for one market: its clear rates and blended probability. */
     private record Scored(SlateRow row, ClearRates rates, double blended) {}
 
+    @Observed(name = "propboard.board", contextualName = "propBoard.board")
     @Cacheable(cacheNames = "propBoard", key = "#date.toString()")
     public PropBoardResponse board(LocalDate date) {
         List<SlateRow> rows = repo.findSlateRows(date);
@@ -78,6 +81,14 @@ public class PropBoardService {
         // One player at most once across the TOP picks — three cards of the same
         // batter is a worse display than the marginally-less-likely runner-up.
         Set<Integer> used = new HashSet<>();
+
+        // Clear rates for every player that could enter any market's pool, fetched in ONE
+        // query instead of per-candidate (was the dominant N+1 on this endpoint). Each
+        // market re-ranks its top CANDIDATE_POOL by raw prob; `used` can drop up to
+        // MARKETS-1 earlier picks, shifting at most that many deeper players into a later
+        // pool — so prefetching that much extra depth is a guaranteed superset.
+        Map<Integer, ClearRates> ratesByPlayer = repo.findClearRatesBatch(
+            candidatePlayerIds(rows, CANDIDATE_POOL + MARKETS.size() - 1), date);
 
         for (Market m : MARKETS) {
             // Pool the strongest raw-model candidates, then re-rank by the shrunk
@@ -89,7 +100,7 @@ public class PropBoardService {
                 .sorted(Comparator.comparingDouble((SlateRow r) -> m.prob().apply(r)).reversed())
                 .limit(CANDIDATE_POOL)
                 .map(r -> {
-                    ClearRates rates = repo.findClearRates(r.playerId(), date);
+                    ClearRates rates = ratesByPlayer.get(r.playerId());
                     return new Scored(r, rates,
                         blend(m.prob().apply(r), seasonRate(m.key(), rates),
                               nSeasonOf(rates), m.leagueRate()));
@@ -110,6 +121,20 @@ public class PropBoardService {
             picks.add(toPick(m, top, runnersUp, date));
         }
         return new PropBoardResponse(date.toString(), rows.size(), picks);
+    }
+
+    /** Union, across markets, of the top-{@code depth} players by raw model probability —
+     *  the superset of players whose clear rates any market's pool could need. */
+    private static Set<Integer> candidatePlayerIds(List<SlateRow> rows, int depth) {
+        Set<Integer> ids = new HashSet<>();
+        for (Market m : MARKETS) {
+            rows.stream()
+                .filter(r -> m.prob().apply(r) != null && r.expectedPa() != null)
+                .sorted(Comparator.comparingDouble((SlateRow r) -> m.prob().apply(r)).reversed())
+                .limit(depth)
+                .forEach(r -> ids.add(r.playerId()));
+        }
+        return ids;
     }
 
     /** Blend the model's probability toward a league-stabilized empirical clear rate. */

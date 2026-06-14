@@ -34,4 +34,14 @@ class DiamondApiApplicationTests {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).containsEntry("status", "ok");
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void actuatorHealthReportsComponents() {
+        ResponseEntity<Map> response = restTemplate.getForEntity(
+            "http://localhost:" + port + "/actuator/health", Map.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).containsEntry("status", "UP");
+        assertThat((Map<String, Object>) response.getBody().get("components")).containsKeys("db", "redis");
+    }
 }

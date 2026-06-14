@@ -1,4 +1,6 @@
 spring:
+  application:
+    name: diamond-api   # becomes the OTel service.name in Jaeger
   datasource:
     url: jdbc:postgresql://localhost:5432/diamond
     username: diamond
@@ -24,6 +26,43 @@ spring:
 
 server:
   port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+      # Registers the livenessState/readinessState contributors outside Kubernetes
+      # so the probe groups below resolve.
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,db,redis
+  metrics:
+    tags:
+      application: diamond-api
+    distribution:
+      # Let Prometheus compute true p50/p95/p99 from server-side histograms
+      # rather than client-side estimates.
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        http.server.requests: 10ms,25ms,50ms,100ms,200ms,500ms,1s
+  tracing:
+    sampling:
+      probability: 1.0   # dev: trace every request; lower in prod
+  otlp:
+    tracing:
+      endpoint: ${OTLP_TRACING_ENDPOINT:http://localhost:4318/v1/traces}
+  opentelemetry:
+    resource-attributes:
+      service.name: diamond-api
 
 app:
   auth:

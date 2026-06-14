@@ -5,6 +5,7 @@ import com.diamond.api.dto.PitchTypeLeaderboardDto;
 import com.diamond.api.dto.PitchTypeRefDto;
 import com.diamond.api.repository.PitchRepository;
 import com.diamond.api.repository.PitchRepository.LeaderboardRow;
+import io.micrometer.observation.annotation.Observed;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
@@ -42,6 +43,7 @@ public class LeaderboardService {
      * Cached per (pitch, date, limit): the underlying snapshot query is the heaviest in
      * the app, and the slate is fixed for a given date, so the 5-min TTL is safe.
      */
+    @Observed(name = "leaderboard.pitchType", contextualName = "leaderboard.pitchType")
     @Cacheable(cacheNames = "pitchTypeLeaderboard", key = "#pitch + ':' + #date + ':' + #limit")
     public List<PitchTypeLeaderboardDto> pitchTypeLeaderboard(String pitch, LocalDate date, int limit) {
         List<PitchTypeLeaderboardDto> out = new ArrayList<>();

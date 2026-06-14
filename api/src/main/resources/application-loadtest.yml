@@ -1,0 +1,11 @@
+# Load-test profile: bypass the Redis cache so every request exercises the real
+# service + DB path. Run with: -Dspring.profiles.active=loadtest
+# (Keep tracing sampling lower here so the OTLP exporter isn't the bottleneck under load.)
+spring:
+  cache:
+    type: none
+
+management:
+  tracing:
+    sampling:
+      probability: 0.05
