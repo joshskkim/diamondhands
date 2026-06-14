@@ -13,6 +13,7 @@ import psycopg
 
 from ingester.db import eastern_today, get_connection
 from ingester.projection.constants import (
+    LEAGUE_BARREL_RATE,
     LEAGUE_BB_PER_PA,
     LEAGUE_HIT_PER_PA,
     LEAGUE_HR_PER_PA,
@@ -50,6 +51,33 @@ def _regress(raw: float | None, league: float, weight_player: float) -> float:
     if raw is None:
         return round(league, 4)
     return round(weight_player * raw + (1.0 - weight_player) * league, 4)
+
+
+BARREL_REGRESSION_BIP = 50  # barrels stabilise ~50 batted balls (gate-fit prior weight)
+
+
+def _load_barrel_rates(conn: psycopg.Connection, prior_season: int) -> dict[int, float]:
+    """Prior-season barrel rate per batter, EB-regressed toward the league barrel rate.
+
+    Used as a true-talent HR signal (v2.9) — strictly prior-season, so it's leak-free
+    for both the backtest (2024 barrel feeds 2025 projections) and live (2025 → 2026).
+    Empty for pre-2024 (batted-ball aggregation starts 2023) → callers leave barrel
+    NULL and the model falls back to the pure-ISO HR basis.
+    """
+    rows = conn.execute(
+        "SELECT player_id, barrel_pct, bip FROM batter_batted_ball WHERE season = %s",
+        (prior_season,),
+    ).fetchall()
+    out: dict[int, float] = {}
+    for pid, barrel, bip in rows:
+        if barrel is None or not bip:
+            continue
+        n = float(bip)
+        reg = (float(barrel) * n + LEAGUE_BARREL_RATE * BARREL_REGRESSION_BIP) / (
+            n + BARREL_REGRESSION_BIP
+        )
+        out[int(pid)] = round(reg, 4)
+    return out
 
 
 def _load_priors(
@@ -181,6 +209,7 @@ def compute_batter_skill_rows(
     # prior rather than the flat league mean. Falls back to league per-metric
     # when no prior exists (debutants) or refresh-priors hasn't run this season.
     priors = _load_priors(conn, season)
+    barrel_rates = _load_barrel_rates(conn, season - 1)  # prior-season true-talent HR signal
 
     rows: list[dict] = []
     for r in season_rows:
@@ -235,7 +264,7 @@ def compute_batter_skill_rows(
             "bb_rate": bb_rate,
             "iso": iso,
             "babip": babip,
-            "barrel_rate": None,
+            "barrel_rate": barrel_rates.get(pid),
             "hard_hit_rate": None,
             "xwoba_l30": xwoba_l30,
             "k_rate_l30": k_rate_l30,
@@ -360,14 +389,14 @@ def _aggregate_batter_skill(conn: psycopg.Connection, season: int) -> int:
                 """
                 INSERT INTO batter_skill (
                     player_id, season, plate_appearances,
-                    xwoba, woba, k_rate, bb_rate, iso, babip,
+                    xwoba, woba, k_rate, bb_rate, iso, babip, barrel_rate,
                     xwoba_l30, k_rate_l30, iso_l30, pa_l30,
                     updated_at
                 )
                 VALUES (
                     %(player_id)s, %(season)s, %(plate_appearances)s,
                     %(xwoba)s, %(woba)s, %(k_rate)s, %(bb_rate)s,
-                    %(iso)s, %(babip)s,
+                    %(iso)s, %(babip)s, %(barrel_rate)s,
                     %(xwoba_l30)s, %(k_rate_l30)s, %(iso_l30)s, %(pa_l30)s,
                     NOW()
                 )
@@ -380,6 +409,7 @@ def _aggregate_batter_skill(conn: psycopg.Connection, season: int) -> int:
                         bb_rate           = EXCLUDED.bb_rate,
                         iso               = EXCLUDED.iso,
                         babip             = EXCLUDED.babip,
+                        barrel_rate       = EXCLUDED.barrel_rate,
                         xwoba_l30         = EXCLUDED.xwoba_l30,
                         k_rate_l30        = EXCLUDED.k_rate_l30,
                         iso_l30           = EXCLUDED.iso_l30,

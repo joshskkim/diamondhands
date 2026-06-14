@@ -25,7 +25,7 @@ import os
 # v2.6.1: Marcel prior regresses each metric by its own constant (K light, ISO heavy).
 # v2.7.0: thin ISO histories regress toward a bat-speed-implied ISO anchor (Statcast
 # bat tracking) instead of the flat league mean.
-MODEL_VERSION: str = "v2.8.0"
+MODEL_VERSION: str = "v2.10.0"
 
 # ---------------------------------------------------------------------------
 # League-average reference (2025 MLB approximations)
@@ -38,6 +38,7 @@ LEAGUE_HR_PER_PA: float = 0.030
 LEAGUE_K_PER_PA: float = 0.225
 LEAGUE_BB_PER_PA: float = 0.085
 LEAGUE_ISO: float = 0.155
+LEAGUE_BARREL_RATE: float = 0.078  # mean barrels / batted-ball-in-play (population)
 
 # ---------------------------------------------------------------------------
 # Empirical-Bayes regression to the mean (v1.6.0)
@@ -105,6 +106,16 @@ FAST_SWING_SD: float = 0.170
 WHIFF_K_PER_Z: float = float(os.environ.get("DIAMOND_WHIFF_K_PER_Z", "0.0401"))
 WHIFF_MEAN: float = 0.2262
 WHIFF_SD: float = 0.0594
+
+# Barrel-rate HR basis (v2.9). The HR rate was derived purely from ISO, which
+# conflates doubles/triples power with true HR power. Barrel rate is the canonical
+# HR predictor. Out-of-sample (2024 barrel -> 2025 HR/PA, n=315): barrel beats ISO
+# (corr .593 -> .643) and the multiplicative blend that the model ships,
+# hr_scale = (1-w)*iso_scale + w*barrel_scale, minimises OOS HR-rate MAE at
+# w≈0.6-0.7 (-14% vs ISO-only). w=0.6 keeps ISO's independent gap-power signal
+# (barrel-only at w=1.0 regresses). Barrel is fed as a PRIOR-season true-talent
+# input (leak-free, like the bat-speed anchor); 0 = pure-ISO (pre-v2.9 behaviour).
+HR_BARREL_BLEND_W: float = float(os.environ.get("DIAMOND_HR_BARREL_W", "0.6"))
 
 # ---------------------------------------------------------------------------
 # Personalized park HR factor (v2.5.0)

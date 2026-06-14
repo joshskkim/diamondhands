@@ -344,7 +344,7 @@ def _load_batter_skill(
 ) -> BatterSkillInput | None:
     row = conn.execute(
         """
-        SELECT xwoba, xwoba_l30, k_rate, k_rate_l30, iso, iso_l30, pa_l30
+        SELECT xwoba, xwoba_l30, k_rate, k_rate_l30, iso, iso_l30, pa_l30, barrel_rate
         FROM batter_skill
         WHERE player_id = %s
         """,
@@ -363,6 +363,7 @@ def _load_batter_skill(
         iso=iso,
         iso_l30=float(row[5]) if row[5] is not None else iso,
         pa_l30=int(row[6] or 0),
+        barrel_rate=float(row[7]) if row[7] is not None else None,
     )
 
 
@@ -1244,7 +1245,7 @@ def _load_batter_skill_snapshot(
     """Read the most recent batter_skill_snapshot with as_of_date <= as_of_date."""
     row = conn.execute(
         """
-        SELECT xwoba, xwoba_l30, k_rate, k_rate_l30, iso, iso_l30, pa_l30
+        SELECT xwoba, xwoba_l30, k_rate, k_rate_l30, iso, iso_l30, pa_l30, barrel_rate
         FROM batter_skill_snapshots
         WHERE player_id = %s AND as_of_date <= %s
         ORDER BY as_of_date DESC
@@ -1265,6 +1266,7 @@ def _load_batter_skill_snapshot(
         iso=iso,
         iso_l30=float(row[5]) if row[5] is not None else iso,
         pa_l30=int(row[6] or 0),
+        barrel_rate=float(row[7]) if row[7] is not None else None,
     )
 
 
