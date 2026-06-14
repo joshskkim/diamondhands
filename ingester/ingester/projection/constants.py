@@ -274,9 +274,12 @@ PULL_BEARING_OFFSET_DEG: float = 35.0
 
 # Spray-personalized HIT park factor (v2.7, OFF by default). Exponent on the same
 # clear-the-fence ratio the HR personalization uses — the physical story for hits
-# (wall-ball doubles, deep-gap singles) is far weaker than for HR, so this ships at
-# 0.0 (= multiplier exactly 1.0) until a backtest shows a Brier improvement.
-PARK_HIT_GEO_BETA: float = 0.0
+# (wall-ball doubles, deep-gap singles) is far weaker than for HR. MEASURED at 0.5
+# on the full 2025 backtest (runs #97 control vs #98, both --park-personalized,
+# leak-free prior-season profiles): hits got WORSE — H>=1 Brier 0.2368→0.2370,
+# H>=2 0.1716→0.1720 with worse calibration (ECE 0.020→0.023). Stays 0.0 (multiplier
+# exactly 1.0). Env-overridable (DIAMOND_PARK_HIT_GEO_BETA) to re-measure.
+PARK_HIT_GEO_BETA: float = float(os.environ.get("DIAMOND_PARK_HIT_GEO_BETA", "0.0"))
 PARK_HIT_GEO_MULT_CLAMP: tuple[float, float] = (0.92, 1.08)
 
 # ---------------------------------------------------------------------------
@@ -396,11 +399,14 @@ NRFI_PROB_COEFF: float = 0.63
 # ---------------------------------------------------------------------------
 # Blend the batter's season/L30 skill toward their split vs the opposing pitcher's
 # throwing hand (batter_platoon_skill) before it feeds the pitch-mix matchup. Kept
-# OFF: the leak-aware backtest screen found it Brier-neutral (the matchup layer,
-# already computed vs the pitcher's hand, captures the platoon signal). The wiring
-# is retained, gated, so the decision is reproducible — flip PLATOON_ENABLED to
-# re-measure with point-in-time platoon snapshots when those exist.
-PLATOON_ENABLED: bool = False
+# OFF: the matchup layer, already computed vs the pitcher's hand, captures the
+# platoon signal. RE-MEASURED on the full 2025 backtest (runs #95 vs #96): every
+# market moved <=0.0002 Brier (H>=1 0.2368→0.2367, K>=1 0.2305→0.2303) — and this
+# is the LEAK-OPTIMISTIC test (batter_platoon_skill is a season aggregate, so the
+# backtest sees full-season splits), so the leak-free version can only be weaker.
+# Dead signal. Env-overridable (DIAMOND_PLATOON_ENABLED=1) to re-measure if
+# point-in-time platoon snapshots are ever built.
+PLATOON_ENABLED: bool = os.environ.get("DIAMOND_PLATOON_ENABLED", "0") == "1"
 MIN_PLATOON_PA: int = 25            # ignore splits thinner than this
 PLATOON_FULL_WEIGHT_PA: int = 200   # PA at which the split reaches its max blend weight
 PLATOON_WEIGHT_CAP: float = 0.50    # split never more than half the blended skill
