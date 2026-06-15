@@ -50,7 +50,7 @@ export function GameSelectorBar({ activeGameId }: { activeGameId?: number }) {
 
   return (
     <div className="sticky top-0 z-30 -mx-4 mb-6 border-b border-white/10 bg-[#08090d]/90 px-4 py-2 backdrop-blur">
-      <div className="scrollbar-slim flex gap-2 overflow-x-auto pb-1">
+      <div className="scrollbar-slim flex gap-2 overflow-x-auto">
         {games.map((g) => {
           const active = g.gameId === activeGameId
           const total = g.projection?.expectedTotal

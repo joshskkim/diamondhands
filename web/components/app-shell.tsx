@@ -45,7 +45,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* desktop rail */}
       <aside
         className={cn(
-          'hidden md:flex md:flex-col shrink-0 sticky top-0 h-screen bg-[#0e1015] border-r border-white/10 transition-[width] duration-200',
+          'hidden md:flex md:flex-col shrink-0 sticky top-0 h-screen bg-[#0e1015] border-r border-white/10',
           collapsed ? 'w-16' : 'w-60',
         )}
       >
