@@ -69,6 +69,11 @@ jobs:
   deploy:
     needs: build-push
     runs-on: ubuntu-latest
+    # Skip (don't fail) until prod is wired up: the DOMAIN repo variable is the
+    # "configured" signal — it's also the web build origin and the smoke-test host.
+    # Until it's set, build-push still runs so images keep getting validated.
+    if: ${{ vars.DOMAIN != '' }}
+    environment: production
     steps:
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1
@@ -85,3 +90,18 @@ jobs:
             docker compose -f compose.prod.yml pull
             docker compose -f compose.prod.yml up -d   # flyway migrates before api starts
             docker image prune -f
+
+            # Smoke test: don't call a deploy green until the live site answers.
+            # /api/games/today exercises the API through Caddy; / exercises the web app.
+            echo "Smoke test…"; ok=0
+            for i in $(seq 1 30); do
+              if curl -fsS -o /dev/null "https://${{ vars.DOMAIN }}/api/games/today" \
+                 && curl -fsS -o /dev/null "https://${{ vars.DOMAIN }}/"; then ok=1; break; fi
+              sleep 3
+            done
+            if [ "$ok" != 1 ]; then
+              echo "Smoke test failed — the site did not come up."
+              docker compose -f compose.prod.yml logs --tail=80 api web
+              exit 1
+            fi
+            echo "Smoke test passed."
