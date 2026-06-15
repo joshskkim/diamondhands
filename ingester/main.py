@@ -62,6 +62,8 @@ from ingester.commands.tennis_backfill import cmd_tennis_backfill
 from ingester.commands.tennis_ratings import cmd_tennis_refresh_ratings
 from ingester.commands.tennis_project import cmd_tennis_project
 from ingester.commands.tennis_backtest import cmd_tennis_backtest
+from ingester.commands.tennis_slate import cmd_tennis_slate
+from ingester.commands.tennis_odds import cmd_tennis_odds
 from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
 from ingester.db import eastern_today
 from ingester.projection.runner import cmd_project, cmd_smoke_project
@@ -471,6 +473,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--date", metavar="YYYY-MM-DD", type=_date_arg, default=None,
         help="Match date to project (default: latest match date in the DB)",
     )
+    p_tennis_proj.add_argument(
+        "--scheduled", action="store_true", default=False,
+        help="Project all status='scheduled' (live-slate) matches instead of a date",
+    )
+
+    p_tennis_slate = sub.add_parser(
+        "tennis-slate", help="Pull upcoming ATP matches from The Odds API into the live slate",
+    )
+    p_tennis_slate.add_argument(
+        "--sample", action="store_true", default=False,
+        help="Use the bundled events fixture instead of the API (no key / no credit spend)",
+    )
+
+    p_tennis_odds = sub.add_parser(
+        "tennis-odds", help="Pull ATP match-winner (h2h) odds into tennis_match_odds",
+    )
+    p_tennis_odds.add_argument(
+        "--sample", action="store_true", default=False,
+        help="Use the bundled h2h fixture instead of the API (no key / no credit spend)",
+    )
 
     p_tennis_bt = sub.add_parser(
         "tennis-backtest",
@@ -562,6 +584,8 @@ COMMANDS = {
     "tennis-refresh-ratings":   cmd_tennis_refresh_ratings,
     "tennis-project":           cmd_tennis_project,
     "tennis-backtest":          cmd_tennis_backtest,
+    "tennis-slate":             cmd_tennis_slate,
+    "tennis-odds":              cmd_tennis_odds,
     "train-pa":                 cmd_train_pa,
     "simulate-eval":            cmd_simulate_eval,
     "project":                  cmd_project,

@@ -1,0 +1,156 @@
+package com.diamond.api.repository;
+
+import com.diamond.api.dto.*;
+import com.diamond.api.service.TennisEv;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Repository;
+
+import java.math.BigDecimal;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+
+@Repository
+public class TennisRepository {
+
+    private final JdbcTemplate jdbc;
+
+    public TennisRepository(JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    // ── Slate board ──────────────────────────────────────────────────────────
+
+    // Best (highest-decimal) quote per side via DISTINCT ON, joined onto each match.
+    private static final String SCHEDULED_SQL = """
+        WITH best AS (
+            SELECT DISTINCT ON (match_id, side)
+                   match_id, side, bookmaker, price_american, price_decimal, implied_prob
+            FROM tennis_match_odds
+            ORDER BY match_id, side, price_decimal DESC
+        )
+        SELECT m.id AS match_id, m.start_time_utc, m.surface, m.best_of, m.status,
+               pa.id AS a_id, pa.full_name AS a_name, pa.country AS a_country,
+               pb.id AS b_id, pb.full_name AS b_name, pb.country AS b_country,
+               tp.p_win_a, tp.exp_total_games,
+               ba.bookmaker AS a_book, ba.price_american AS a_am,
+               ba.price_decimal AS a_dec, ba.implied_prob AS a_imp,
+               bb.bookmaker AS b_book, bb.price_american AS b_am,
+               bb.price_decimal AS b_dec, bb.implied_prob AS b_imp
+        FROM tennis_matches m
+        JOIN tennis_players pa ON pa.id = m.player_a_id
+        JOIN tennis_players pb ON pb.id = m.player_b_id
+        LEFT JOIN tennis_match_projections tp ON tp.match_id = m.id
+        LEFT JOIN best ba ON ba.match_id = m.id AND ba.side = 'player_a'
+        LEFT JOIN best bb ON bb.match_id = m.id AND bb.side = 'player_b'
+        WHERE m.status = 'scheduled'
+        ORDER BY m.start_time_utc NULLS LAST, m.id
+        """;
+
+    public List<TennisMatchDto> findScheduledMatches() {
+        return jdbc.query(SCHEDULED_SQL, this::mapMatch);
+    }
+
+    private TennisMatchDto mapMatch(ResultSet rs, int rowNum) throws SQLException {
+        TennisPlayerDto a = new TennisPlayerDto(rs.getString("a_id"), rs.getString("a_name"), rs.getString("a_country"));
+        TennisPlayerDto b = new TennisPlayerDto(rs.getString("b_id"), rs.getString("b_name"), rs.getString("b_country"));
+        Double pWinA = nd(rs, "p_win_a");
+        TennisEvDto best = TennisEv.bestPlay(
+            pWinA,
+            ni(rs, "a_am"), nd(rs, "a_dec"), nd(rs, "a_imp"), rs.getString("a_book"), rs.getString("a_name"),
+            ni(rs, "b_am"), nd(rs, "b_dec"), nd(rs, "b_imp"), rs.getString("b_book"), rs.getString("b_name"));
+        return new TennisMatchDto(
+            rs.getLong("match_id"), rs.getString("start_time_utc"),
+            rs.getString("surface"), ni(rs, "best_of"), a, b,
+            pWinA, nd(rs, "exp_total_games"), best, rs.getString("status"));
+    }
+
+    // ── Match detail ─────────────────────────────────────────────────────────
+
+    private static final String DETAIL_SQL = """
+        SELECT m.id AS match_id, m.start_time_utc, m.surface, m.best_of, m.status,
+               pa.id AS a_id, pa.full_name AS a_name, pa.country AS a_country,
+               pb.id AS b_id, pb.full_name AS b_name, pb.country AS b_country,
+               tp.p_win_a, tp.p_serve_a, tp.p_serve_b, tp.exp_total_games, tp.prob_straight_sets,
+               (tp.reasoning->>'elo_a')::numeric AS elo_a,
+               (tp.reasoning->>'elo_b')::numeric AS elo_b
+        FROM tennis_matches m
+        JOIN tennis_players pa ON pa.id = m.player_a_id
+        JOIN tennis_players pb ON pb.id = m.player_b_id
+        LEFT JOIN tennis_match_projections tp ON tp.match_id = m.id
+        WHERE m.id = ?
+        """;
+
+    private static final String QUOTES_SQL = """
+        SELECT side, bookmaker, price_american, price_decimal, implied_prob
+        FROM tennis_match_odds WHERE match_id = ?
+        ORDER BY side, price_decimal DESC
+        """;
+
+    public TennisMatchDetailDto findMatchDetail(long matchId) {
+        List<TennisQuoteDto> quotes = jdbc.query(QUOTES_SQL,
+            (rs, n) -> new TennisQuoteDto(rs.getString("side"), rs.getString("bookmaker"),
+                ni(rs, "price_american"), nd(rs, "price_decimal"), nd(rs, "implied_prob")),
+            matchId);
+        List<TennisMatchDetailDto> rows = jdbc.query(DETAIL_SQL,
+            (rs, n) -> mapDetail(rs, quotes), matchId);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    private TennisMatchDetailDto mapDetail(ResultSet rs, List<TennisQuoteDto> quotes) throws SQLException {
+        TennisPlayerDto a = new TennisPlayerDto(rs.getString("a_id"), rs.getString("a_name"), rs.getString("a_country"));
+        TennisPlayerDto b = new TennisPlayerDto(rs.getString("b_id"), rs.getString("b_name"), rs.getString("b_country"));
+        Double pWinA = nd(rs, "p_win_a");
+
+        // Best quote per side from the (already best-first ordered) quotes list.
+        TennisQuoteDto qa = quotes.stream().filter(q -> q.side().equals("player_a")).findFirst().orElse(null);
+        TennisQuoteDto qb = quotes.stream().filter(q -> q.side().equals("player_b")).findFirst().orElse(null);
+        TennisEvDto best = TennisEv.bestPlay(
+            pWinA,
+            qa != null ? qa.priceAmerican() : null, qa != null ? qa.priceDecimal() : null,
+            qa != null ? qa.impliedProb() : null, qa != null ? qa.bookmaker() : null, a.name(),
+            qb != null ? qb.priceAmerican() : null, qb != null ? qb.priceDecimal() : null,
+            qb != null ? qb.impliedProb() : null, qb != null ? qb.bookmaker() : null, b.name());
+
+        return new TennisMatchDetailDto(
+            rs.getLong("match_id"), rs.getString("start_time_utc"), rs.getString("surface"),
+            ni(rs, "best_of"), rs.getString("status"), a, b,
+            nd(rs, "elo_a"), nd(rs, "elo_b"), pWinA, nd(rs, "p_serve_a"), nd(rs, "p_serve_b"),
+            nd(rs, "exp_total_games"), nd(rs, "prob_straight_sets"), quotes, best);
+    }
+
+    // ── Rankings ─────────────────────────────────────────────────────────────
+
+    private static final String RANKINGS_SQL = """
+        SELECT p.id, p.full_name, p.country, r.elo, r.serve_skill, r.return_skill, r.matches_count
+        FROM tennis_player_ratings r
+        JOIN tennis_players p ON p.id = r.player_id
+        WHERE r.as_of_date = (SELECT max(as_of_date) FROM tennis_player_ratings)
+          AND r.surface = ? AND r.matches_count >= ?
+        ORDER BY r.elo DESC NULLS LAST
+        LIMIT ?
+        """;
+
+    public List<TennisRankingDto> findRankings(String surface, int minMatches, int limit) {
+        List<TennisRankingDto> out = new ArrayList<>();
+        jdbc.query(RANKINGS_SQL, rs -> {
+            TennisPlayerDto p = new TennisPlayerDto(rs.getString("id"), rs.getString("full_name"), rs.getString("country"));
+            out.add(new TennisRankingDto(out.size() + 1, p, nd(rs, "elo"),
+                nd(rs, "serve_skill"), nd(rs, "return_skill"), ni(rs, "matches_count")));
+        }, surface, minMatches, limit);
+        return out;
+    }
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    private static Integer ni(ResultSet rs, String col) throws SQLException {
+        int v = rs.getInt(col);
+        return rs.wasNull() ? null : v;
+    }
+
+    private static Double nd(ResultSet rs, String col) throws SQLException {
+        BigDecimal v = rs.getBigDecimal(col);
+        return v == null ? null : v.doubleValue();
+    }
+}

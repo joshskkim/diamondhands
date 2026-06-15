@@ -2,20 +2,40 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutGrid, TrendingUp, Target, LineChart, LogIn, LogOut, Menu, type LucideIcon } from 'lucide-react'
+import { LayoutGrid, TrendingUp, Target, LineChart, Calendar, BarChart3, LogIn, LogOut, Menu, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { DiamondMark } from '@/components/diamond-mark'
+import { SportSwitcher } from '@/components/sport-switcher'
 import { useAuth } from '@/components/auth-provider'
+
+type NavLink = { label: string; href: string; icon: LucideIcon }
 
 // Shared by the desktop rail and the mobile bottom nav so there's one source of
 // truth for the primary navigation. The bottom nav shortens the labels for its
-// tighter tabs (see mobile-nav.tsx).
-export const NAV_LINKS: { label: string; href: string; icon: LucideIcon }[] = [
+// tighter tabs (see mobile-nav.tsx). NAV_LINKS is the default (MLB) set; the
+// nav is sport-aware via navLinksForPath().
+export const NAV_LINKS: NavLink[] = [
   { label: "Today's Board", href: '/', icon: LayoutGrid },
   { label: 'Best Lines', href: '/mlb/odds', icon: TrendingUp },
   { label: 'Pitch Matchups', href: '/mlb/leaderboards/pitch-types', icon: Target },
   { label: 'Accuracy', href: '/mlb/accuracy', icon: LineChart },
 ]
+
+export const TENNIS_NAV_LINKS: NavLink[] = [
+  { label: 'Matches', href: '/tennis/matches', icon: Calendar },
+  { label: 'Rankings', href: '/tennis/rankings', icon: BarChart3 },
+]
+
+/** Pick the nav set for the active sport (tennis routes vs everything else). */
+export function navLinksForPath(pathname: string): NavLink[] {
+  return pathname.startsWith('/tennis') ? TENNIS_NAV_LINKS : NAV_LINKS
+}
+
+// Sport switcher dropdown items (root of each sport).
+export const SPORT_ITEMS = [
+  { label: 'MLB', href: '/' },
+  { label: 'Tennis', href: '/tennis/matches' },
+] as const
 
 /**
  * The inner content of the persistent side panel. Rendered both in the fixed
@@ -34,6 +54,9 @@ export function AppSidebar({
 }) {
   const pathname = usePathname()
   const { user, signOut } = useAuth()
+
+  const isTennis = pathname.startsWith('/tennis')
+  const navLinks = navLinksForPath(pathname)
 
   const isActive = (href: string) =>
     href === '/' ? pathname === '/' : pathname.startsWith(href)
@@ -74,9 +97,20 @@ export function AppSidebar({
         )}
       </div>
 
+      {/* sport switcher */}
+      {!collapsed && (
+        <div className="px-4 pt-3">
+          <SportSwitcher
+            label={isTennis ? 'Tennis' : 'MLB'}
+            baseHref={isTennis ? '/tennis' : '/mlb'}
+            items={SPORT_ITEMS}
+          />
+        </div>
+      )}
+
       {/* nav */}
       <nav className="flex-1 px-2 py-3 space-y-1">
-        {NAV_LINKS.map((link) => {
+        {navLinks.map((link) => {
           const Icon = link.icon
           const active = isActive(link.href)
           return (

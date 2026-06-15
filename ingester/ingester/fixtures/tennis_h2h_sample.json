@@ -1,0 +1,77 @@
+[
+  {
+    "id": "tns_evt_alcaraz_sinner",
+    "sport_key": "tennis_atp",
+    "sport_title": "ATP US Open",
+    "commence_time": "2026-06-16T17:00:00Z",
+    "home_team": "Carlos Alcaraz",
+    "away_team": "Jannik Sinner",
+    "bookmakers": [
+      {
+        "key": "draftkings", "title": "DraftKings", "last_update": "2026-06-16T15:30:00Z",
+        "markets": [
+          {"key": "h2h", "last_update": "2026-06-16T15:30:00Z", "outcomes": [
+            {"name": "Carlos Alcaraz", "price": 120},
+            {"name": "Jannik Sinner", "price": -145}
+          ]}
+        ]
+      },
+      {
+        "key": "fanduel", "title": "FanDuel", "last_update": "2026-06-16T15:31:00Z",
+        "markets": [
+          {"key": "h2h", "last_update": "2026-06-16T15:31:00Z", "outcomes": [
+            {"name": "Carlos Alcaraz", "price": 125},
+            {"name": "Jannik Sinner", "price": -150}
+          ]}
+        ]
+      }
+    ]
+  },
+  {
+    "id": "tns_evt_djokovic_zverev",
+    "sport_key": "tennis_atp",
+    "sport_title": "ATP Roland Garros",
+    "commence_time": "2026-06-16T13:00:00Z",
+    "home_team": "Novak Djokovic",
+    "away_team": "Alexander Zverev",
+    "bookmakers": [
+      {
+        "key": "draftkings", "title": "DraftKings", "last_update": "2026-06-16T12:00:00Z",
+        "markets": [
+          {"key": "h2h", "last_update": "2026-06-16T12:00:00Z", "outcomes": [
+            {"name": "Novak Djokovic", "price": -130},
+            {"name": "Alexander Zverev", "price": 110}
+          ]}
+        ]
+      },
+      {
+        "key": "betmgm", "title": "BetMGM", "last_update": "2026-06-16T12:02:00Z",
+        "markets": [
+          {"key": "h2h", "last_update": "2026-06-16T12:02:00Z", "outcomes": [
+            {"name": "Novak Djokovic", "price": -125},
+            {"name": "Alexander Zverev", "price": 105}
+          ]}
+        ]
+      }
+    ]
+  },
+  {
+    "id": "tns_evt_fritz_deminaur",
+    "sport_key": "tennis_atp",
+    "sport_title": "ATP Halle",
+    "commence_time": "2026-06-16T11:30:00Z",
+    "home_team": "Taylor Fritz",
+    "away_team": "Alex de Minaur",
+    "bookmakers": [
+      {
+        "key": "fanduel", "title": "FanDuel", "last_update": "2026-06-16T10:45:00Z",
+        "markets": [
+          {"key": "h2h", "last_update": "2026-06-16T10:45:00Z", "outcomes": [
+            {"name": "Taylor Fritz", "price": -110},
+            {"name": "Alex de Minaur", "price": -110}
+          ]}
+        ]
+      }
+    ]
+  }
+]

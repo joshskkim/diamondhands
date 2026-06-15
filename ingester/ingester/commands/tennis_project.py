@@ -45,15 +45,22 @@ def cmd_tennis_project(args: argparse.Namespace) -> None:
             print("[tennis-project] no ratings snapshot — run tennis-refresh-ratings first")
             return
 
-        target = args.date
-        if target is None:
-            target = conn.execute("SELECT max(match_date) FROM tennis_matches").fetchone()[0]
-
-        matches = conn.execute(
-            "SELECT id, surface, best_of, player_a_id, player_b_id "
-            "FROM tennis_matches WHERE match_date = %s ORDER BY id",
-            (target,),
-        ).fetchall()
+        if getattr(args, "scheduled", False):
+            label = "scheduled"
+            matches = conn.execute(
+                "SELECT id, surface, best_of, player_a_id, player_b_id "
+                "FROM tennis_matches WHERE status = 'scheduled' ORDER BY start_time_utc NULLS LAST, id"
+            ).fetchall()
+        else:
+            target = args.date
+            if target is None:
+                target = conn.execute("SELECT max(match_date) FROM tennis_matches").fetchone()[0]
+            label = str(target)
+            matches = conn.execute(
+                "SELECT id, surface, best_of, player_a_id, player_b_id "
+                "FROM tennis_matches WHERE match_date = %s ORDER BY id",
+                (target,),
+            ).fetchall()
 
         rows = []
         skipped = 0
@@ -91,7 +98,7 @@ def cmd_tennis_project(args: argparse.Namespace) -> None:
                 rows,
             )
         conn.commit()
-        print(f"[tennis-project] {target}: projected {len(rows)} matches "
+        print(f"[tennis-project] {label}: projected {len(rows)} matches "
               f"({skipped} skipped for missing ratings) [{MODEL_VERSION}]")
     finally:
         conn.close()
