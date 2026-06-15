@@ -7,7 +7,10 @@ import { cn } from '@/lib/utils'
 import { DiamondMark } from '@/components/diamond-mark'
 import { useAuth } from '@/components/auth-provider'
 
-const NAV_LINKS: { label: string; href: string; icon: LucideIcon }[] = [
+// Shared by the desktop rail and the mobile bottom nav so there's one source of
+// truth for the primary navigation. The bottom nav shortens the labels for its
+// tighter tabs (see mobile-nav.tsx).
+export const NAV_LINKS: { label: string; href: string; icon: LucideIcon }[] = [
   { label: "Today's Board", href: '/', icon: LayoutGrid },
   { label: 'Best Lines', href: '/mlb/odds', icon: TrendingUp },
   { label: 'Pitch Matchups', href: '/mlb/leaderboards/pitch-types', icon: Target },

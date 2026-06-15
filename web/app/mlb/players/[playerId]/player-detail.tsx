@@ -221,7 +221,7 @@ export function PlayerDetail({ playerId }: { playerId: number }) {
               <table className="w-full text-sm">
                 <thead>
                   <tr className={cn('border-b border-white/10', microLabel)}>
-                    <th className="px-3 py-2 text-left font-medium">Date</th>
+                    <th className="px-3 py-2 text-left font-medium max-md:sticky max-md:left-0 max-md:z-10 max-md:bg-[#0e1015]">Date</th>
                     <th className="px-3 py-2 text-left font-medium">Opp</th>
                     <th className="px-3 py-2 text-left font-medium">H/A</th>
                     <th className="px-3 py-2 text-right font-medium">PA</th>
@@ -237,7 +237,7 @@ export function PlayerDetail({ playerId }: { playerId: number }) {
                       key={`${s.gameDate}-${i}`}
                       className="border-b border-white/5 hover:bg-white/[0.03] transition-colors"
                     >
-                      <td className="px-3 py-2 font-mono tabular-nums text-zinc-400">
+                      <td className="px-3 py-2 font-mono tabular-nums text-zinc-400 max-md:sticky max-md:left-0 max-md:z-10 max-md:bg-[#0e1015]">
                         {format(parseISO(s.gameDate), 'MMM d')}
                       </td>
                       <td className="px-3 py-2 font-medium text-zinc-200">{s.opp ?? '—'}</td>

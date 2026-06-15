@@ -141,6 +141,122 @@ const EMPTY_MESSAGE: Record<Filter, string> = {
   all: 'No plays on the board.',
 }
 
+// One labelled metric in the mobile card's stat grid.
+function Metric({ label, value, className }: { label: string; value: string; className?: string }) {
+  return (
+    <div>
+      <div className={microLabel}>{label}</div>
+      <div className={cn('font-mono tabular-nums text-sm', className)}>{value}</div>
+    </div>
+  )
+}
+
+// Mobile-only card rendering of a single play — the same data as one table row,
+// stacked so it reads on a narrow screen. Reuses every table-row helper.
+function PlayCard({
+  r,
+  hr,
+  ls,
+  isExpanded,
+  onToggle,
+}: {
+  r: BestPlay
+  hr: HitRate | undefined
+  ls: LineShop | undefined
+  isExpanded: boolean
+  onToggle: () => void
+}) {
+  const s = sideLabel(r)
+  const edge = edgeOf(r)
+  return (
+    <div className="rounded-xl border border-white/10 bg-[#0e1015] p-4">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <Link
+            href={r.playerId ? `/mlb/players/${r.playerId}` : `/mlb/games/${r.gameId}`}
+            className="font-medium text-zinc-100 hover:text-cyan-400 transition-colors"
+          >
+            {subject(r)}
+          </Link>
+          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-zinc-500">
+            <span>{MARKET_LABEL[r.market] ?? r.market}</span>
+            {r.playerName && (
+              <Link
+                href={`/mlb/games/${r.gameId}`}
+                className="font-mono hover:text-cyan-400 transition-colors"
+              >
+                {r.matchup}
+              </Link>
+            )}
+          </div>
+        </div>
+        <span
+          className={cn(
+            'shrink-0 inline-block rounded border px-1.5 py-0.5 text-xs font-medium whitespace-nowrap',
+            SIDE_TONE[s.tone],
+          )}
+        >
+          {s.text} {lineLabel(r)}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+        <Metric label="Model" value={pct(r.modelProb)} className="text-zinc-300" />
+        <Metric label="Fair" value={pct(r.fairProb)} className="text-zinc-400" />
+        <Metric label="Edge" value={edge == null ? '—' : signedPct(edge)} className={edgeClass(edge)} />
+        <Metric label="EV" value={signedPct(r.evPct)} className={evClass(r.evPct)} />
+      </div>
+
+      <div className="mt-3 flex items-center justify-between gap-2 text-sm">
+        <div>
+          <span className="font-mono tabular-nums text-zinc-100">{amer(r.priceAmerican)}</span>{' '}
+          <span className="text-xs text-zinc-500">{r.bestBook}</span>
+        </div>
+        {ls && ls.quotes.length > 0 && (
+          <button
+            onClick={onToggle}
+            className={cn(
+              'rounded border px-2 py-1 font-mono text-xs tabular-nums transition-colors',
+              isExpanded
+                ? 'border-cyan-400/40 bg-cyan-500/15 text-cyan-300'
+                : 'border-white/10 bg-white/5 text-zinc-400 hover:border-white/20 hover:text-zinc-200',
+            )}
+          >
+            {ls.quotes.length} books {isExpanded ? '▾' : '▸'}
+          </button>
+        )}
+      </div>
+
+      {hr && (
+        <div className="mt-2 flex items-center gap-1.5">
+          <span className={microLabel}>Hit rate</span>
+          <HitRateCell hr={hr} />
+        </div>
+      )}
+
+      {isExpanded && ls && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
+          {ls.quotes.map((q, qi) => (
+            <span
+              key={q.book}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded border px-2 py-1 text-xs',
+                qi === 0
+                  ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-300'
+                  : 'border-white/10 bg-white/5 text-zinc-300',
+              )}
+            >
+              <span className="text-zinc-400">{q.book}</span>
+              <span className="font-mono tabular-nums">{amer(q.priceAmerican)}</span>
+              {qi === 0 && <span className="text-[10px] uppercase tracking-wide">best</span>}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function OddsBoard() {
   const [filter, setFilter] = useState<Filter>('liked')
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -218,7 +334,37 @@ export function OddsBoard() {
           <span className="font-mono">--sample</span> for fixtures).
         </p>
       ) : (
-        <div className="bg-[#0e1015] border border-white/10 rounded-xl overflow-hidden">
+        <>
+        {/* mobile: stacked cards */}
+        <div className="space-y-3 md:hidden">
+          {shown.length === 0 ? (
+            <p className="rounded-xl border border-white/10 bg-[#0e1015] px-4 py-6 text-sm text-zinc-500">
+              {EMPTY_MESSAGE[filter]}
+            </p>
+          ) : (
+            shown.map((r, i) => {
+              const hr = r.playerId != null ? hitRates.get(`${r.playerId}:${r.market}`) : undefined
+              const lsKey =
+                r.playerId != null && r.line != null
+                  ? `${r.gameId}:${r.playerId}:${r.market}:${r.side}:${r.line}`
+                  : null
+              const ls = lsKey ? lineShop.get(lsKey) : undefined
+              return (
+                <PlayCard
+                  key={`${r.gameId}-${r.market}-${r.selection}-${i}`}
+                  r={r}
+                  hr={hr}
+                  ls={ls}
+                  isExpanded={lsKey != null && expanded === lsKey}
+                  onToggle={() => lsKey && setExpanded(expanded === lsKey ? null : lsKey)}
+                />
+              )
+            })
+          )}
+        </div>
+
+        {/* desktop: table */}
+        <div className="hidden bg-[#0e1015] border border-white/10 rounded-xl overflow-hidden md:block">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -374,6 +520,7 @@ export function OddsBoard() {
             <p className="px-4 py-6 text-sm text-zinc-500">{EMPTY_MESSAGE[filter]}</p>
           )}
         </div>
+        </>
       )}
     </main>
   )

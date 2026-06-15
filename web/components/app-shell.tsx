@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useSyncExternalStore } from 'react'
+import { useSyncExternalStore } from 'react'
 import Link from 'next/link'
-import { Menu, X } from 'lucide-react'
 import { AppSidebar } from '@/components/app-sidebar'
+import { MobileNav } from '@/components/mobile-nav'
 import { DiamondMark } from '@/components/diamond-mark'
 import { cn } from '@/lib/utils'
 
@@ -32,13 +32,11 @@ function useCollapsed(): [boolean, () => void] {
 
 /**
  * App layout shell: a persistent left rail on desktop (collapsible to icons-only,
- * choice persisted in localStorage) and a slide-in drawer on mobile. Wraps every
- * page so the side panel stays put while navigating.
+ * choice persisted in localStorage) and a fixed bottom tab bar on mobile (see
+ * MobileNav). Wraps every page so navigation stays put while routing.
  */
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const [drawerOpen, setDrawerOpen] = useState(false)
   const [collapsed, toggleCollapsed] = useCollapsed()
-  const closeDrawer = () => setDrawerOpen(false)
 
   return (
     <div className="flex min-h-screen">
@@ -54,35 +52,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      {/* mobile drawer */}
-      {drawerOpen && (
-        <div className="fixed inset-0 z-50 md:hidden">
-          <div className="absolute inset-0 bg-black/60" onClick={closeDrawer} aria-hidden />
-          <aside className="absolute inset-y-0 left-0 w-64 bg-[#0e1015] border-r border-white/10 shadow-xl">
-            <AppSidebar onNavigate={closeDrawer} />
-          </aside>
-        </div>
-      )}
-
       <div className="flex flex-1 min-w-0 flex-col">
-        {/* mobile top bar */}
-        <header className="md:hidden sticky top-0 z-40 flex items-center gap-3 h-14 px-4 bg-[#0e1015]/80 backdrop-blur border-b border-white/10">
-          <button
-            type="button"
-            onClick={() => setDrawerOpen((v) => !v)}
-            aria-label={drawerOpen ? 'Close menu' : 'Open menu'}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-300 hover:bg-white/5 hover:text-zinc-100"
-          >
-            {drawerOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
+        {/* mobile top bar — brand only; navigation lives in the bottom bar */}
+        <header className="md:hidden sticky top-0 z-40 flex items-center h-12 px-4 bg-[#0e1015]/80 backdrop-blur border-b border-white/10">
           <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight text-zinc-100">
             <DiamondMark />
             <span className="text-base">Diamond</span>
           </Link>
         </header>
 
-        <main className="flex-1 min-w-0">{children}</main>
+        {/* pb-20 keeps content clear of the fixed bottom nav on mobile */}
+        <main className="flex-1 min-w-0 pb-20 md:pb-0">{children}</main>
       </div>
+
+      {/* mobile bottom nav (self-gates to md:hidden) */}
+      <MobileNav />
     </div>
   )
 }
