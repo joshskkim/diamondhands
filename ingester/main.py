@@ -58,6 +58,10 @@ from ingester.ml.perpa import cmd_train_pa
 from ingester.commands.simulate_eval import cmd_simulate_eval
 from ingester.commands.report import cmd_compare_runs
 from ingester.commands.fit_calibration import cmd_fit_calibration
+from ingester.commands.tennis_backfill import cmd_tennis_backfill
+from ingester.commands.tennis_ratings import cmd_tennis_refresh_ratings
+from ingester.commands.tennis_project import cmd_tennis_project
+from ingester.commands.tennis_backtest import cmd_tennis_backtest
 from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
 from ingester.db import eastern_today
 from ingester.projection.runner import cmd_project, cmd_smoke_project
@@ -437,6 +441,48 @@ def build_parser() -> argparse.ArgumentParser:
         help="Slate date to score (default: yesterday in US/Eastern)",
     )
 
+    p_tennis_bf = sub.add_parser(
+        "tennis-backfill",
+        help="Load Jeff Sackmann tennis_atp history (players/matches/serve lines) for a season range",
+    )
+    p_tennis_bf.add_argument(
+        "--start-year", type=int, default=CURRENT_SEASON - 11, dest="start_year",
+        help="First season to load (default: 12 seasons back)",
+    )
+    p_tennis_bf.add_argument(
+        "--end-year", type=int, default=CURRENT_SEASON, dest="end_year",
+        help="Last season to load (default: current season)",
+    )
+
+    p_tennis_rate = sub.add_parser(
+        "tennis-refresh-ratings",
+        help="Replay surface-blended Elo + recompute serve/return skills into tennis_player_ratings",
+    )
+    p_tennis_rate.add_argument(
+        "--as-of", metavar="YYYY-MM-DD", type=_date_arg, default=None, dest="as_of",
+        help="Compute ratings using matches on/before this date (default: today in US/Eastern)",
+    )
+
+    p_tennis_proj = sub.add_parser(
+        "tennis-project",
+        help="Write tennis_match_projections for a date's matches from the ratings snapshot",
+    )
+    p_tennis_proj.add_argument(
+        "--date", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+        help="Match date to project (default: latest match date in the DB)",
+    )
+
+    p_tennis_bt = sub.add_parser(
+        "tennis-backtest",
+        help="Walk-forward Brier/log-loss/calibration vs ranking + bare-Elo baselines",
+    )
+    p_tennis_bt.add_argument("--start", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+                             help="Eval window start (default: 2024-01-01)")
+    p_tennis_bt.add_argument("--end", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+                             help="Eval window end (default: today in US/Eastern)")
+    p_tennis_bt.add_argument("--min-matches", type=int, default=10, dest="min_matches",
+                             help="Require this many prior matches for both players (default: 10)")
+
     sub.add_parser("smoke",        help="DB connectivity sanity check")
     sub.add_parser("smoke-skills", help="Print top batters/pitchers from skill tables")
     p_smoke_slate    = sub.add_parser("smoke-slate",    help="Print today's slate with weather and probables")
@@ -512,6 +558,10 @@ COMMANDS = {
     "tune-blend":               cmd_tune_blend,
     "compare-runs":             cmd_compare_runs,
     "fit-calibration":          cmd_fit_calibration,
+    "tennis-backfill":          cmd_tennis_backfill,
+    "tennis-refresh-ratings":   cmd_tennis_refresh_ratings,
+    "tennis-project":           cmd_tennis_project,
+    "tennis-backtest":          cmd_tennis_backtest,
     "train-pa":                 cmd_train_pa,
     "simulate-eval":            cmd_simulate_eval,
     "project":                  cmd_project,
