@@ -1,0 +1,18 @@
+# Root .dockerignore — applies to the ingester image (build context = repo root).
+# api/ and web/ build from their own contexts and have their own .dockerignore files.
+.git/
+.github/
+api/
+web/
+db/
+docs/
+loadtest/
+monitoring/
+deploy/
+models/*.parquet
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/.pytest_cache/
+**/.env
+*.tmp
