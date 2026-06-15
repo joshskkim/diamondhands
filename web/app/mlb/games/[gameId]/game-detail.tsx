@@ -249,7 +249,7 @@ function BatterTable({
             {showOrder && (
               <th
                 className={cn(
-                  'px-2 py-2 text-right cursor-pointer select-none w-8 transition-colors',
+                  'px-2 py-2 text-right cursor-pointer select-none w-8 transition-colors max-md:sticky max-md:left-0 max-md:z-10 max-md:bg-[#0e1015]',
                   microLabel,
                   sortCol === 'lineup' ? 'text-cyan-400' : 'hover:text-zinc-300',
                 )}
@@ -259,7 +259,15 @@ function BatterTable({
                 #
               </th>
             )}
-            <th className={cn('px-2 py-2 text-left', microLabel)}>Player</th>
+            <th
+              className={cn(
+                'px-2 py-2 text-left max-md:sticky max-md:z-10 max-md:bg-[#0e1015]',
+                showOrder ? 'max-md:left-8' : 'max-md:left-0',
+                microLabel,
+              )}
+            >
+              Player
+            </th>
             <th className={cn('px-2 py-2 text-right', microLabel)}>xPA</th>
             <ColHeader col="hit1plus" label="P(H≥1)" sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
             <ColHeader col="hit2plus" label="P(H≥2)" sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
@@ -284,11 +292,22 @@ function BatterTable({
                 onClick={() => setExpanded(isOpen ? null : b.player.id)}
               >
                 {showOrder && (
-                  <td className="px-2 py-2 text-right font-mono tabular-nums text-zinc-500">
+                  <td
+                    className={cn(
+                      'px-2 py-2 text-right font-mono tabular-nums text-zinc-500 max-md:sticky max-md:left-0 max-md:z-10',
+                      isOpen ? 'max-md:bg-[#13151b]' : 'max-md:bg-[#0e1015]',
+                    )}
+                  >
                     {b.lineupPosition ?? '—'}
                   </td>
                 )}
-                <td className="px-2 py-2">
+                <td
+                  className={cn(
+                    'px-2 py-2 max-md:sticky max-md:z-10',
+                    showOrder ? 'max-md:left-8' : 'max-md:left-0',
+                    isOpen ? 'max-md:bg-[#13151b]' : 'max-md:bg-[#0e1015]',
+                  )}
+                >
                   <div className="flex items-baseline gap-1.5">
                     <Link
                       href={`/players/${b.player.id}`}

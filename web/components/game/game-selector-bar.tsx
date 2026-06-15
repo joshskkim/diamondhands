@@ -2,8 +2,9 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { format } from 'date-fns'
+import { ChevronDown } from 'lucide-react'
 import Link from 'next/link'
-import { useEffect, useRef, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { todayGamesQueryOptions } from '@/lib/api'
 import { cn, parseApiDate } from '@/lib/utils'
 
@@ -31,15 +32,57 @@ function favoriteGlow(
   return { side, style }
 }
 
+// A single matchup label: AWY @ HOM, with the projected favorite glowing.
+function MatchupLabel({
+  away,
+  home,
+  glow,
+}: {
+  away: string
+  home: string
+  glow: ReturnType<typeof favoriteGlow>
+}) {
+  return (
+    <div className="flex items-center gap-2 text-sm font-semibold tracking-tight whitespace-nowrap">
+      <span style={glow.side === 'away' ? glow.style : undefined}>{away}</span>
+      <span className="font-normal text-zinc-600">@</span>
+      <span style={glow.side === 'home' ? glow.style : undefined}>{home}</span>
+    </div>
+  )
+}
+
+// Time · total line shown beneath a matchup.
+function MatchupMeta({
+  startTimeUtc,
+  total,
+}: {
+  startTimeUtc: string
+  total: number | null | undefined
+}) {
+  return (
+    <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-zinc-500 whitespace-nowrap">
+      <span className="font-mono tabular-nums">{format(parseApiDate(startTimeUtc), 'h:mm a')}</span>
+      {total != null && (
+        <>
+          <span className="text-zinc-700">·</span>
+          <span className="font-mono tabular-nums">{total.toFixed(1)} R</span>
+        </>
+      )}
+    </div>
+  )
+}
+
 /**
- * Sticky, horizontally-scrolling strip of today's games. Lets you hop between
- * matchups without leaving the game view. Reads the already-cached today slate,
- * so switching games is an instant client navigation. The projected favorite in
- * each chip glows, more vividly the more we favor them.
+ * Sticky game switcher for today's slate. On desktop it's a horizontally
+ * scrolling strip of chips; on mobile it collapses to a dropdown (the strip
+ * fights the page's vertical flow on a narrow screen). Both read the already
+ * cached slate, so switching is an instant client navigation, and the projected
+ * favorite glows more vividly the more we favor them.
  */
 export function GameSelectorBar({ activeGameId }: { activeGameId?: number }) {
   const { data: games } = useQuery(todayGamesQueryOptions())
   const activeRef = useRef<HTMLAnchorElement | null>(null)
+  const [open, setOpen] = useState(false)
 
   // Bring the current game into view when the bar mounts / the slate loads.
   useEffect(() => {
@@ -48,47 +91,84 @@ export function GameSelectorBar({ activeGameId }: { activeGameId?: number }) {
 
   if (!games || games.length === 0) return null
 
+  const active = games.find((g) => g.gameId === activeGameId)
+  const activeGlow = active
+    ? favoriteGlow(active.projection?.expectedHomeRuns, active.projection?.expectedAwayRuns)
+    : favoriteGlow(null, null)
+
   return (
-    <div className="sticky top-0 z-30 -mx-4 mb-6 border-b border-white/10 bg-[#08090d]/90 px-4 py-2 backdrop-blur">
-      <div className="scrollbar-slim flex gap-2 overflow-x-auto">
+    <div className="sticky top-12 md:top-0 z-30 -mx-4 mb-6 border-b border-white/10 bg-[#08090d]/90 px-4 py-2 backdrop-blur">
+      {/* desktop: horizontal chip strip */}
+      <div className="scrollbar-slim hidden gap-2 overflow-x-auto md:flex">
         {games.map((g) => {
-          const active = g.gameId === activeGameId
-          const total = g.projection?.expectedTotal
-          const glow = favoriteGlow(
-            g.projection?.expectedHomeRuns,
-            g.projection?.expectedAwayRuns,
-          )
+          const isActive = g.gameId === activeGameId
+          const glow = favoriteGlow(g.projection?.expectedHomeRuns, g.projection?.expectedAwayRuns)
           return (
             <Link
               key={g.gameId}
-              ref={active ? activeRef : undefined}
+              ref={isActive ? activeRef : undefined}
               href={`/mlb/games/${g.gameId}`}
               className={cn(
                 'shrink-0 rounded-lg border px-3 py-1.5 transition-colors',
-                active
+                isActive
                   ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-300'
                   : 'border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-zinc-100',
               )}
             >
-              <div className="flex items-center gap-2 text-sm font-semibold tracking-tight whitespace-nowrap">
-                <span style={glow.side === 'away' ? glow.style : undefined}>{g.away.abbr}</span>
-                <span className="font-normal text-zinc-600">@</span>
-                <span style={glow.side === 'home' ? glow.style : undefined}>{g.home.abbr}</span>
-              </div>
-              <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-zinc-500 whitespace-nowrap">
-                <span className="font-mono tabular-nums">
-                  {format(parseApiDate(g.startTimeUtc), 'h:mm a')}
-                </span>
-                {total != null && (
-                  <>
-                    <span className="text-zinc-700">·</span>
-                    <span className="font-mono tabular-nums">{total.toFixed(1)} R</span>
-                  </>
-                )}
-              </div>
+              <MatchupLabel away={g.away.abbr} home={g.home.abbr} glow={glow} />
+              <MatchupMeta startTimeUtc={g.startTimeUtc} total={g.projection?.expectedTotal} />
             </Link>
           )
         })}
+      </div>
+
+      {/* mobile: dropdown switcher */}
+      <div className="relative md:hidden">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left"
+        >
+          <div className="min-w-0">
+            {active ? (
+              <>
+                <MatchupLabel away={active.away.abbr} home={active.home.abbr} glow={activeGlow} />
+                <MatchupMeta startTimeUtc={active.startTimeUtc} total={active.projection?.expectedTotal} />
+              </>
+            ) : (
+              <span className="text-sm font-medium text-zinc-300">
+                Today&apos;s games ({games.length})
+              </span>
+            )}
+          </div>
+          <ChevronDown
+            className={cn('h-4 w-4 shrink-0 text-zinc-400 transition-transform', open && 'rotate-180')}
+          />
+        </button>
+
+        {open && (
+          <div className="absolute inset-x-0 top-full z-40 mt-1 max-h-[60vh] overflow-y-auto rounded-lg border border-white/10 bg-[#0e1015] py-1 shadow-xl">
+            {games.map((g) => {
+              const isActive = g.gameId === activeGameId
+              const glow = favoriteGlow(g.projection?.expectedHomeRuns, g.projection?.expectedAwayRuns)
+              return (
+                <Link
+                  key={g.gameId}
+                  href={`/mlb/games/${g.gameId}`}
+                  onClick={() => setOpen(false)}
+                  className={cn(
+                    'flex items-center justify-between gap-3 px-3 py-2 transition-colors',
+                    isActive ? 'bg-cyan-400/10 text-cyan-300' : 'text-zinc-300 hover:bg-white/5',
+                  )}
+                >
+                  <MatchupLabel away={g.away.abbr} home={g.home.abbr} glow={glow} />
+                  <MatchupMeta startTimeUtc={g.startTimeUtc} total={g.projection?.expectedTotal} />
+                </Link>
+              )
+            })}
+          </div>
+        )}
       </div>
     </div>
   )
