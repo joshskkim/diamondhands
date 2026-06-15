@@ -1,0 +1,24 @@
+# Same-origin routing: the web app and the API share one public origin, so the
+# httpOnly session cookie works with SameSite=Lax and CORS is unnecessary.
+#   {$DOMAIN}/api/*  → Spring Boot API   (note: /actuator is NOT exposed publicly)
+#   {$DOMAIN}/*      → Next.js web app
+#
+# Caddy auto-provisions/renews TLS via Let's Encrypt for a real domain, or uses its
+# internal CA when DOMAIN=localhost (local testing). For production add an `email`
+# global option (below) so you get Let's Encrypt expiry notices.
+#
+# {
+#     email ops@example.com
+# }
+
+{$DOMAIN} {
+	encode gzip
+
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}
