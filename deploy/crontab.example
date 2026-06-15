@@ -1,0 +1,15 @@
+# Diamond scheduled jobs — install on the host with:  crontab deploy/crontab.example
+# (or paste into `crontab -e`). CRON_TZ requires Vixie/cronie (Debian/Ubuntu default).
+CRON_TZ=America/New_York
+DIAMOND_DIR=/opt/diamond
+
+# Morning full run: build today's slate + close out the prior day
+# (final scores, stats, picks scoring, accuracy snapshot).
+0 9 * * *        /opt/diamond/deploy/run-ingester.sh daily
+
+# Afternoon quick loop (noon–6pm ET): confirmed lineups + odds + re-projection
+# as lineups post. Matches the cadence documented in the README.
+*/30 12-18 * * *  /opt/diamond/deploy/run-ingester.sh daily --quick
+
+# Nightly database backup.
+30 3 * * *       /opt/diamond/deploy/backup.sh
