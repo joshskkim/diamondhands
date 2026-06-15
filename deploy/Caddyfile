@@ -4,12 +4,12 @@
 #   {$DOMAIN}/*      → Next.js web app
 #
 # Caddy auto-provisions/renews TLS via Let's Encrypt for a real domain, or uses its
-# internal CA when DOMAIN=localhost (local testing). For production add an `email`
-# global option (below) so you get Let's Encrypt expiry notices.
-#
-# {
-#     email ops@example.com
-# }
+# internal CA when DOMAIN=localhost (local testing). ACME_EMAIL (from .env) registers
+# the ACME account so Let's Encrypt can send cert-expiry notices; harmless if unset.
+
+{
+	email {$ACME_EMAIL}
+}
 
 {$DOMAIN} {
 	encode gzip
