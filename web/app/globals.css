@@ -133,23 +133,13 @@
   }
 }
 
-/* Slim, themed horizontal scrollbar for chip strips (e.g. the game selector bar):
-   a thin translucent track + rounded thumb that brightens on hover, replacing the
-   chunky default OS bar. Firefox uses the thin/standard properties. */
+/* Fully hidden scrollbar for chip strips (e.g. the game selector bar). The strip
+   still scrolls (trackpad / drag), but no track or thumb is drawn so nothing sticks
+   out below the chips and there's no opaque gutter over the dark bar. */
 .scrollbar-slim {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* old Edge */
 }
 .scrollbar-slim::-webkit-scrollbar {
-  height: 6px;
-}
-.scrollbar-slim::-webkit-scrollbar-track {
-  background: transparent;
-}
-.scrollbar-slim::-webkit-scrollbar-thumb {
-  background-color: rgba(255, 255, 255, 0.14);
-  border-radius: 9999px;
-}
-.scrollbar-slim:hover::-webkit-scrollbar-thumb {
-  background-color: rgba(255, 255, 255, 0.28);
+  display: none; /* WebKit */
 }
