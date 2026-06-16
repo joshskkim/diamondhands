@@ -1,5 +1,6 @@
 package com.diamond.api.controller;
 
+import com.diamond.api.dto.TennisAccuracyDto;
 import com.diamond.api.dto.TennisMatchDetailDto;
 import com.diamond.api.dto.TennisMatchDto;
 import com.diamond.api.dto.TennisRankingDto;
@@ -39,5 +40,11 @@ public class TennisController {
         String s = SURFACES.contains(surface) ? surface : "all";
         int capped = Math.min(Math.max(limit, 1), 200);
         return tennisService.rankings(s, capped);
+    }
+
+    @GetMapping("/accuracy")
+    public TennisAccuracyDto accuracy(@RequestParam(defaultValue = "all") String surface) {
+        String s = SURFACES.contains(surface) ? surface : "all";
+        return tennisService.accuracy(s);
     }
 }

@@ -18,6 +18,7 @@ const SHORT_LABEL: Record<string, string> = {
   '/mlb/accuracy': 'Accuracy',
   '/tennis/matches': 'Matches',
   '/tennis/rankings': 'Rankings',
+  '/tennis/accuracy': 'Accuracy',
 }
 
 // Secondary destinations that don't earn a bottom-bar tab live in the account sheet.

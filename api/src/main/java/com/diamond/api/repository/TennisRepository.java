@@ -2,6 +2,8 @@ package com.diamond.api.repository;
 
 import com.diamond.api.dto.*;
 import com.diamond.api.service.TennisEv;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -10,6 +12,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.TreeMap;
 
 @Repository
 public class TennisRepository {
@@ -140,6 +143,65 @@ public class TennisRepository {
                 nd(rs, "serve_skill"), nd(rs, "return_skill"), ni(rs, "matches_count")));
         }, surface, minMatches, limit);
         return out;
+    }
+
+    // ── Accuracy ─────────────────────────────────────────────────────────────
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private static final String ACCURACY_SQL = """
+        SELECT period_date, model_version, n, brier, baseline_brier, ece,
+               calibration_buckets::text AS buckets
+        FROM tennis_daily_accuracy
+        WHERE surface = ? AND market = 'match_winner'
+          AND model_version = (SELECT max(model_version) FROM tennis_daily_accuracy)
+        ORDER BY period_date
+        """;
+
+    public TennisAccuracyDto findAccuracy(String surface) {
+        List<TennisAccuracyDto.Point> series = new ArrayList<>();
+        // Merge calibration deciles across months: lo -> [sumN, sumN*predMean, sumN*actRate, hi].
+        TreeMap<Double, double[]> merged = new TreeMap<>();
+        String[] modelVersion = {null};
+
+        jdbc.query(ACCURACY_SQL, rs -> {
+            modelVersion[0] = rs.getString("model_version");
+            series.add(new TennisAccuracyDto.Point(
+                rs.getString("period_date"), rs.getInt("n"),
+                nd(rs, "brier"), nd(rs, "baseline_brier"), nd(rs, "ece")));
+            mergeBuckets(merged, rs.getString("buckets"));
+        }, surface);
+
+        List<TennisAccuracyDto.CalibrationBucket> calibration = new ArrayList<>();
+        for (var e : merged.entrySet()) {
+            double[] v = e.getValue();
+            int n = (int) v[0];
+            if (n > 0) {
+                calibration.add(new TennisAccuracyDto.CalibrationBucket(
+                    e.getKey(), v[3], n, round(v[1] / n), round(v[2] / n)));
+            }
+        }
+        return new TennisAccuracyDto(modelVersion[0], surface, series, calibration);
+    }
+
+    private static void mergeBuckets(TreeMap<Double, double[]> merged, String json) {
+        if (json == null) return;
+        try {
+            for (JsonNode b : MAPPER.readTree(json)) {
+                double lo = b.get("lo").asDouble();
+                int n = b.get("n").asInt();
+                double[] acc = merged.computeIfAbsent(lo, k -> new double[]{0, 0, 0, b.get("hi").asDouble()});
+                acc[0] += n;
+                acc[1] += n * b.get("predictedMean").asDouble();
+                acc[2] += n * b.get("actualRate").asDouble();
+            }
+        } catch (Exception ignored) {
+            // malformed buckets — skip this row's calibration contribution
+        }
+    }
+
+    private static double round(double v) {
+        return Math.round(v * 10000.0) / 10000.0;
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

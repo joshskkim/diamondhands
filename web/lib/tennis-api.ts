@@ -75,6 +75,29 @@ export type TennisRanking = {
   matches: number | null
 }
 
+export type TennisAccuracyPoint = {
+  period: string
+  n: number
+  brier: number | null
+  baselineBrier: number | null
+  ece: number | null
+}
+
+export type TennisCalibrationBucket = {
+  lo: number
+  hi: number
+  n: number
+  predictedMean: number
+  actualRate: number
+}
+
+export type TennisAccuracy = {
+  modelVersion: string | null
+  surface: string
+  series: TennisAccuracyPoint[]
+  calibration: TennisCalibrationBucket[]
+}
+
 // ── Query options ────────────────────────────────────────────────────────────
 
 export function tennisMatchesQueryOptions() {
@@ -96,5 +119,12 @@ export function tennisRankingsQueryOptions(surface: string) {
   return queryOptions({
     queryKey: ['tennis', 'rankings', surface] as const,
     queryFn: () => get<TennisRanking[]>(`/api/tennis/rankings?surface=${surface}&limit=100`),
+  })
+}
+
+export function tennisAccuracyQueryOptions(surface: string) {
+  return queryOptions({
+    queryKey: ['tennis', 'accuracy', surface] as const,
+    queryFn: () => get<TennisAccuracy>(`/api/tennis/accuracy?surface=${surface}`),
   })
 }

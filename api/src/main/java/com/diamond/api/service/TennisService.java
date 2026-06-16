@@ -1,5 +1,6 @@
 package com.diamond.api.service;
 
+import com.diamond.api.dto.TennisAccuracyDto;
 import com.diamond.api.dto.TennisMatchDetailDto;
 import com.diamond.api.dto.TennisMatchDto;
 import com.diamond.api.dto.TennisRankingDto;
@@ -34,5 +35,10 @@ public class TennisService {
     @Cacheable(cacheNames = "tennis:rankings", key = "#surface + ':' + #limit")
     public List<TennisRankingDto> rankings(String surface, int limit) {
         return tennisRepository.findRankings(surface, RANKINGS_MIN_MATCHES, limit);
+    }
+
+    @Cacheable(cacheNames = "tennis:accuracy", key = "#surface")
+    public TennisAccuracyDto accuracy(String surface) {
+        return tennisRepository.findAccuracy(surface);
     }
 }

@@ -64,6 +64,8 @@ from ingester.commands.tennis_project import cmd_tennis_project
 from ingester.commands.tennis_backtest import cmd_tennis_backtest
 from ingester.commands.tennis_slate import cmd_tennis_slate
 from ingester.commands.tennis_odds import cmd_tennis_odds
+from ingester.commands.tennis_fit_calibration import cmd_tennis_fit_calibration
+from ingester.commands.tennis_score import cmd_tennis_score
 from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
 from ingester.db import eastern_today
 from ingester.projection.runner import cmd_project, cmd_smoke_project
@@ -477,6 +479,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--scheduled", action="store_true", default=False,
         help="Project all status='scheduled' (live-slate) matches instead of a date",
     )
+    p_tennis_proj.add_argument(
+        "--calibrate", action="store_true", default=False,
+        help="Apply models/tennis_calibration.json to the win prob (OFF by default: "
+             "the surface-blended Elo is already well-calibrated, so isotonic was flat "
+             "out-of-sample)",
+    )
 
     p_tennis_slate = sub.add_parser(
         "tennis-slate", help="Pull upcoming ATP matches from The Odds API into the live slate",
@@ -504,6 +512,30 @@ def build_parser() -> argparse.ArgumentParser:
                              help="Eval window end (default: today in US/Eastern)")
     p_tennis_bt.add_argument("--min-matches", type=int, default=10, dest="min_matches",
                              help="Require this many prior matches for both players (default: 10)")
+    p_tennis_bt.add_argument("--levers", action="store_true", default=False,
+                             help="Also score blend + refinement levers (uses the TENNIS_*_BETA constants)")
+    p_tennis_bt.add_argument("--tune-levers", action="store_true", default=False, dest="tune_levers",
+                             help="Grid-search each lever beta for the Brier-minimizing value")
+    p_tennis_bt.add_argument("--calibrate", action="store_true", default=False,
+                             help="Also score blend passed through models/tennis_calibration.json")
+
+    p_tennis_cal = sub.add_parser(
+        "tennis-fit-calibration",
+        help="Fit isotonic calibration of the match-winner prob -> models/tennis_calibration.json",
+    )
+    p_tennis_cal.add_argument("--start", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+                              help="Fit window start (default: 2018-01-01)")
+    p_tennis_cal.add_argument("--end", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+                              help="Fit window end (default: 2023-12-31, leaving 2024+ out-of-sample)")
+
+    p_tennis_sc = sub.add_parser(
+        "tennis-score",
+        help="Compute out-of-sample match-winner accuracy (month x surface) into tennis_daily_accuracy",
+    )
+    p_tennis_sc.add_argument("--start", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+                             help="Eval window start (default: 2024-01-01)")
+    p_tennis_sc.add_argument("--end", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+                             help="Eval window end (default: today)")
 
     sub.add_parser("smoke",        help="DB connectivity sanity check")
     sub.add_parser("smoke-skills", help="Print top batters/pitchers from skill tables")
@@ -586,6 +618,8 @@ COMMANDS = {
     "tennis-backtest":          cmd_tennis_backtest,
     "tennis-slate":             cmd_tennis_slate,
     "tennis-odds":              cmd_tennis_odds,
+    "tennis-fit-calibration":   cmd_tennis_fit_calibration,
+    "tennis-score":             cmd_tennis_score,
     "train-pa":                 cmd_train_pa,
     "simulate-eval":            cmd_simulate_eval,
     "project":                  cmd_project,

@@ -6,7 +6,7 @@ import argparse
 
 from ingester.db import eastern_today, get_connection
 from ingester.tennis.constants import SURFACES
-from ingester.tennis.ratings import refresh_ratings
+from ingester.tennis.ratings import compute_court_speed, refresh_ratings
 
 
 def _print_top(conn, as_of, surface: str, limit: int = 15, min_matches: int = 20) -> None:
@@ -29,10 +29,12 @@ def cmd_tennis_refresh_ratings(args: argparse.Namespace) -> None:
     conn = get_connection()
     try:
         result = refresh_ratings(conn, as_of)
+        n_courts = compute_court_speed(conn)
         print(
             f"[tennis-refresh-ratings] as_of={result['as_of']} "
             f"players={result['players']} rating_rows={result['rating_rows']} "
-            f"elo_matches={result['elo_matches']} ({result['model_version']})"
+            f"elo_matches={result['elo_matches']} court_speed={n_courts} "
+            f"({result['model_version']})"
         )
         for surface in ("all", *SURFACES):
             _print_top(conn, as_of, surface)

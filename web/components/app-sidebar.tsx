@@ -24,6 +24,7 @@ export const NAV_LINKS: NavLink[] = [
 export const TENNIS_NAV_LINKS: NavLink[] = [
   { label: 'Matches', href: '/tennis/matches', icon: Calendar },
   { label: 'Rankings', href: '/tennis/rankings', icon: BarChart3 },
+  { label: 'Accuracy', href: '/tennis/accuracy', icon: LineChart },
 ]
 
 /** Pick the nav set for the active sport (tennis routes vs everything else). */

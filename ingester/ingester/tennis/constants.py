@@ -2,6 +2,8 @@
 model code stays declarative (mirrors projection/constants.py for MLB)."""
 from __future__ import annotations
 
+import os
+
 MODEL_VERSION = "tennis-0.1.0"
 
 # Tennismylife/TML-Database raw CSVs — a maintained, Sackmann-schema ATP dataset
@@ -45,3 +47,23 @@ ELO_PRED_SCALE = 540.0
 SKILL_HALFLIFE_DAYS = 365.0
 # Regression-to-surface-mean strength: prior weight in "equivalent serve points".
 SKILL_PRIOR_POINTS = 200.0
+
+# ── Refinement levers (Milestone 3) — all DEAD, kept gated off ────────────────
+# Each lever adds beta * feature to the match-winner logit (feature signed so
+# positive favors player_a). OFF by default (beta=0); A/B'd via
+# `tennis-backtest --tune-levers`. Result (2024-01..2026-06, 4771 matches, base
+# Brier 0.2183): court_speed best beta +1.75 → 0.2182 (−0.0001, noise);
+# fatigue and lefty best beta 0.0 (no signal — fatigue is limited by tournament-
+# start date resolution; the lefty edge is already absorbed by Elo). None beat
+# the >5e-4 bar, so ALL stay 0 — like the MLB platoon / spray-hit dead levers.
+# The framework + court_speed_index remain for future, better-data levers (e.g.
+# age once birthdates are backfilled, or minutes-based fatigue). Don't re-test
+# without a new input. Env-gated for ad-hoc experiments.
+TENNIS_COURT_SPEED_BETA = float(os.environ.get("TENNIS_COURT_SPEED_BETA", "0.0"))
+TENNIS_FATIGUE_BETA = float(os.environ.get("TENNIS_FATIGUE_BETA", "0.0"))
+TENNIS_LEFTY_BETA = float(os.environ.get("TENNIS_LEFTY_BETA", "0.0"))
+
+# Fatigue load window (days) — games played in the prior N days as a load proxy.
+FATIGUE_WINDOW_DAYS = 14
+# Typical games per match used to scale the fatigue feature to ~unit range.
+FATIGUE_GAMES_SCALE = 25.0
