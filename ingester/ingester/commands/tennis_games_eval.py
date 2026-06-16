@@ -1,14 +1,15 @@
 """tennis-games-eval: validation gate for the total-games (over/under) market.
 
-Walk-forward, leak-free: for each completed match in the window, build the
-point-in-time win prob, derive the per-point serve probs, simulate the total-games
-distribution, and compare to the actual games. Reports mean-games MAE/bias and —
-the betting question — whether the distribution is calibrated (PIT uniformity), so
-we only wire odds/EV if P(over line) is trustworthy."""
+Walk-forward, leak-free: for each completed match build the point-in-time win prob,
+its closed-form expected games, then evaluate the calibrated games model (de-biased
+mean + empirical residual distribution). Reports mean-games MAE/bias and — the
+betting question — whether the predictive distribution is calibrated (PIT
+uniformity), so we only wire odds/EV if P(over line) is trustworthy.
+
+With --raw, evaluates the uncorrected closed-form mean (no model) for comparison."""
 from __future__ import annotations
 
 import argparse
-import bisect
 import re
 from datetime import date
 
@@ -16,7 +17,6 @@ from ingester.db import eastern_today, get_connection
 from ingester.tennis.elo import EloEngine
 from ingester.tennis.games_calibration import GamesCalibrator
 from ingester.tennis.match_model import project_from_winprob
-from ingester.tennis.match_sim import _games_samples, games_stats
 from ingester.tennis.ratings import ELO_STATUSES, load_matches
 
 _SET_RE = re.compile(r"(\d+)-(\d+)")
@@ -38,6 +38,10 @@ def cmd_tennis_games_eval(args: argparse.Namespace) -> None:
     start = args.start or date(2024, 1, 1)
     end = args.end or eastern_today()
     min_matches = args.min_matches
+    model = None if args.raw else GamesCalibrator.load()
+    if model is None and not args.raw:
+        print("[tennis-games-eval] no model — run tennis-fit-games-calibration first (or use --raw)")
+        return
 
     conn = get_connection()
     try:
@@ -45,11 +49,9 @@ def cmd_tennis_games_eval(args: argparse.Namespace) -> None:
     finally:
         conn.close()
 
-    calibrator = None if args.raw else GamesCalibrator.load()
     engine = EloEngine()
     n = 0
-    abs_err = 0.0
-    bias = 0.0
+    abs_err = bias = 0.0
     pit_bins = [0] * 10
     cover50 = cover80 = 0
 
@@ -64,28 +66,20 @@ def cmd_tennis_games_eval(args: argparse.Namespace) -> None:
         if in_window and m["status"] == "completed":
             actual = _total_games(m.get("score"))
             if actual is not None:
-                p_blend = engine.win_prob(a, b, surface)
                 best_of = m["best_of"] or 3
-                proj = project_from_winprob(p_blend, best_of, surface)
-                stats = games_stats(proj["p_serve_a"], proj["p_serve_b"], best_of)
-                raw = _games_samples(round(proj["p_serve_a"], 2), round(proj["p_serve_b"], 2), best_of, 2000)
-                if calibrator is not None:
-                    mean_pred = calibrator.mean(stats["mean"])
-                    samples = calibrator.samples(raw)   # affine, order-preserving (b>0)
-                else:
-                    mean_pred = stats["mean"]
-                    samples = raw
-                ns = len(samples)
-                pit = (bisect.bisect_left(samples, actual) + bisect.bisect_right(samples, actual)) / (2 * ns)
+                exp = project_from_winprob(engine.win_prob(a, b, surface), best_of, surface)["exp_total_games"]
+                mean_pred = model.mean(exp) if model else exp
+                pit = model.pit(exp, best_of, actual) if model else None
 
                 n += 1
                 abs_err += abs(mean_pred - actual)
                 bias += mean_pred - actual
-                pit_bins[min(int(pit * 10), 9)] += 1
-                if 0.25 <= pit < 0.75:
-                    cover50 += 1
-                if 0.10 <= pit < 0.90:
-                    cover80 += 1
+                if pit is not None:
+                    pit_bins[min(int(pit * 10), 9)] += 1
+                    if 0.25 <= pit < 0.75:
+                        cover50 += 1
+                    if 0.10 <= pit < 0.90:
+                        cover80 += 1
 
         engine.update(m["winner_id"], m["loser_id"], surface)
 
@@ -95,7 +89,8 @@ def cmd_tennis_games_eval(args: argparse.Namespace) -> None:
 
     print(f"[tennis-games-eval] {start}..{end}  N={n}")
     print(f"  mean-games MAE  {abs_err/n:.2f}   bias {bias/n:+.2f} (pred − actual)")
-    print(f"  PIT coverage    central50={cover50/n:.3f} (ideal .500)  "
-          f"central80={cover80/n:.3f} (ideal .800)")
-    print("  PIT histogram (ideal flat ~0.10 each):")
-    print("   " + " ".join(f"{c/n:.3f}" for c in pit_bins))
+    if not args.raw:
+        print(f"  PIT coverage    central50={cover50/n:.3f} (ideal .500)  "
+              f"central80={cover80/n:.3f} (ideal .800)")
+        print("  PIT histogram (ideal flat ~0.10 each):")
+        print("   " + " ".join(f"{c/n:.3f}" for c in pit_bins))

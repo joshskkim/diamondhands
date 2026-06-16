@@ -1,6 +1,7 @@
 package com.diamond.api.service;
 
 import com.diamond.api.dto.TennisEvDto;
+import com.diamond.api.dto.TennisTotalEvDto;
 
 /**
  * Self-contained match-winner de-vig + EV for tennis (the MLB OddsService/OddsModel
@@ -41,6 +42,32 @@ public final class TennisEv {
         double ev = modelB * (decB - 1.0) - (1.0 - modelB);
         return new TennisEvDto("player_b", nameB, bookB, amB, decB,
             round(modelB, 4), round(fairB, 4), round(edgeB * 100, 2), round(ev * 100, 2));
+    }
+
+    /** Best over/under play at one line (same two-way de-vig as bestPlay). */
+    public static TennisTotalEvDto bestTotal(
+            double line, Double modelOver,
+            Integer amO, Double decO, Double impO, String bookO,
+            Integer amU, Double decU, Double impU, String bookU) {
+
+        if (modelOver == null || decO == null || decU == null || impO == null || impU == null) {
+            return null;
+        }
+        double sum = impO + impU;
+        if (sum <= 0) return null;
+        double fairOver = impO / sum;
+        double edgeOver = modelOver - fairOver;
+
+        if (edgeOver >= 0) {
+            double ev = modelOver * (decO - 1.0) - (1.0 - modelOver);
+            return new TennisTotalEvDto("over", line, bookO, amO, decO,
+                round(modelOver, 4), round(fairOver, 4), round(edgeOver * 100, 2), round(ev * 100, 2));
+        }
+        double fairUnder = 1.0 - fairOver;
+        double modelUnder = 1.0 - modelOver;
+        double ev = modelUnder * (decU - 1.0) - (1.0 - modelUnder);
+        return new TennisTotalEvDto("under", line, bookU, amU, decU,
+            round(modelUnder, 4), round(fairUnder, 4), round((modelUnder - fairUnder) * 100, 2), round(ev * 100, 2));
     }
 
     private static double round(double v, int places) {

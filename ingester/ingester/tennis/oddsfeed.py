@@ -78,10 +78,10 @@ def fetch_events(api_key: str, sport_key: str = TENNIS_SPORT_KEY) -> list[dict]:
 
 
 def fetch_h2h(api_key: str, sport_key: str = TENNIS_SPORT_KEY) -> list[dict]:
-    """Upcoming events with match-winner (h2h) prices across US books."""
+    """Upcoming events with match-winner (h2h) AND total-games prices across US books."""
     resp = requests.get(
         f"{ODDS_BASE}/sports/{sport_key}/odds",
-        params={"apiKey": api_key, "regions": REGIONS, "markets": "h2h",
+        params={"apiKey": api_key, "regions": REGIONS, "markets": "h2h,totals",
                 "oddsFormat": ODDS_FORMAT},
         timeout=20,
     )
@@ -100,6 +100,38 @@ def load_sample_h2h() -> list[dict]:
 
 
 # ── Parsing ──────────────────────────────────────────────────────────────────
+
+def parse_totals(event: dict) -> list[dict]:
+    """Flatten one event's total-games (over/under) bookmakers into rows.
+
+    Returns: side ('over'/'under'), line, bookmaker, price_american,
+    price_decimal, implied_prob, last_update.
+    """
+    rows: list[dict] = []
+    for book in event.get("bookmakers", []):
+        bkey = book["key"]
+        for market in book.get("markets", []):
+            if market.get("key") != "totals":
+                continue
+            last_update = market.get("last_update") or book.get("last_update")
+            for oc in market.get("outcomes", []):
+                side = (oc.get("name") or "").lower()
+                price = oc.get("price")
+                line = oc.get("point")
+                if side not in ("over", "under") or price is None or line is None:
+                    continue
+                american = int(price)
+                rows.append({
+                    "side": side,
+                    "line": float(line),
+                    "bookmaker": bkey,
+                    "price_american": american,
+                    "price_decimal": round(american_to_decimal(american), 3),
+                    "implied_prob": round(implied_prob(american), 4),
+                    "last_update": last_update,
+                })
+    return rows
+
 
 def parse_h2h(event: dict) -> list[dict]:
     """Flatten one event's h2h bookmakers into rows.

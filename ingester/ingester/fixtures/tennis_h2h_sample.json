@@ -13,6 +13,10 @@
           {"key": "h2h", "last_update": "2026-06-16T15:30:00Z", "outcomes": [
             {"name": "Carlos Alcaraz", "price": 120},
             {"name": "Jannik Sinner", "price": -145}
+          ]},
+          {"key": "totals", "last_update": "2026-06-16T15:30:00Z", "outcomes": [
+            {"name": "Over", "price": -110, "point": 38.5},
+            {"name": "Under", "price": -110, "point": 38.5}
           ]}
         ]
       },
@@ -69,6 +73,10 @@
           {"key": "h2h", "last_update": "2026-06-16T10:45:00Z", "outcomes": [
             {"name": "Taylor Fritz", "price": -110},
             {"name": "Alex de Minaur", "price": -110}
+          ]},
+          {"key": "totals", "last_update": "2026-06-16T10:45:00Z", "outcomes": [
+            {"name": "Over", "price": -115, "point": 22.5},
+            {"name": "Under", "price": -105, "point": 22.5}
           ]}
         ]
       }

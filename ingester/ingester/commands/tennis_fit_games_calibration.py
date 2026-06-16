@@ -1,6 +1,7 @@
-"""tennis-fit-games-calibration: learn the affine total-games correction (actual ≈
-a + b*predicted) from walk-forward predictions and save it. Fits on an EARLIER
-window (default 2018–2023) so the recent window it's applied to is out-of-sample."""
+"""tennis-fit-games-calibration: fit the total-games model (affine mean de-bias +
+empirical residual distribution per best_of) from walk-forward predictions and save
+it. Fits on an EARLIER window (default 2018–2023) so the recent window it's applied
+to is out-of-sample."""
 from __future__ import annotations
 
 import argparse
@@ -9,9 +10,8 @@ from datetime import date
 
 from ingester.db import get_connection
 from ingester.tennis.elo import EloEngine
-from ingester.tennis.games_calibration import fit_linear, save
+from ingester.tennis.games_calibration import fit_games_model, save
 from ingester.tennis.match_model import project_from_winprob
-from ingester.tennis.match_sim import games_stats
 from ingester.tennis.ratings import ELO_STATUSES, load_matches
 
 _SET_RE = re.compile(r"(\d+)-(\d+)")
@@ -40,8 +40,7 @@ def cmd_tennis_fit_games_calibration(args: argparse.Namespace) -> None:
         conn.close()
 
     engine = EloEngine()
-    preds: list[float] = []
-    actuals: list[int] = []
+    records: list[tuple[float, int, int]] = []  # (exp_games, actual, best_of)
     for m in matches:
         if m["status"] not in ELO_STATUSES or not m["winner_id"]:
             continue
@@ -54,17 +53,18 @@ def cmd_tennis_fit_games_calibration(args: argparse.Namespace) -> None:
             if actual is not None:
                 best_of = m["best_of"] or 3
                 proj = project_from_winprob(engine.win_prob(a, b, surface), best_of, surface)
-                preds.append(games_stats(proj["p_serve_a"], proj["p_serve_b"], best_of)["mean"])
-                actuals.append(actual)
+                records.append((proj["exp_total_games"], actual, best_of))
         engine.update(m["winner_id"], m["loser_id"], surface)
 
-    if len(preds) < 500:
-        print(f"[tennis-fit-games-calibration] only {len(preds)} matches — too few")
+    if len(records) < 500:
+        print(f"[tennis-fit-games-calibration] only {len(records)} matches — too few")
         return
 
-    a, b = fit_linear(preds, actuals)
-    path = save(a, b)
-    bias_before = sum(p - y for p, y in zip(preds, actuals)) / len(preds)
-    bias_after = sum((a + b * p) - y for p, y in zip(preds, actuals)) / len(preds)
-    print(f"[tennis-fit-games-calibration] fit on {start}..{end} (N={len(preds)}); "
-          f"a={a:.3f} b={b:.3f}; bias {bias_before:+.2f} -> {bias_after:+.2f}; saved {path}")
+    a, b, residuals = fit_games_model(records)
+    path = save(a, b, residuals)
+    bias_before = sum(p - y for p, y, _ in records) / len(records)
+    bias_after = sum((a + b * p) - y for p, y, _ in records) / len(records)
+    bo_counts = ", ".join(f"Bo{k}={len(v)}q" for k, v in residuals.items())
+    print(f"[tennis-fit-games-calibration] fit on {start}..{end} (N={len(records)}); "
+          f"a={a:.3f} b={b:.3f}; bias {bias_before:+.2f} -> {bias_after:+.2f}; "
+          f"residuals[{bo_counts}]; saved {path}")

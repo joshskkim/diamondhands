@@ -85,6 +85,27 @@ function Content({ d }: { d: Detail }) {
         </div>
       )}
 
+      {/* total games best play */}
+      {d.bestTotalPlay && d.bestTotalPlay.edgePct > 0 && (
+        <div className="rounded-xl border border-cyan-400/20 bg-cyan-400/[0.04] p-4">
+          <p className={microLabel}>Total games — best play</p>
+          <div className="mt-1 flex items-center justify-between">
+            <span className="text-sm font-semibold capitalize text-zinc-100">
+              {d.bestTotalPlay.side} {d.bestTotalPlay.line}
+            </span>
+            <span className="font-mono text-sm text-zinc-300">
+              {amer(d.bestTotalPlay.priceAmerican)} @ {d.bestTotalPlay.bookmaker}
+            </span>
+          </div>
+          <div className="mt-1 flex gap-4 text-xs text-zinc-400">
+            <span>model <span className="font-mono text-zinc-200">{pct(d.bestTotalPlay.modelProb, 1)}</span></span>
+            <span>fair <span className="font-mono text-zinc-200">{pct(d.bestTotalPlay.fairProb, 1)}</span></span>
+            <span>edge <span className="font-mono font-semibold text-emerald-400">+{d.bestTotalPlay.edgePct.toFixed(1)}%</span></span>
+            <span>EV <span className={cn('font-mono', d.bestTotalPlay.evPct > 0 ? 'text-emerald-300' : 'text-zinc-500')}>{d.bestTotalPlay.evPct > 0 ? '+' : ''}{d.bestTotalPlay.evPct.toFixed(1)}%</span></span>
+          </div>
+        </div>
+      )}
+
       {/* odds */}
       {d.quotes.length > 0 && (
         <div>

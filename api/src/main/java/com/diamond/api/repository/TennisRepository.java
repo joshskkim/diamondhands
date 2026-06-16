@@ -96,12 +96,48 @@ public class TennisRepository {
             (rs, n) -> new TennisQuoteDto(rs.getString("side"), rs.getString("bookmaker"),
                 ni(rs, "price_american"), nd(rs, "price_decimal"), nd(rs, "implied_prob")),
             matchId);
+        TennisTotalEvDto bestTotal = bestTotalPlay(matchId);
         List<TennisMatchDetailDto> rows = jdbc.query(DETAIL_SQL,
-            (rs, n) -> mapDetail(rs, quotes), matchId);
+            (rs, n) -> mapDetail(rs, quotes, bestTotal), matchId);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
-    private TennisMatchDetailDto mapDetail(ResultSet rs, List<TennisQuoteDto> quotes) throws SQLException {
+    // Best (highest-decimal) over/under per line, then the best +edge play across lines.
+    private record TotalSide(Integer am, Double dec, Double imp, Double model, String book) {}
+
+    private static final String TOTALS_SQL = """
+        SELECT side, line, bookmaker, price_american, price_decimal, implied_prob, model_prob
+        FROM tennis_total_odds WHERE match_id = ?
+        ORDER BY line, side, price_decimal DESC
+        """;
+
+    private TennisTotalEvDto bestTotalPlay(long matchId) {
+        TreeMap<Double, TotalSide> over = new TreeMap<>();
+        TreeMap<Double, TotalSide> under = new TreeMap<>();
+        jdbc.query(TOTALS_SQL, rs -> {
+            double line = rs.getDouble("line");
+            // rows are best-price-first per (line, side); keep the first seen
+            TreeMap<Double, TotalSide> tgt = "over".equals(rs.getString("side")) ? over : under;
+            tgt.putIfAbsent(line, new TotalSide(ni(rs, "price_american"), nd(rs, "price_decimal"),
+                nd(rs, "implied_prob"), nd(rs, "model_prob"), rs.getString("bookmaker")));
+        }, matchId);
+
+        TennisTotalEvDto best = null;
+        for (var e : over.entrySet()) {
+            TotalSide o = e.getValue();
+            TotalSide u = under.get(e.getKey());
+            if (u == null) continue;
+            TennisTotalEvDto cand = TennisEv.bestTotal(e.getKey(), o.model(),
+                o.am(), o.dec(), o.imp(), o.book(), u.am(), u.dec(), u.imp(), u.book());
+            if (cand != null && (best == null || cand.evPct() > best.evPct())) {
+                best = cand;
+            }
+        }
+        return best;
+    }
+
+    private TennisMatchDetailDto mapDetail(ResultSet rs, List<TennisQuoteDto> quotes,
+                                           TennisTotalEvDto bestTotal) throws SQLException {
         TennisPlayerDto a = new TennisPlayerDto(rs.getString("a_id"), rs.getString("a_name"), rs.getString("a_country"));
         TennisPlayerDto b = new TennisPlayerDto(rs.getString("b_id"), rs.getString("b_name"), rs.getString("b_country"));
         Double pWinA = nd(rs, "p_win_a");
@@ -120,7 +156,7 @@ public class TennisRepository {
             rs.getLong("match_id"), rs.getString("start_time_utc"), rs.getString("surface"),
             ni(rs, "best_of"), rs.getString("status"), a, b,
             nd(rs, "elo_a"), nd(rs, "elo_b"), pWinA, nd(rs, "p_serve_a"), nd(rs, "p_serve_b"),
-            nd(rs, "exp_total_games"), nd(rs, "prob_straight_sets"), quotes, best);
+            nd(rs, "exp_total_games"), nd(rs, "prob_straight_sets"), quotes, best, bestTotal);
     }
 
     // ── Rankings ─────────────────────────────────────────────────────────────
