@@ -1,0 +1,26 @@
+[
+  {
+    "id": "tns_evt_alcaraz_sinner",
+    "sport_key": "tennis_atp",
+    "sport_title": "ATP US Open",
+    "commence_time": "2026-06-16T17:00:00Z",
+    "home_team": "Carlos Alcaraz",
+    "away_team": "Jannik Sinner"
+  },
+  {
+    "id": "tns_evt_djokovic_zverev",
+    "sport_key": "tennis_atp",
+    "sport_title": "ATP Roland Garros",
+    "commence_time": "2026-06-16T13:00:00Z",
+    "home_team": "Novak Djokovic",
+    "away_team": "Alexander Zverev"
+  },
+  {
+    "id": "tns_evt_fritz_deminaur",
+    "sport_key": "tennis_atp",
+    "sport_title": "ATP Halle",
+    "commence_time": "2026-06-16T11:30:00Z",
+    "home_team": "Taylor Fritz",
+    "away_team": "Alex de Minaur"
+  }
+]
