@@ -62,6 +62,10 @@ def cmd_daily_slate(args: argparse.Namespace) -> None:
 
         # MLB uses 'abstractGameState': Scheduled / Live / Final
         status: str = g.get("status", {}).get("abstractGameState", "Scheduled")
+        # detailedState is finer-grained (e.g. Postponed / Suspended / Cancelled /
+        # Delayed), which abstractGameState never reports. The projector reads this to
+        # skip games that won't be played as scheduled.
+        detailed_status: str | None = g.get("status", {}).get("detailedState")
 
         home_team_id: int = g["teams"]["home"]["team"]["id"]
         away_team_id: int = g["teams"]["away"]["team"]["id"]
@@ -85,12 +89,13 @@ def cmd_daily_slate(args: argparse.Namespace) -> None:
             """
             INSERT INTO games (
                 id, game_date, home_team_id, away_team_id, stadium_id,
-                start_time_utc, status,
+                start_time_utc, status, detailed_status,
                 home_probable_pitcher_id, away_probable_pitcher_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE
                 SET status                   = EXCLUDED.status,
+                    detailed_status          = EXCLUDED.detailed_status,
                     start_time_utc           = EXCLUDED.start_time_utc,
                     home_probable_pitcher_id = EXCLUDED.home_probable_pitcher_id,
                     away_probable_pitcher_id = EXCLUDED.away_probable_pitcher_id
@@ -103,6 +108,7 @@ def cmd_daily_slate(args: argparse.Namespace) -> None:
                 stadium_id,
                 start_utc,
                 status,
+                detailed_status,
                 home_pitcher_id,
                 away_pitcher_id,
             ),

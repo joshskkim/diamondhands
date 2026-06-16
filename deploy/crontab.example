@@ -7,9 +7,12 @@ DIAMOND_DIR=/opt/diamond
 # (final scores, stats, picks scoring, accuracy snapshot).
 0 9 * * *        /opt/diamond/deploy/run-ingester.sh daily
 
-# Afternoon quick loop (noon–6pm ET): confirmed lineups + odds + re-projection
-# as lineups post. Matches the cadence documented in the README.
-*/30 12-18 * * *  /opt/diamond/deploy/run-ingester.sh daily --quick
+# Afternoon/evening quick loop (noon–11pm ET): confirmed lineups + odds + re-projection
+# as lineups post. Runs through late starts: each game is only projected once its lineup
+# is up (~2-3 h before first pitch), so a 10pm ET game (lineup ~8pm ET) needs ticks past
+# 6pm. The projector defers a game until ~2 h before its first pitch and skips it if it's
+# postponed/suspended/cancelled.
+*/30 12-23 * * *  /opt/diamond/deploy/run-ingester.sh daily --quick
 
 # Tennis full run — EARLY (3am ET): tennis sessions start overnight (AUS/Asia)
 # and early morning (Europe), so build the tennis board well ahead of the baseball
