@@ -71,6 +71,7 @@ from ingester.commands.tennis_fit_games_calibration import cmd_tennis_fit_games_
 from ingester.commands.tennis_backfill_attributes import cmd_tennis_backfill_attributes
 from ingester.commands.tennis_props_eval import cmd_tennis_props_eval
 from ingester.commands.tennis_fit_props import cmd_tennis_fit_props
+from ingester.commands.tennis_daily import cmd_tennis_daily
 from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
 from ingester.db import eastern_today
 from ingester.projection.runner import cmd_project, cmd_smoke_project
@@ -512,6 +513,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use the bundled h2h fixture instead of the API (no key / no credit spend)",
     )
 
+    p_tennis_daily = sub.add_parser(
+        "tennis-daily",
+        help="Full tennis daily run: refresh-ratings -> slate -> project -> odds -> score",
+    )
+    p_tennis_daily.add_argument(
+        "--quick", action="store_true", default=False,
+        help="Intraday loop: slate -> project -> odds (skip ratings + accuracy)",
+    )
+    p_tennis_daily.add_argument(
+        "--skip-ratings", action="store_true", default=False, dest="skip_ratings",
+        help="Skip the Elo/skills/court-speed recompute (run it separately)",
+    )
+    p_tennis_daily.add_argument(
+        "--sample", action="store_true", default=False,
+        help="Use bundled odds fixtures (no key / no credit spend)",
+    )
+
     p_tennis_bt = sub.add_parser(
         "tennis-backtest",
         help="Walk-forward Brier/log-loss/calibration vs ranking + bare-Elo baselines",
@@ -658,6 +676,7 @@ COMMANDS = {
     "tennis-backfill-attributes": cmd_tennis_backfill_attributes,
     "tennis-props-eval":        cmd_tennis_props_eval,
     "tennis-fit-props":         cmd_tennis_fit_props,
+    "tennis-daily":             cmd_tennis_daily,
     "tennis-refresh-ratings":   cmd_tennis_refresh_ratings,
     "tennis-project":           cmd_tennis_project,
     "tennis-backtest":          cmd_tennis_backtest,

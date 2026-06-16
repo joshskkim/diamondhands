@@ -11,5 +11,15 @@ DIAMOND_DIR=/opt/diamond
 # as lineups post. Matches the cadence documented in the README.
 */30 12-18 * * *  /opt/diamond/deploy/run-ingester.sh daily --quick
 
+# Tennis full run — EARLY (3am ET): tennis sessions start overnight (AUS/Asia)
+# and early morning (Europe), so build the tennis board well ahead of the baseball
+# run. (ratings -> slate -> project -> odds -> accuracy). Finishes before the 3:30 backup.
+0 3 * * *        /opt/diamond/deploy/run-ingester.sh tennis-daily
+
+# Tennis intraday refresh through the global playing day (slate + odds +
+# re-projection), from just after the early run. Hourly to bound Odds API per-event
+# prop calls.
+0 4-22 * * *     /opt/diamond/deploy/run-ingester.sh tennis-daily --quick
+
 # Nightly database backup.
 30 3 * * *       /opt/diamond/deploy/backup.sh
