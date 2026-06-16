@@ -48,6 +48,7 @@ export function TennisRankingsBoard() {
             <tr className="border-b border-white/10 bg-white/[0.02] text-left">
               <th className="px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-zinc-500">#</th>
               <th className="px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-zinc-500">Player</th>
+              <th className="hidden px-3 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-zinc-500 sm:table-cell">Age</th>
               <th className="px-3 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-zinc-500">Elo</th>
               <th className="px-3 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-zinc-500">SPW</th>
               <th className="hidden px-3 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-zinc-500 sm:table-cell">Matches</th>
@@ -55,10 +56,10 @@ export function TennisRankingsBoard() {
           </thead>
           <tbody>
             {isLoading && (
-              <tr><td colSpan={5} className="px-3 py-4 text-zinc-500">Loading…</td></tr>
+              <tr><td colSpan={6} className="px-3 py-4 text-zinc-500">Loading…</td></tr>
             )}
             {isError && (
-              <tr><td colSpan={5} className="px-3 py-4 text-rose-400">Couldn&apos;t load rankings.</td></tr>
+              <tr><td colSpan={6} className="px-3 py-4 text-rose-400">Couldn&apos;t load rankings.</td></tr>
             )}
             {data?.map((r) => (
               <tr key={r.player.id} className="border-b border-white/5 last:border-0 hover:bg-white/[0.02]">
@@ -66,7 +67,9 @@ export function TennisRankingsBoard() {
                 <td className="px-3 py-2 text-zinc-100">
                   {r.player.name}
                   {r.player.country && <span className="ml-1.5 text-[10px] text-zinc-600">{r.player.country}</span>}
+                  {r.player.hand === 'L' && <span className="ml-1.5 text-[10px] text-amber-300/80">LH</span>}
                 </td>
+                <td className="hidden px-3 py-2 text-right font-mono text-zinc-400 sm:table-cell">{r.player.age ?? '—'}</td>
                 <td className="px-3 py-2 text-right font-mono text-cyan-400">{num(r.elo, 0)}</td>
                 <td className="px-3 py-2 text-right font-mono text-zinc-400">{pct(r.serveSkill)}</td>
                 <td className="hidden px-3 py-2 text-right font-mono text-zinc-500 sm:table-cell">{num(r.matches, 0)}</td>

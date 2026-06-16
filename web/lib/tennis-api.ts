@@ -12,7 +12,13 @@ async function get<T>(path: string): Promise<T> {
 
 // ── Types (mirror the API records) ───────────────────────────────────────────
 
-export type TennisPlayer = { id: string; name: string; country: string | null }
+export type TennisPlayer = {
+  id: string
+  name: string
+  country: string | null
+  age: number | null
+  hand: string | null
+}
 
 export type TennisEv = {
   side: string

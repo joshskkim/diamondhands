@@ -48,20 +48,23 @@ SKILL_HALFLIFE_DAYS = 365.0
 # Regression-to-surface-mean strength: prior weight in "equivalent serve points".
 SKILL_PRIOR_POINTS = 200.0
 
-# ── Refinement levers (Milestone 3) — all DEAD, kept gated off ────────────────
+# ── Refinement levers ─────────────────────────────────────────────────────────
 # Each lever adds beta * feature to the match-winner logit (feature signed so
-# positive favors player_a). OFF by default (beta=0); A/B'd via
-# `tennis-backtest --tune-levers`. Result (2024-01..2026-06, 4771 matches, base
-# Brier 0.2183): court_speed best beta +1.75 → 0.2182 (−0.0001, noise);
-# fatigue and lefty best beta 0.0 (no signal — fatigue is limited by tournament-
-# start date resolution; the lefty edge is already absorbed by Elo). None beat
-# the >5e-4 bar, so ALL stay 0 — like the MLB platoon / spray-hit dead levers.
-# The framework + court_speed_index remain for future, better-data levers (e.g.
-# age once birthdates are backfilled, or minutes-based fatigue). Don't re-test
-# without a new input. Env-gated for ad-hoc experiments.
+# positive favors player_a). A/B'd via `tennis-backtest --tune-levers`; ship a beta
+# only if it beats the blend baseline (>5e-4 Brier) out-of-sample.
+#
+# AGE is LIVE (beta 0.25): aging curve carries info Elo can't (a 38- vs 22-yo at
+# equal Elo aren't equal). OOS held-out (2025-07+, beta tuned on 2024..2025-06):
+# blend Brier 0.2291 -> 0.2261, acc 0.604 -> 0.618.
+#
+# DEAD (kept gated off at 0, like the MLB platoon/spray-hit levers): court_speed
+# (+1.75 -> −0.0001, noise), fatigue (no signal — tournament-start date resolution),
+# lefty & backhand (edge already absorbed by Elo). Don't re-test without a new input.
+TENNIS_AGE_BETA = float(os.environ.get("TENNIS_AGE_BETA", "0.25"))
 TENNIS_COURT_SPEED_BETA = float(os.environ.get("TENNIS_COURT_SPEED_BETA", "0.0"))
 TENNIS_FATIGUE_BETA = float(os.environ.get("TENNIS_FATIGUE_BETA", "0.0"))
 TENNIS_LEFTY_BETA = float(os.environ.get("TENNIS_LEFTY_BETA", "0.0"))
+TENNIS_BACKHAND_BETA = float(os.environ.get("TENNIS_BACKHAND_BETA", "0.0"))
 
 # Fatigue load window (days) — games played in the prior N days as a load proxy.
 FATIGUE_WINDOW_DAYS = 14

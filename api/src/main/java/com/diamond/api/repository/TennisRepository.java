@@ -35,7 +35,9 @@ public class TennisRepository {
         )
         SELECT m.id AS match_id, m.start_time_utc, m.surface, m.best_of, m.status,
                pa.id AS a_id, pa.full_name AS a_name, pa.country AS a_country,
+               pa.hand AS a_hand, EXTRACT(YEAR FROM AGE(pa.birth_date))::int AS a_age,
                pb.id AS b_id, pb.full_name AS b_name, pb.country AS b_country,
+               pb.hand AS b_hand, EXTRACT(YEAR FROM AGE(pb.birth_date))::int AS b_age,
                tp.p_win_a, tp.exp_total_games,
                ba.bookmaker AS a_book, ba.price_american AS a_am,
                ba.price_decimal AS a_dec, ba.implied_prob AS a_imp,
@@ -56,8 +58,10 @@ public class TennisRepository {
     }
 
     private TennisMatchDto mapMatch(ResultSet rs, int rowNum) throws SQLException {
-        TennisPlayerDto a = new TennisPlayerDto(rs.getString("a_id"), rs.getString("a_name"), rs.getString("a_country"));
-        TennisPlayerDto b = new TennisPlayerDto(rs.getString("b_id"), rs.getString("b_name"), rs.getString("b_country"));
+        TennisPlayerDto a = new TennisPlayerDto(rs.getString("a_id"), rs.getString("a_name"),
+            rs.getString("a_country"), ni(rs, "a_age"), rs.getString("a_hand"));
+        TennisPlayerDto b = new TennisPlayerDto(rs.getString("b_id"), rs.getString("b_name"),
+            rs.getString("b_country"), ni(rs, "b_age"), rs.getString("b_hand"));
         Double pWinA = nd(rs, "p_win_a");
         TennisEvDto best = TennisEv.bestPlay(
             pWinA,
@@ -74,7 +78,9 @@ public class TennisRepository {
     private static final String DETAIL_SQL = """
         SELECT m.id AS match_id, m.start_time_utc, m.surface, m.best_of, m.status,
                pa.id AS a_id, pa.full_name AS a_name, pa.country AS a_country,
+               pa.hand AS a_hand, EXTRACT(YEAR FROM AGE(pa.birth_date))::int AS a_age,
                pb.id AS b_id, pb.full_name AS b_name, pb.country AS b_country,
+               pb.hand AS b_hand, EXTRACT(YEAR FROM AGE(pb.birth_date))::int AS b_age,
                tp.p_win_a, tp.p_serve_a, tp.p_serve_b, tp.exp_total_games, tp.prob_straight_sets,
                (tp.reasoning->>'elo_a')::numeric AS elo_a,
                (tp.reasoning->>'elo_b')::numeric AS elo_b
@@ -138,8 +144,10 @@ public class TennisRepository {
 
     private TennisMatchDetailDto mapDetail(ResultSet rs, List<TennisQuoteDto> quotes,
                                            TennisTotalEvDto bestTotal) throws SQLException {
-        TennisPlayerDto a = new TennisPlayerDto(rs.getString("a_id"), rs.getString("a_name"), rs.getString("a_country"));
-        TennisPlayerDto b = new TennisPlayerDto(rs.getString("b_id"), rs.getString("b_name"), rs.getString("b_country"));
+        TennisPlayerDto a = new TennisPlayerDto(rs.getString("a_id"), rs.getString("a_name"),
+            rs.getString("a_country"), ni(rs, "a_age"), rs.getString("a_hand"));
+        TennisPlayerDto b = new TennisPlayerDto(rs.getString("b_id"), rs.getString("b_name"),
+            rs.getString("b_country"), ni(rs, "b_age"), rs.getString("b_hand"));
         Double pWinA = nd(rs, "p_win_a");
 
         // Best quote per side from the (already best-first ordered) quotes list.
@@ -162,7 +170,9 @@ public class TennisRepository {
     // ── Rankings ─────────────────────────────────────────────────────────────
 
     private static final String RANKINGS_SQL = """
-        SELECT p.id, p.full_name, p.country, r.elo, r.serve_skill, r.return_skill, r.matches_count
+        SELECT p.id, p.full_name, p.country, p.hand,
+               EXTRACT(YEAR FROM AGE(p.birth_date))::int AS age,
+               r.elo, r.serve_skill, r.return_skill, r.matches_count
         FROM tennis_player_ratings r
         JOIN tennis_players p ON p.id = r.player_id
         WHERE r.as_of_date = (SELECT max(as_of_date) FROM tennis_player_ratings)
@@ -174,7 +184,8 @@ public class TennisRepository {
     public List<TennisRankingDto> findRankings(String surface, int minMatches, int limit) {
         List<TennisRankingDto> out = new ArrayList<>();
         jdbc.query(RANKINGS_SQL, rs -> {
-            TennisPlayerDto p = new TennisPlayerDto(rs.getString("id"), rs.getString("full_name"), rs.getString("country"));
+            TennisPlayerDto p = new TennisPlayerDto(rs.getString("id"), rs.getString("full_name"),
+                rs.getString("country"), ni(rs, "age"), rs.getString("hand"));
             out.add(new TennisRankingDto(out.size() + 1, p, nd(rs, "elo"),
                 nd(rs, "serve_skill"), nd(rs, "return_skill"), ni(rs, "matches_count")));
         }, surface, minMatches, limit);

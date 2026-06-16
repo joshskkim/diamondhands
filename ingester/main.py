@@ -68,6 +68,7 @@ from ingester.commands.tennis_fit_calibration import cmd_tennis_fit_calibration
 from ingester.commands.tennis_score import cmd_tennis_score
 from ingester.commands.tennis_games_eval import cmd_tennis_games_eval
 from ingester.commands.tennis_fit_games_calibration import cmd_tennis_fit_games_calibration
+from ingester.commands.tennis_backfill_attributes import cmd_tennis_backfill_attributes
 from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
 from ingester.db import eastern_today
 from ingester.projection.runner import cmd_project, cmd_smoke_project
@@ -460,6 +461,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Last season to load (default: current season)",
     )
 
+    sub.add_parser(
+        "tennis-backfill-attributes",
+        help="Backfill tennis_players birth_date/backhand/hand/height from ATP_Database.csv",
+    )
+
     p_tennis_rate = sub.add_parser(
         "tennis-refresh-ratings",
         help="Replay surface-blended Elo + recompute serve/return skills into tennis_player_ratings",
@@ -632,6 +638,7 @@ COMMANDS = {
     "compare-runs":             cmd_compare_runs,
     "fit-calibration":          cmd_fit_calibration,
     "tennis-backfill":          cmd_tennis_backfill,
+    "tennis-backfill-attributes": cmd_tennis_backfill_attributes,
     "tennis-refresh-ratings":   cmd_tennis_refresh_ratings,
     "tennis-project":           cmd_tennis_project,
     "tennis-backtest":          cmd_tennis_backtest,

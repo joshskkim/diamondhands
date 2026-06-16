@@ -47,7 +47,10 @@ function Content({ d }: { d: Detail }) {
         {[{ p: d.playerA, win: aWin, elo: d.eloA }, { p: d.playerB, win: bWin, elo: d.eloB }].map((s, i) => (
           <div key={i} className="rounded-xl border border-white/10 bg-[#0e1015] p-4">
             <div className="text-base font-semibold text-zinc-100">{s.p.name}</div>
-            {s.p.country && <div className="text-[10px] text-zinc-500">{s.p.country}</div>}
+            <div className="text-[10px] text-zinc-500">
+              {[s.p.country, s.p.age != null ? `age ${s.p.age}` : null, s.p.hand === 'L' ? 'LH' : null]
+                .filter(Boolean).join(' · ')}
+            </div>
             <div className="mt-2 font-mono text-2xl text-cyan-400">{pct(s.win)}</div>
             <div className={microLabel}>win prob</div>
             <div className="mt-2 text-xs text-zinc-500">Elo {num(s.elo, 0)}</div>

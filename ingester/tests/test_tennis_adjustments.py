@@ -3,7 +3,9 @@ from datetime import date
 
 from ingester.tennis.adjustments import (
     FatigueTracker,
+    age_feature,
     apply_levers,
+    backhand_feature,
     court_speed_feature,
     fatigue_feature,
     lefty_feature,
@@ -32,6 +34,23 @@ def test_lefty_feature():
     assert lefty_feature("R", "L") == -1.0
     assert lefty_feature("R", "R") == 0.0
     assert lefty_feature("L", "L") == 0.0
+
+
+def test_age_feature_favors_nearer_peak():
+    # a at peak (~24.5) vs an older b -> positive (favors a).
+    assert age_feature(25, 35) > 0
+    assert age_feature(35, 25) < 0
+    # A young riser vs a peak player is slightly disfavored by the curve.
+    assert age_feature(19, 25) < 0
+    assert age_feature(None, 25) == 0.0
+
+
+def test_backhand_feature():
+    # b is the one-hander (1) vs two-hander a (2) -> +1 (favors a).
+    assert backhand_feature(2, 1) == 1.0
+    assert backhand_feature(1, 2) == -1.0
+    assert backhand_feature(2, 2) == 0.0
+    assert backhand_feature(None, 1) == 0.0
 
 
 def test_apply_levers_zero_beta_is_identity():

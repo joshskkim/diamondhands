@@ -24,13 +24,17 @@ from datetime import date
 from ingester.db import eastern_today, get_connection
 from ingester.tennis.adjustments import (
     FatigueTracker,
+    age_feature,
     apply_levers,
+    backhand_feature,
     court_speed_feature,
     fatigue_feature,
     lefty_feature,
 )
 from ingester.tennis.calibration import TennisCalibrator
 from ingester.tennis.constants import (
+    TENNIS_AGE_BETA,
+    TENNIS_BACKHAND_BETA,
     TENNIS_COURT_SPEED_BETA,
     TENNIS_FATIGUE_BETA,
     TENNIS_LEFTY_BETA,
@@ -100,10 +104,14 @@ def _load_feature_lookups(conn) -> tuple[dict, dict, dict]:
         " / NULLIF(serve_points,0)) FROM tennis_player_match_stats WHERE serve_points > 0"
         " GROUP BY player_id"
     ).fetchall() if spw is not None}
-    player_hand = {pid: hand for pid, hand in conn.execute(
-        "SELECT id, hand FROM tennis_players"
-    ).fetchall()}
-    return court_z, player_spw, player_hand
+    player_hand, player_birth, player_backhand = {}, {}, {}
+    for pid, hand, birth, backhand in conn.execute(
+        "SELECT id, hand, birth_date, backhand FROM tennis_players"
+    ).fetchall():
+        player_hand[pid] = hand
+        player_birth[pid] = birth
+        player_backhand[pid] = backhand
+    return court_z, player_spw, player_hand, player_birth, player_backhand
 
 
 def cmd_tennis_backtest(args: argparse.Namespace) -> None:
@@ -115,7 +123,8 @@ def cmd_tennis_backtest(args: argparse.Namespace) -> None:
     conn = get_connection()
     try:
         matches = load_matches(conn)
-        court_z, player_spw, player_hand = _load_feature_lookups(conn) if use_levers else ({}, {}, {})
+        court_z, player_spw, player_hand, player_birth, player_backhand = (
+            _load_feature_lookups(conn) if use_levers else ({}, {}, {}, {}, {}))
     finally:
         conn.close()
 
@@ -157,11 +166,19 @@ def cmd_tennis_backtest(args: argparse.Namespace) -> None:
                 cf = court_speed_feature(player_spw.get(a), player_spw.get(b), court_z.get(m["tourney_id"]))
                 ff = fatigue_feature(load_a, load_b)
                 lf = lefty_feature(player_hand.get(a), player_hand.get(b))
-                tune_rows.append((p_blend, cf, ff, lf, y))
+                ba, bb = player_birth.get(a), player_birth.get(b)
+                age_a = (m["date"] - ba).days / 365.25 if ba else None
+                age_b = (m["date"] - bb).days / 365.25 if bb else None
+                af = age_feature(age_a, age_b)
+                bhf = backhand_feature(player_backhand.get(a), player_backhand.get(b))
+                tune_rows.append((p_blend, cf, ff, lf, af, bhf, y))
                 p_lev = apply_levers(p_blend, court_feat=cf, fatigue_feat=ff, lefty_feat=lf,
+                                     age_feat=af, backhand_feat=bhf,
                                      court_beta=TENNIS_COURT_SPEED_BETA,
                                      fatigue_beta=TENNIS_FATIGUE_BETA,
-                                     lefty_beta=TENNIS_LEFTY_BETA)
+                                     lefty_beta=TENNIS_LEFTY_BETA,
+                                     age_beta=TENNIS_AGE_BETA,
+                                     backhand_beta=TENNIS_BACKHAND_BETA)
                 s_levers.add(p_lev, y)
 
             if m["status"] == "completed":
@@ -194,11 +211,13 @@ def cmd_tennis_backtest(args: argparse.Namespace) -> None:
         print(s_blend.calibration())
 
 
-def _brier(rows, cb, fb, lb) -> float:
+def _brier(rows, cb=0.0, fb=0.0, lb=0.0, ab=0.0, bhb=0.0) -> float:
     bs = 0.0
-    for p, cf, ff, lf, y in rows:
+    for p, cf, ff, lf, af, bhf, y in rows:
         pa = apply_levers(p, court_feat=cf, fatigue_feat=ff, lefty_feat=lf,
-                          court_beta=cb, fatigue_beta=fb, lefty_beta=lb)
+                          age_feat=af, backhand_feat=bhf,
+                          court_beta=cb, fatigue_beta=fb, lefty_beta=lb,
+                          age_beta=ab, backhand_beta=bhb)
         pa = min(max(pa, 1e-6), 1 - 1e-6)
         bs += (pa - y) ** 2
     return bs / len(rows)
@@ -206,11 +225,11 @@ def _brier(rows, cb, fb, lb) -> float:
 
 def _sweep(rows, label, lo, hi, step, set_beta):
     """Grid one beta (others 0); print the Brier-minimizing value vs the base."""
-    base = _brier(rows, 0.0, 0.0, 0.0)
+    base = _brier(rows)
     best_b, best_brier = 0.0, base
     beta = lo
     while beta <= hi + 1e-9:
-        bs = _brier(rows, *set_beta(beta))
+        bs = _brier(rows, **set_beta(beta))
         if bs < best_brier:
             best_b, best_brier = beta, bs
         beta += step
@@ -225,10 +244,13 @@ def _tune(rows: list[tuple]) -> None:
     if not rows:
         print("\n[tune-levers] no eval rows")
         return
-    print(f"\n[tune-levers] grid search over {len(rows)} eval matches (base Brier {_brier(rows,0,0,0):.4f})")
-    cb = _sweep(rows, "court_speed", -2.0, 2.0, 0.25, lambda x: (x, 0.0, 0.0))
-    fb = _sweep(rows, "fatigue", -1.0, 1.0, 0.1, lambda x: (0.0, x, 0.0))
-    lb = _sweep(rows, "lefty", -0.5, 0.5, 0.05, lambda x: (0.0, 0.0, x))
-    joint = _brier(rows, cb, fb, lb)
-    base = _brier(rows, 0, 0, 0)
-    print(f"  {'joint':<12} betas=({cb:+.2f},{fb:+.2f},{lb:+.2f})  Brier {base:.4f} -> {joint:.4f}")
+    base = _brier(rows)
+    print(f"\n[tune-levers] grid search over {len(rows)} eval matches (base Brier {base:.4f})")
+    cb = _sweep(rows, "court_speed", -2.0, 2.0, 0.25, lambda x: {"cb": x})
+    fb = _sweep(rows, "fatigue", -1.0, 1.0, 0.1, lambda x: {"fb": x})
+    lb = _sweep(rows, "lefty", -0.5, 0.5, 0.05, lambda x: {"lb": x})
+    ab = _sweep(rows, "age", -2.0, 2.0, 0.25, lambda x: {"ab": x})
+    bhb = _sweep(rows, "backhand", -0.5, 0.5, 0.05, lambda x: {"bhb": x})
+    joint = _brier(rows, cb, fb, lb, ab, bhb)
+    print(f"  {'joint':<12} betas=({cb:+.2f},{fb:+.2f},{lb:+.2f},{ab:+.2f},{bhb:+.2f})  "
+          f"Brier {base:.4f} -> {joint:.4f}")

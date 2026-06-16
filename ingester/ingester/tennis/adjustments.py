@@ -52,21 +52,50 @@ def lefty_feature(hand_a: str | None, hand_b: str | None) -> float:
     return a - b
 
 
+AGE_PEAK = 24.5  # peak performance age (research ~24–25)
+
+
+def _age_curve(age: float) -> float:
+    """Concave aging curve, 0 at peak, falling away (scale absorbed by the beta)."""
+    return -(((age - AGE_PEAK) / 10.0) ** 2)
+
+
+def age_feature(age_a: float | None, age_b: float | None) -> float:
+    """Favors the player nearer peak age."""
+    if age_a is None or age_b is None:
+        return 0.0
+    return _age_curve(age_a) - _age_curve(age_b)
+
+
+def backhand_feature(bh_a: int | None, bh_b: int | None) -> float:
+    """One-handers (backhand==1) are slightly disadvantaged: +1 when b is the
+    one-hander (favoring two-hander a), −1 for the reverse."""
+    if bh_a is None or bh_b is None:
+        return 0.0
+    return (1.0 if bh_b == 1 else 0.0) - (1.0 if bh_a == 1 else 0.0)
+
+
 def apply_levers(
     p: float,
     *,
     court_feat: float = 0.0,
     fatigue_feat: float = 0.0,
     lefty_feat: float = 0.0,
+    age_feat: float = 0.0,
+    backhand_feat: float = 0.0,
     court_beta: float = 0.0,
     fatigue_beta: float = 0.0,
     lefty_beta: float = 0.0,
+    age_beta: float = 0.0,
+    backhand_beta: float = 0.0,
 ) -> float:
     """Adjust a win probability by the active levers (logit space)."""
     z = (_logit(p)
          + court_beta * court_feat
          + fatigue_beta * fatigue_feat
-         + lefty_beta * lefty_feat)
+         + lefty_beta * lefty_feat
+         + age_beta * age_feat
+         + backhand_beta * backhand_feat)
     return _sigmoid(z)
 
 

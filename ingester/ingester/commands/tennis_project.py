@@ -11,7 +11,9 @@ import json
 
 from ingester.db import get_connection
 from ingester.tennis.constants import ELO_SURFACE_WEIGHT, MODEL_VERSION, SURFACES
+from ingester.tennis.adjustments import age_feature, apply_levers
 from ingester.tennis.calibration import TennisCalibrator
+from ingester.tennis.constants import TENNIS_AGE_BETA
 from ingester.tennis.games_calibration import GamesCalibrator
 from ingester.tennis.elo import pred_prob
 from ingester.tennis.match_model import project_from_winprob
@@ -50,7 +52,7 @@ def cmd_tennis_project(args: argparse.Namespace) -> None:
         if getattr(args, "scheduled", False):
             label = "scheduled"
             matches = conn.execute(
-                "SELECT id, surface, best_of, player_a_id, player_b_id "
+                "SELECT id, surface, best_of, player_a_id, player_b_id, match_date "
                 "FROM tennis_matches WHERE status = 'scheduled' ORDER BY start_time_utc NULLS LAST, id"
             ).fetchall()
         else:
@@ -59,10 +61,14 @@ def cmd_tennis_project(args: argparse.Namespace) -> None:
                 target = conn.execute("SELECT max(match_date) FROM tennis_matches").fetchone()[0]
             label = str(target)
             matches = conn.execute(
-                "SELECT id, surface, best_of, player_a_id, player_b_id "
+                "SELECT id, surface, best_of, player_a_id, player_b_id, match_date "
                 "FROM tennis_matches WHERE match_date = %s ORDER BY id",
                 (target,),
             ).fetchall()
+
+        births = dict(conn.execute(
+            "SELECT id, birth_date FROM tennis_players WHERE birth_date IS NOT NULL"
+        ).fetchall())
 
         # Calibration is opt-in: the blended Elo is already well-calibrated, so the
         # isotonic map was flat out-of-sample (kept for if calibration ever drifts).
@@ -73,13 +79,18 @@ def cmd_tennis_project(args: argparse.Namespace) -> None:
 
         rows = []
         skipped = 0
-        for mid, surface, best_of, a_id, b_id in matches:
+        for mid, surface, best_of, a_id, b_id, match_date in matches:
             elo_a = _blended_elo(snap, a_id, surface)
             elo_b = _blended_elo(snap, b_id, surface)
             if elo_a is None or elo_b is None:
                 skipped += 1
                 continue
             win_a = pred_prob(elo_a, elo_b)
+            # Age lever (the one live refinement lever): aging curve beyond Elo.
+            ba, bb = births.get(a_id), births.get(b_id)
+            if ba and bb and match_date and TENNIS_AGE_BETA:
+                af = age_feature((match_date - ba).days / 365.25, (match_date - bb).days / 365.25)
+                win_a = apply_levers(win_a, age_feat=af, age_beta=TENNIS_AGE_BETA)
             if calibrator is not None:
                 win_a = calibrator.apply(win_a)
             proj = project_from_winprob(win_a, best_of or 3, surface)
