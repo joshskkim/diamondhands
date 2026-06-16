@@ -65,6 +65,20 @@ export type TennisTotalEv = {
   evPct: number
 } | null
 
+export type TennisPropEv = {
+  playerName: string
+  market: string
+  side: string
+  line: number
+  bookmaker: string | null
+  priceAmerican: number | null
+  priceDecimal: number | null
+  modelProb: number
+  fairProb: number
+  edgePct: number
+  evPct: number
+}
+
 export type TennisMatchDetail = {
   matchId: number
   startTimeUtc: string | null
@@ -83,6 +97,7 @@ export type TennisMatchDetail = {
   quotes: TennisQuote[]
   bestPlay: TennisEv
   bestTotalPlay: TennisTotalEv
+  bestProps: TennisPropEv[]
 }
 
 export type TennisRanking = {

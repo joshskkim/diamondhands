@@ -19,5 +19,6 @@ public record TennisMatchDetailDto(
     Double probStraightSets,
     List<TennisQuoteDto> quotes,
     TennisEvDto bestPlay,
-    TennisTotalEvDto bestTotalPlay
+    TennisTotalEvDto bestTotalPlay,
+    List<TennisPropEvDto> bestProps
 ) {}

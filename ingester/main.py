@@ -70,6 +70,7 @@ from ingester.commands.tennis_games_eval import cmd_tennis_games_eval
 from ingester.commands.tennis_fit_games_calibration import cmd_tennis_fit_games_calibration
 from ingester.commands.tennis_backfill_attributes import cmd_tennis_backfill_attributes
 from ingester.commands.tennis_props_eval import cmd_tennis_props_eval
+from ingester.commands.tennis_fit_props import cmd_tennis_fit_props
 from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
 from ingester.db import eastern_today
 from ingester.projection.runner import cmd_project, cmd_smoke_project
@@ -564,6 +565,13 @@ def build_parser() -> argparse.ArgumentParser:
                              help="Build serve rates as-of this date (default 2024-12-31)")
     p_tennis_pe.add_argument("--end", metavar="YYYY-MM-DD", type=_date_arg, default=None)
 
+    p_tennis_fp = sub.add_parser(
+        "tennis-fit-props",
+        help="Fit ace/DF Negative-Binomial dispersion (φ) -> models/tennis_props.json",
+    )
+    p_tennis_fp.add_argument("--cutoff", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+                             help="Build serve rates as-of this date; fit on later matches (default 2023-12-31)")
+
     p_tennis_gc = sub.add_parser(
         "tennis-fit-games-calibration",
         help="Fit the affine total-games correction -> models/tennis_games_calibration.json",
@@ -649,6 +657,7 @@ COMMANDS = {
     "tennis-backfill":          cmd_tennis_backfill,
     "tennis-backfill-attributes": cmd_tennis_backfill_attributes,
     "tennis-props-eval":        cmd_tennis_props_eval,
+    "tennis-fit-props":         cmd_tennis_fit_props,
     "tennis-refresh-ratings":   cmd_tennis_refresh_ratings,
     "tennis-project":           cmd_tennis_project,
     "tennis-backtest":          cmd_tennis_backtest,

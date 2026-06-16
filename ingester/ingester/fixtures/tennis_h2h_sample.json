@@ -17,6 +17,16 @@
           {"key": "totals", "last_update": "2026-06-16T15:30:00Z", "outcomes": [
             {"name": "Over", "price": -110, "point": 38.5},
             {"name": "Under", "price": -110, "point": 38.5}
+          ]},
+          {"key": "player_aces", "last_update": "2026-06-16T15:30:00Z", "outcomes": [
+            {"name": "Over", "description": "Carlos Alcaraz", "price": -110, "point": 6.5},
+            {"name": "Under", "description": "Carlos Alcaraz", "price": -110, "point": 6.5},
+            {"name": "Over", "description": "Jannik Sinner", "price": -115, "point": 8.5},
+            {"name": "Under", "description": "Jannik Sinner", "price": -105, "point": 8.5}
+          ]},
+          {"key": "player_double_faults", "last_update": "2026-06-16T15:30:00Z", "outcomes": [
+            {"name": "Over", "description": "Jannik Sinner", "price": -120, "point": 2.5},
+            {"name": "Under", "description": "Jannik Sinner", "price": 100, "point": 2.5}
           ]}
         ]
       },

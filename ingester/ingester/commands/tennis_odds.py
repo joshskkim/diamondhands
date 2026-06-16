@@ -10,14 +10,17 @@ import os
 
 from dotenv import load_dotenv
 
-from ingester.db import get_connection
+from ingester.db import eastern_today, get_connection
 from ingester.tennis.games_calibration import GamesCalibrator
+from ingester.tennis.props import PropsModel
+from ingester.tennis.serve_rates import build_serve_rates, serve_points
 from ingester.tennis.oddsfeed import (
     build_name_index,
     fetch_h2h,
     load_sample_h2h,
     match_player,
     parse_h2h,
+    parse_player_props,
     parse_totals,
 )
 
@@ -34,6 +37,8 @@ def cmd_tennis_odds(args: argparse.Namespace) -> None:
     try:
         index = build_name_index(conn)
         games_cal = GamesCalibrator.load()
+        props_model = PropsModel.load()
+        serve_r, league = build_serve_rates(conn, eastern_today())
         # event_id -> (match_id, a_id, b_id, best_of, exp_total_games) for scheduled matches.
         slate = {
             eid: (mid, a, b, bo, float(exp) if exp is not None else None)
@@ -49,6 +54,7 @@ def cmd_tennis_odds(args: argparse.Namespace) -> None:
         matched = 0
         rows_written = 0
         total_rows = 0
+        prop_rows = 0
         skipped = 0
         with conn.cursor() as cur:
             for ev in events:
@@ -101,8 +107,45 @@ def cmd_tennis_odds(args: argparse.Namespace) -> None:
                              t["price_decimal"], t["implied_prob"], model_prob, t["last_update"]),
                         )
                         total_rows += 1
+
+                # Player props (aces / double faults): NB model P(side) at each line.
+                props = parse_player_props(ev)
+                if props:
+                    cur.execute("DELETE FROM tennis_prop_odds WHERE match_id = %s", (match_id,))
+                    for pr in props:
+                        pid = match_player(pr["player_name"], index)
+                        if pid not in (a_id, b_id):
+                            continue
+                        returner = b_id if pid == a_id else a_id
+                        model_prob = None
+                        rs, rr = serve_r.get(pid), serve_r.get(returner)
+                        if props_model is not None and rs is not None and exp_games is not None:
+                            sp = serve_points(exp_games)
+                            if pr["market"] == "aces" and rr is not None:
+                                mean = rs["ace_rate"] * (rr["ace_against"] / league["ace_rate"]) * sp
+                            elif pr["market"] == "dfs":
+                                mean = rs["df_rate"] * sp
+                            else:
+                                mean = None
+                            if mean is not None:
+                                po = props_model.p_over(pr["market"], mean, pr["line"])
+                                if po is not None:
+                                    model_prob = round(po if pr["side"] == "over" else 1.0 - po, 4)
+                        cur.execute(
+                            "INSERT INTO tennis_prop_odds (match_id, player_id, market, side, line, "
+                            "bookmaker, price_american, price_decimal, implied_prob, model_prob, last_update) "
+                            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                            "ON CONFLICT (match_id, player_id, market, side, line, bookmaker) DO UPDATE SET "
+                            "price_american=EXCLUDED.price_american, price_decimal=EXCLUDED.price_decimal, "
+                            "implied_prob=EXCLUDED.implied_prob, model_prob=EXCLUDED.model_prob, "
+                            "last_update=EXCLUDED.last_update, fetched_at=NOW()",
+                            (match_id, pid, pr["market"], pr["side"], pr["line"], pr["bookmaker"],
+                             pr["price_american"], pr["price_decimal"], pr["implied_prob"],
+                             model_prob, pr["last_update"]),
+                        )
+                        prop_rows += 1
         conn.commit()
         print(f"[tennis-odds] {matched} matches priced, {rows_written} h2h quotes, "
-              f"{total_rows} totals quotes, {skipped} events not on slate")
+              f"{total_rows} totals quotes, {prop_rows} prop quotes, {skipped} events not on slate")
     finally:
         conn.close()

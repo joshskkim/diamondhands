@@ -103,9 +103,51 @@ public class TennisRepository {
                 ni(rs, "price_american"), nd(rs, "price_decimal"), nd(rs, "implied_prob")),
             matchId);
         TennisTotalEvDto bestTotal = bestTotalPlay(matchId);
+        List<TennisPropEvDto> bestProps = bestProps(matchId);
         List<TennisMatchDetailDto> rows = jdbc.query(DETAIL_SQL,
-            (rs, n) -> mapDetail(rs, quotes, bestTotal), matchId);
+            (rs, n) -> mapDetail(rs, quotes, bestTotal, bestProps), matchId);
         return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    private static final String PROPS_SQL = """
+        SELECT pl.full_name, o.player_id, o.market, o.side, o.line, o.bookmaker,
+               o.price_american, o.price_decimal, o.implied_prob, o.model_prob
+        FROM tennis_prop_odds o JOIN tennis_players pl ON pl.id = o.player_id
+        WHERE o.match_id = ?
+        ORDER BY o.player_id, o.market, o.line, o.side, o.price_decimal DESC
+        """;
+
+    // Best +edge ace/DF play per (player, market) across lines/books.
+    private List<TennisPropEvDto> bestProps(long matchId) {
+        record Grp(String name, String market, double line) {}
+        java.util.Map<Grp, TotalSide> over = new java.util.LinkedHashMap<>();
+        java.util.Map<Grp, TotalSide> under = new java.util.LinkedHashMap<>();
+        jdbc.query(PROPS_SQL, rs -> {
+            Grp g = new Grp(rs.getString("full_name"), rs.getString("market"), rs.getDouble("line"));
+            var tgt = "over".equals(rs.getString("side")) ? over : under;
+            tgt.putIfAbsent(g, new TotalSide(ni(rs, "price_american"), nd(rs, "price_decimal"),
+                nd(rs, "implied_prob"), nd(rs, "model_prob"), rs.getString("bookmaker")));
+        }, matchId);
+
+        java.util.Map<String, TennisPropEvDto> bestByPlayerMarket = new java.util.LinkedHashMap<>();
+        for (var e : over.entrySet()) {
+            Grp g = e.getKey();
+            TotalSide o = e.getValue();
+            TotalSide u = under.get(g);
+            if (u == null) continue;
+            TennisTotalEvDto t = TennisEv.bestTotal(g.line(), o.model(),
+                o.am(), o.dec(), o.imp(), o.book(), u.am(), u.dec(), u.imp(), u.book());
+            if (t == null) continue;
+            TennisPropEvDto cand = new TennisPropEvDto(g.name(), g.market(), t.side(), t.line(),
+                t.bookmaker(), t.priceAmerican(), t.priceDecimal(), t.modelProb(), t.fairProb(),
+                t.edgePct(), t.evPct());
+            String key = g.name() + "|" + g.market();
+            TennisPropEvDto cur = bestByPlayerMarket.get(key);
+            if (cur == null || cand.evPct() > cur.evPct()) {
+                bestByPlayerMarket.put(key, cand);
+            }
+        }
+        return new ArrayList<>(bestByPlayerMarket.values());
     }
 
     // Best (highest-decimal) over/under per line, then the best +edge play across lines.
@@ -143,7 +185,8 @@ public class TennisRepository {
     }
 
     private TennisMatchDetailDto mapDetail(ResultSet rs, List<TennisQuoteDto> quotes,
-                                           TennisTotalEvDto bestTotal) throws SQLException {
+                                           TennisTotalEvDto bestTotal,
+                                           List<TennisPropEvDto> bestProps) throws SQLException {
         TennisPlayerDto a = new TennisPlayerDto(rs.getString("a_id"), rs.getString("a_name"),
             rs.getString("a_country"), ni(rs, "a_age"), rs.getString("a_hand"));
         TennisPlayerDto b = new TennisPlayerDto(rs.getString("b_id"), rs.getString("b_name"),
@@ -164,7 +207,7 @@ public class TennisRepository {
             rs.getLong("match_id"), rs.getString("start_time_utc"), rs.getString("surface"),
             ni(rs, "best_of"), rs.getString("status"), a, b,
             nd(rs, "elo_a"), nd(rs, "elo_b"), pWinA, nd(rs, "p_serve_a"), nd(rs, "p_serve_b"),
-            nd(rs, "exp_total_games"), nd(rs, "prob_straight_sets"), quotes, best, bestTotal);
+            nd(rs, "exp_total_games"), nd(rs, "prob_straight_sets"), quotes, best, bestTotal, bestProps);
     }
 
     // ── Rankings ─────────────────────────────────────────────────────────────

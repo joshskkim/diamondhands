@@ -109,6 +109,29 @@ function Content({ d }: { d: Detail }) {
         </div>
       )}
 
+      {/* ace / double-fault props */}
+      {d.bestProps && d.bestProps.filter((p) => p.edgePct > 0).length > 0 && (
+        <div>
+          <p className={microLabel}>Player props — model edges</p>
+          <div className="mt-2 space-y-2">
+            {d.bestProps.filter((p) => p.edgePct > 0).map((p, i) => (
+              <div key={i} className="flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2">
+                <span className="text-sm text-zinc-200">
+                  <span className="font-medium text-zinc-100">{p.playerName}</span>{' '}
+                  <span className="capitalize">{p.side} {p.line}</span>{' '}
+                  <span className="text-zinc-500">{p.market === 'dfs' ? 'double faults' : 'aces'}</span>
+                </span>
+                <span className="font-mono text-xs text-zinc-400">
+                  {amer(p.priceAmerican)}{' '}
+                  <span className="font-semibold text-emerald-400">+{p.edgePct.toFixed(1)}%</span>{' '}
+                  <span className={cn(p.evPct > 0 ? 'text-emerald-300' : 'text-zinc-500')}>EV {p.evPct > 0 ? '+' : ''}{p.evPct.toFixed(1)}%</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* odds */}
       {d.quotes.length > 0 && (
         <div>
