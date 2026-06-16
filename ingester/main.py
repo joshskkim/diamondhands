@@ -66,6 +66,8 @@ from ingester.commands.tennis_slate import cmd_tennis_slate
 from ingester.commands.tennis_odds import cmd_tennis_odds
 from ingester.commands.tennis_fit_calibration import cmd_tennis_fit_calibration
 from ingester.commands.tennis_score import cmd_tennis_score
+from ingester.commands.tennis_games_eval import cmd_tennis_games_eval
+from ingester.commands.tennis_fit_games_calibration import cmd_tennis_fit_games_calibration
 from ingester.commands.smoke import cmd_smoke_skills, cmd_smoke_slate
 from ingester.db import eastern_today
 from ingester.projection.runner import cmd_project, cmd_smoke_project
@@ -537,6 +539,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_tennis_sc.add_argument("--end", metavar="YYYY-MM-DD", type=_date_arg, default=None,
                              help="Eval window end (default: today)")
 
+    p_tennis_ge = sub.add_parser(
+        "tennis-games-eval",
+        help="Validate the total-games distribution (MAE + PIT calibration) before building the market",
+    )
+    p_tennis_ge.add_argument("--start", metavar="YYYY-MM-DD", type=_date_arg, default=None)
+    p_tennis_ge.add_argument("--end", metavar="YYYY-MM-DD", type=_date_arg, default=None)
+    p_tennis_ge.add_argument("--min-matches", type=int, default=10, dest="min_matches")
+    p_tennis_ge.add_argument("--raw", action="store_true", default=False,
+                             help="Skip the games calibration (evaluate the uncorrected distribution)")
+
+    p_tennis_gc = sub.add_parser(
+        "tennis-fit-games-calibration",
+        help="Fit the affine total-games correction -> models/tennis_games_calibration.json",
+    )
+    p_tennis_gc.add_argument("--start", metavar="YYYY-MM-DD", type=_date_arg, default=None)
+    p_tennis_gc.add_argument("--end", metavar="YYYY-MM-DD", type=_date_arg, default=None)
+
     sub.add_parser("smoke",        help="DB connectivity sanity check")
     sub.add_parser("smoke-skills", help="Print top batters/pitchers from skill tables")
     p_smoke_slate    = sub.add_parser("smoke-slate",    help="Print today's slate with weather and probables")
@@ -620,6 +639,8 @@ COMMANDS = {
     "tennis-odds":              cmd_tennis_odds,
     "tennis-fit-calibration":   cmd_tennis_fit_calibration,
     "tennis-score":             cmd_tennis_score,
+    "tennis-games-eval":        cmd_tennis_games_eval,
+    "tennis-fit-games-calibration": cmd_tennis_fit_games_calibration,
     "train-pa":                 cmd_train_pa,
     "simulate-eval":            cmd_simulate_eval,
     "project":                  cmd_project,

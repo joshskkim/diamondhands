@@ -12,6 +12,7 @@ import json
 from ingester.db import get_connection
 from ingester.tennis.constants import ELO_SURFACE_WEIGHT, MODEL_VERSION, SURFACES
 from ingester.tennis.calibration import TennisCalibrator
+from ingester.tennis.games_calibration import GamesCalibrator
 from ingester.tennis.elo import pred_prob
 from ingester.tennis.match_model import project_from_winprob
 
@@ -66,6 +67,9 @@ def cmd_tennis_project(args: argparse.Namespace) -> None:
         # Calibration is opt-in: the blended Elo is already well-calibrated, so the
         # isotonic map was flat out-of-sample (kept for if calibration ever drifts).
         calibrator = TennisCalibrator.load() if getattr(args, "calibrate", False) else None
+        # Games calibration is ON by default: the closed-form sim over-counts games
+        # ~+2, so this de-biases the displayed expected total games (validated OOS).
+        games_cal = GamesCalibrator.load()
 
         rows = []
         skipped = 0
@@ -79,6 +83,8 @@ def cmd_tennis_project(args: argparse.Namespace) -> None:
             if calibrator is not None:
                 win_a = calibrator.apply(win_a)
             proj = project_from_winprob(win_a, best_of or 3, surface)
+            if games_cal is not None:
+                proj["exp_total_games"] = games_cal.mean(proj["exp_total_games"])
             reasoning = {
                 "surface": surface, "elo_a": round(elo_a, 1), "elo_b": round(elo_b, 1),
                 "blend_weight": ELO_SURFACE_WEIGHT,

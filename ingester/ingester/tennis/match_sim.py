@@ -12,6 +12,8 @@ the backtest can call them per match.
 """
 from __future__ import annotations
 
+import bisect
+import random
 from functools import lru_cache
 
 
@@ -107,3 +109,69 @@ def match_outcome(pa: float, pb: float, best_of: int = 3) -> dict:
         "prob_straight_sets": p_set_a ** need + (1.0 - p_set_a) ** need,
         "p_set_a": p_set_a,
     }
+
+
+# ── Total-games distribution (Monte-Carlo) ───────────────────────────────────
+# The closed form gives the MEAN games; over/under betting needs the distribution,
+# so we simulate. Memoised on (pa, pb, best_of) rounded to 2 dp so the backtest
+# reuses draws across similar matchups.
+
+def _sim_set_games(pa: float, pb: float, rng: random.Random) -> tuple[int, int]:
+    """Simulate one set; return (games_played, winner) with winner in {0:A, 1:B}."""
+    hold_a = game_win_prob(pa)
+    hold_b = game_win_prob(pb)
+    tb = tiebreak_win_prob(pa, pb)
+    ga = gb = 0
+    n = 0
+    while True:
+        if ga == 6 and gb == 6:
+            if rng.random() < tb:
+                ga += 1
+            else:
+                gb += 1
+            return (ga + gb, 0 if ga > gb else 1)
+        a_serving = (n % 2 == 0)
+        a_wins_game = (rng.random() < hold_a) if a_serving else (rng.random() >= hold_b)
+        if a_wins_game:
+            ga += 1
+        else:
+            gb += 1
+        n += 1
+        if (ga >= 6 or gb >= 6) and abs(ga - gb) >= 2:
+            return (ga + gb, 0 if ga > gb else 1)
+
+
+def _sim_match_games(pa: float, pb: float, best_of: int, rng: random.Random) -> int:
+    need = best_of // 2 + 1
+    sa = sb = total = 0
+    while sa < need and sb < need:
+        games, winner = _sim_set_games(pa, pb, rng)
+        total += games
+        if winner == 0:
+            sa += 1
+        else:
+            sb += 1
+    return total
+
+
+@lru_cache(maxsize=8192)
+def _games_samples(pa_r: float, pb_r: float, best_of: int, n_sims: int) -> tuple[int, ...]:
+    rng = random.Random(hash((pa_r, pb_r, best_of)))
+    return tuple(sorted(_sim_match_games(pa_r, pb_r, best_of, rng) for _ in range(n_sims)))
+
+
+def games_stats(pa: float, pb: float, best_of: int = 3, n_sims: int = 2000) -> dict:
+    """Mean / std of total games and a callable-free sorted sample (for p_over)."""
+    samples = _games_samples(round(pa, 2), round(pb, 2), best_of, n_sims)
+    n = len(samples)
+    mean = sum(samples) / n
+    var = sum((s - mean) ** 2 for s in samples) / n
+    return {"mean": mean, "std": var ** 0.5, "samples": samples}
+
+
+def p_total_over(pa: float, pb: float, line: float, best_of: int = 3, n_sims: int = 2000) -> float:
+    """P(total games > line) from the simulated distribution."""
+    samples = _games_samples(round(pa, 2), round(pb, 2), best_of, n_sims)
+    # count strictly greater than the (half-integer) line
+    idx = bisect.bisect_right(samples, line)
+    return 1.0 - idx / len(samples)
