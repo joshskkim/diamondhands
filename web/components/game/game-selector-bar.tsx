@@ -82,12 +82,32 @@ function MatchupMeta({
 export function GameSelectorBar({ activeGameId }: { activeGameId?: number }) {
   const { data: games } = useQuery(todayGamesQueryOptions())
   const activeRef = useRef<HTMLAnchorElement | null>(null)
+  const stripRef = useRef<HTMLDivElement | null>(null)
   const [open, setOpen] = useState(false)
 
   // Bring the current game into view when the bar mounts / the slate loads.
   useEffect(() => {
     activeRef.current?.scrollIntoView({ inline: 'center', block: 'nearest' })
   }, [games, activeGameId])
+
+  // Translate vertical mouse-wheel into horizontal scroll. The strip hides its
+  // scrollbar (scrollbar-slim) and scrolls fine via trackpad/drag, but a plain
+  // vertical wheel does nothing on a horizontal-only container, so mouse users
+  // are stuck. React's synthetic onWheel is passive (preventDefault is a no-op),
+  // so attach a native non-passive listener. Native horizontal gestures (deltaX,
+  // e.g. trackpad swipe) are left untouched.
+  useEffect(() => {
+    const el = stripRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth) return // nothing to scroll
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return // let native horizontal pass
+      el.scrollLeft += e.deltaY
+      e.preventDefault()
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [games])
 
   if (!games || games.length === 0) return null
 
@@ -99,7 +119,7 @@ export function GameSelectorBar({ activeGameId }: { activeGameId?: number }) {
   return (
     <div className="sticky top-12 md:top-0 z-30 -mx-4 mb-6 border-b border-white/10 bg-[#08090d]/90 px-4 py-2 backdrop-blur">
       {/* desktop: horizontal chip strip */}
-      <div className="scrollbar-slim hidden gap-2 overflow-x-auto md:flex">
+      <div ref={stripRef} className="scrollbar-slim hidden gap-2 overflow-x-auto md:flex">
         {games.map((g) => {
           const isActive = g.gameId === activeGameId
           const glow = favoriteGlow(g.projection?.expectedHomeRuns, g.projection?.expectedAwayRuns)

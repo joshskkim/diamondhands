@@ -6,7 +6,7 @@ import json
 import logging
 import sys
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import psycopg
 
@@ -151,6 +151,9 @@ class SlateGame:
     park_factor_hits: float
     park_factor_hr_lhb: float
     park_factor_hr_rhb: float
+    # Live-path gating only (status/start time). The backtest path leaves these defaulted.
+    start_time_utc: datetime | None = None
+    detailed_status: str | None = None
     lf_line_ft: float | None = None
     cf_ft: float | None = None
     rf_line_ft: float | None = None
@@ -215,7 +218,9 @@ def _load_slate_games(conn: psycopg.Connection, game_date: date) -> list[SlateGa
             s.rf_line_ft,
             s.lf_wall_ft,
             s.cf_wall_ft,
-            s.rf_wall_ft
+            s.rf_wall_ft,
+            g.start_time_utc,
+            g.detailed_status
         FROM games g
         JOIN stadiums s ON s.id = g.stadium_id
         WHERE g.game_date = %s
@@ -253,6 +258,8 @@ def _load_slate_games(conn: psycopg.Connection, game_date: date) -> list[SlateGa
                 lf_wall_ft=_as_float(row[21]),
                 cf_wall_ft=_as_float(row[22]),
                 rf_wall_ft=_as_float(row[23]),
+                start_time_utc=row[24],
+                detailed_status=row[25],
             )
         )
     return games
@@ -561,9 +568,28 @@ def _platoon_adjust(
     return _blend(xwoba, p_xwoba), _blend(k_rate, p_k), _blend(iso, p_iso)
 
 
+# detailedState values that mean the game won't be played as scheduled — drop them
+# entirely. Transient "Delayed"/"Delayed Start" (e.g. a short rain delay) is NOT here:
+# those games still play, so they stay projectable.
+_DEAD_GAME_STATUSES = frozenset({"Postponed", "Suspended", "Cancelled"})
+
+# Lineups post ~2-3 h before first pitch, so don't even attempt a game until then —
+# before that there's nothing to project and a later cron tick will retry.
+_LINEUP_LEAD_HOURS = 2
+
+
 def _game_ready(game: SlateGame) -> str | None:
     if game.home_probable_pitcher_id is None or game.away_probable_pitcher_id is None:
         return "missing probable pitcher"
+    # Drop games that won't be played as scheduled (postponed/suspended/cancelled).
+    if game.detailed_status in _DEAD_GAME_STATUSES:
+        return f"{game.detailed_status.lower()}"
+    # Per-game defer: skip until ~2 h before first pitch (lineups aren't out earlier).
+    # A later cron tick re-attempts the game once it enters the window.
+    if game.start_time_utc is not None:
+        opens_at = game.start_time_utc - timedelta(hours=_LINEUP_LEAD_HOURS)
+        if datetime.now(timezone.utc) < opens_at:
+            return f"deferred: >{_LINEUP_LEAD_HOURS}h before first pitch"
     # Weather is an optional refinement, not a requirement: when temp/wind are absent the
     # projector neutralizes them (70°F, no wind). A flaky weather API must NOT zero out the
     # whole slate (this previously returned "missing weather" and skipped every open-air game).
@@ -998,6 +1024,26 @@ def _upsert_pitcher_projection(
     )
 
 
+def _any_lineup_posted(conn: psycopg.Connection, game_id: int) -> bool:
+    """True if at least one side has a full nine-man order in game_lineups.
+
+    Mirrors the LINEUP_STARTERS=9 threshold _resolve_lineup uses per side; a transient
+    partial fetch (< 9) doesn't count as posted.
+    """
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM game_lineups
+        WHERE game_id = %s
+        GROUP BY is_home
+        HAVING COUNT(*) = %s
+        LIMIT 1
+        """,
+        (game_id, LINEUP_STARTERS),
+    ).fetchone()
+    return row is not None
+
+
 def _project_game(
     conn: psycopg.Connection,
     game: SlateGame,
@@ -1009,6 +1055,13 @@ def _project_game(
     reason = _game_ready(game)
     if reason:
         summary.skip_reasons.append(f"game {game.game_id}: {reason}")
+        return False
+
+    # Only project once a lineup is actually posted. _resolve_lineup needs the full
+    # nine-man order per side; if neither side has it yet, defer the game (a later cron
+    # tick re-projects as lineups drop) rather than fall through to a partial/empty run.
+    if not _any_lineup_posted(conn, game.game_id):
+        summary.skip_reasons.append(f"game {game.game_id}: lineups not posted (deferred)")
         return False
 
     park = ParkFactors(
