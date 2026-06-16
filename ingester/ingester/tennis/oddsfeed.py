@@ -89,6 +89,22 @@ def fetch_h2h(api_key: str, sport_key: str = TENNIS_SPORT_KEY) -> list[dict]:
     return resp.json()
 
 
+def fetch_event_props(api_key: str, event_id: str, sport_key: str = TENNIS_SPORT_KEY) -> dict:
+    """Player props (aces / double faults) for ONE event — these live only on the
+    per-event odds endpoint (credit-billed). Returns the event dict, or {} if the
+    event has no props / 404s."""
+    resp = requests.get(
+        f"{ODDS_BASE}/sports/{sport_key}/events/{event_id}/odds",
+        params={"apiKey": api_key, "regions": REGIONS,
+                "markets": ",".join(PLAYER_PROP_MARKETS), "oddsFormat": ODDS_FORMAT},
+        timeout=20,
+    )
+    if resp.status_code in (404, 422):
+        return {}
+    resp.raise_for_status()
+    return resp.json()
+
+
 # ── Sample fixtures (offline / no-key path) ──────────────────────────────────
 
 def load_sample_events() -> list[dict]:

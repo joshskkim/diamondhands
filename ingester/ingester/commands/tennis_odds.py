@@ -15,7 +15,9 @@ from ingester.tennis.games_calibration import GamesCalibrator
 from ingester.tennis.props import PropsModel
 from ingester.tennis.serve_rates import build_serve_rates, serve_points
 from ingester.tennis.oddsfeed import (
+    TENNIS_SPORT_KEY,
     build_name_index,
+    fetch_event_props,
     fetch_h2h,
     load_sample_h2h,
     match_player,
@@ -109,7 +111,18 @@ def cmd_tennis_odds(args: argparse.Namespace) -> None:
                         total_rows += 1
 
                 # Player props (aces / double faults): NB model P(side) at each line.
-                props = parse_player_props(ev)
+                # Props live only on the per-EVENT endpoint; --sample embeds them in
+                # the fixture event, live fetches per matched event.
+                if args.sample:
+                    prop_event = ev
+                else:
+                    try:
+                        prop_event = fetch_event_props(
+                            api_key, ev.get("id"), ev.get("sport_key") or TENNIS_SPORT_KEY)
+                    except Exception as exc:  # noqa: BLE001 — one bad event shouldn't kill the run
+                        print(f"[tennis-odds] props fetch failed for {ev.get('id')}: {exc}")
+                        prop_event = {}
+                props = parse_player_props(prop_event)
                 if props:
                     cur.execute("DELETE FROM tennis_prop_odds WHERE match_id = %s", (match_id,))
                     for pr in props:
