@@ -34,7 +34,8 @@ public class PropBoardRepository {
                bp.player_id, p.full_name, t.abbreviation AS team_abbr,
                bp.lineup_position, bp.lineup_confirmed, bp.expected_pa,
                bp.p_hit_1plus, bp.p_hr, bp.p_k_1plus,
-               bp.adj_park, bp.adj_pitcher, bp.adj_weather_hr, bp.adj_weather_hits,
+               sbp.p_hit_1plus AS sim_hit, sbp.p_hr AS sim_hr, sbp.p_k_1plus AS sim_k,
+               bp.adj_park, bp.adj_pitcher, bp.adj_weather_hr, bp.adj_weather_hits, bp.adj_defense,
                bp.matchup_xwoba, bp.matchup_quality, bp.pitcher_data_quality,
                bp.opposing_pitcher_id, op.full_name AS opposing_pitcher,
                s.name AS stadium,
@@ -44,6 +45,8 @@ public class PropBoardRepository {
         FROM batter_projections bp
         JOIN games g    ON g.id  = bp.game_id
         JOIN players p  ON p.id  = bp.player_id
+        LEFT JOIN game_sim_batter_props sbp
+               ON sbp.game_id = bp.game_id AND sbp.player_id = bp.player_id
         LEFT JOIN players op ON op.id = bp.opposing_pitcher_id
         JOIN teams t    ON t.id  = CASE WHEN bp.is_home THEN g.home_team_id ELSE g.away_team_id END
         JOIN teams ht   ON ht.id = g.home_team_id
@@ -231,10 +234,14 @@ public class PropBoardRepository {
             dbl(rs, "p_hit_1plus"),
             dbl(rs, "p_hr"),
             dbl(rs, "p_k_1plus"),
+            dbl(rs, "sim_hit"),
+            dbl(rs, "sim_hr"),
+            dbl(rs, "sim_k"),
             dbl(rs, "adj_park"),
             dbl(rs, "adj_pitcher"),
             dbl(rs, "adj_weather_hr"),
             dbl(rs, "adj_weather_hits"),
+            dbl(rs, "adj_defense"),
             dbl(rs, "matchup_xwoba"),
             rs.getString("matchup_quality"),
             rs.getString("pitcher_data_quality"),
@@ -268,7 +275,11 @@ public class PropBoardRepository {
         int playerId, String player, String team,
         Integer lineupPosition, Boolean lineupConfirmed, Double expectedPa,
         Double pHit1, Double pHr, Double pK1,
+        // Monte-Carlo simulator's per-batter estimate of the same markets (null when the
+        // sim didn't cover this batter — e.g. a padded league-average lineup slot).
+        Double pSimHit, Double pSimHr, Double pSimK,
         Double adjPark, Double adjPitcher, Double adjWeatherHr, Double adjWeatherHits,
+        Double adjDefense,
         Double matchupXwoba, String matchupQuality, String pitcherDataQuality,
         Integer opposingPitcherId, String opposingPitcher, String stadium,
         String bats,

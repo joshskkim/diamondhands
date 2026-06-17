@@ -24,6 +24,16 @@ spring:
     redis:
       time-to-live: 300000   # 5 minutes
 
+diamond:
+  sim-prop-blend:
+    # Blend the Monte-Carlo simulator's per-batter prop estimate into the closed-form
+    # prop-board probability (before empirical shrinkage). OFF until the per-market
+    # weights are fit on the backtest harness; weight 0 == closed-form only.
+    enabled: ${DIAMOND_SIM_PROP_BLEND_ENABLED:false}
+    weight-hit: ${DIAMOND_SIM_PROP_BLEND_WEIGHT_HIT:0.0}
+    weight-hr: ${DIAMOND_SIM_PROP_BLEND_WEIGHT_HR:0.0}
+    weight-k: ${DIAMOND_SIM_PROP_BLEND_WEIGHT_K:0.0}
+
 server:
   port: 8080
 

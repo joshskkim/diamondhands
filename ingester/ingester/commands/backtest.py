@@ -149,6 +149,11 @@ class _Outcomes:
     n_projections: int
     n_games: int
     csv_rows: list[tuple]  # populated only when want_csv=True
+    # Sim-blend weight fitting (--sim-props): the simulator's per-batter estimate aligned
+    # 1:1 to p_hit1/p_hr/p_k above. None entries = no sim prob for that row.
+    sim_hit1: list[float | None]
+    sim_hr:   list[float | None]
+    sim_k:    list[float | None]
 
 
 def _load_outcomes(
@@ -172,7 +177,8 @@ def _load_outcomes(
             CASE WHEN pgs.hits      >= 1 THEN 1 ELSE 0 END,
             CASE WHEN pgs.hits      >= 2 THEN 1 ELSE 0 END,
             CASE WHEN pgs.home_runs >= 1 THEN 1 ELSE 0 END,
-            CASE WHEN pgs.strikeouts>= 1 THEN 1 ELSE 0 END
+            CASE WHEN pgs.strikeouts>= 1 THEN 1 ELSE 0 END,
+            bp.sim_p_hit_1plus, bp.sim_p_hr, bp.sim_p_k_1plus
         FROM backtest_projections bp
         JOIN games g ON g.id = bp.game_id
         JOIN player_game_stats pgs
@@ -200,12 +206,14 @@ def _load_outcomes(
         n_projections=int(n_total[0]),
         n_games=int(n_total[1]),
         csv_rows=[],
+        sim_hit1=[], sim_hr=[], sim_k=[],
     )
 
     for row in rows:
         (pred_h1, pred_h2, pred_hr, pred_k,
          exp_hits, game_id, player_id, game_date,
-         actual_hits, act_h1, act_h2, act_hr, act_k) = row
+         actual_hits, act_h1, act_h2, act_hr, act_k,
+         sim_h1, sim_hr, sim_k) = row
 
         out.p_hit1.append(float(pred_h1))
         out.p_hit2.append(float(pred_h2) if pred_h2 is not None else float(pred_h1))
@@ -213,6 +221,9 @@ def _load_outcomes(
         out.p_k.append(float(pred_k)  if pred_k  is not None else 0.0)
         out.a_hit1.append(int(act_h1)); out.a_hit2.append(int(act_h2))
         out.a_hr.append(int(act_hr));   out.a_k.append(int(act_k))
+        out.sim_hit1.append(float(sim_h1) if sim_h1 is not None else None)
+        out.sim_hr.append(float(sim_hr) if sim_hr is not None else None)
+        out.sim_k.append(float(sim_k) if sim_k is not None else None)
 
         gid = int(game_id)
         eh = float(exp_hits) if exp_hits is not None else 0.0
@@ -314,6 +325,52 @@ def _print_results(
 
 
 # ---------------------------------------------------------------------------
+# Sim-blend weight sweep (--sim-props)
+# ---------------------------------------------------------------------------
+
+# Blend weights to try: 0% .. 100% sim in 5-pt steps. w=0 is the current closed-form
+# board, so it's always in the grid and the sweep can never look worse than baseline.
+_SWEEP_GRID = [i / 100 for i in range(0, 101, 5)]
+
+
+def _sweep_sim_weights(out: _Outcomes) -> None:
+    """Per market, sweep the sim-blend weight w over w*sim + (1-w)*closed_form and report
+    the Brier-minimizing w vs the w=0 baseline. Scored on the rows that actually have a
+    sim prob, so the baseline is recomputed on that same subset (not the global Brier)."""
+    markets = [
+        ("hit1plus", out.p_hit1, out.sim_hit1, out.a_hit1),
+        ("hr",       out.p_hr,   out.sim_hr,   out.a_hr),
+        ("k1plus",   out.p_k,    out.sim_k,    out.a_k),
+    ]
+    n_with_sim = sum(1 for s in out.sim_hit1 if s is not None)
+    print(f"\nSim-blend weight sweep ({n_with_sim:,} rows with sim props):")
+    if n_with_sim == 0:
+        print("  (no sim props on this run — re-run with --sim-props)")
+        return
+    print(f"  {'market':<10}{'base(w=0)':>12}{'best w':>9}{'best Brier':>13}{'Δ Brier':>22}")
+    for name, model, sim, actual in markets:
+        rows = [(mp, sp, a) for mp, sp, a in zip(model, sim, actual) if sp is not None]
+        if not rows:
+            continue
+        mp = [r[0] for r in rows]
+        sp = [r[1] for r in rows]
+        a = [r[2] for r in rows]
+        base = brier_score(mp, a)
+        best_w, best_b = 0.0, base
+        for w in _SWEEP_GRID:
+            blended = [w * s + (1.0 - w) * p for p, s in zip(mp, sp)]
+            b = brier_score(blended, a)
+            if b < best_b:
+                best_b, best_w = b, w
+        delta = best_b - base
+        pct = (delta / base * 100.0) if base else 0.0
+        print(f"  {name:<10}{base:>12.5f}{best_w:>9.2f}{best_b:>13.5f}"
+              f"{delta:>+13.5f} ({pct:+.2f}%)")
+    print("  NOTE: best w is IN-SAMPLE. Confirm on a held-out range before setting "
+          "DIAMOND_SIM_PROP_BLEND_WEIGHT_{HIT,HR,K}.")
+
+
+# ---------------------------------------------------------------------------
 # Command entrypoint
 # ---------------------------------------------------------------------------
 
@@ -361,6 +418,19 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         model_version = f"{model_version}-windspray"
         print("[backtest] Weather carry HR: ON (trajectory model, spray-weighted wind, "
               "prior-season profiles)")
+
+    sim_props = getattr(args, "sim_props", False)
+    if sim_props:
+        from ingester.projection.runner import set_backtest_sim_props
+        set_backtest_sim_props(True)
+        print("[backtest] Sim props: ON (Monte-Carlo per-batter capture; will sweep "
+              "sim-blend weight per market)")
+
+    if getattr(args, "team_defense", False):
+        from ingester.projection.runner import set_team_defense
+        set_team_defense(True)
+        model_version = f"{model_version}-teamdef"
+        print("[backtest] Team defense: ON (leak-free xBA hit-suppression factor)")
 
     print(f"[backtest] Range {start} → {end}  |  Model {model_version}")
 
@@ -459,6 +529,10 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     print(f"  run MAE:            {run_mae:.3f}")
     print(f"  league-mean MAE:    {run_mae_baseline:.3f}  (always {2 * LEAGUE_RUNS_PER_GAME_BASE:.1f})")
     print(f"  corr(pred, actual): {run_corr:+.3f}")
+
+    # Sim-blend weight fitting (only when --sim-props captured the simulator's estimate).
+    if sim_props:
+        _sweep_sim_weights(out)
 
     # Step g: optional CSV.
     if want_csv and out.csv_rows:

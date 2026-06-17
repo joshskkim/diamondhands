@@ -20,7 +20,7 @@ public class ProjectionRepository {
             bp.expected_pa,
             bp.p_hit_1plus, bp.p_hit_2plus, bp.p_hr, bp.p_k_1plus,
             bp.expected_hits, bp.expected_total_bases,
-            bp.adj_park, bp.adj_pitcher, bp.adj_weather_hr, bp.adj_weather_hits,
+            bp.adj_park, bp.adj_pitcher, bp.adj_weather_hr, bp.adj_weather_hits, bp.adj_defense,
             bp.pitcher_data_quality,
             bp.lineup_position, bp.lineup_confirmed,
             bp.matchup_xwoba, bp.matchup_quality,
@@ -75,7 +75,8 @@ public class ProjectionRepository {
             toDouble(rs.getBigDecimal("adj_park")),
             toDouble(rs.getBigDecimal("adj_pitcher")),
             toDouble(rs.getBigDecimal("adj_weather_hr")),
-            toDouble(rs.getBigDecimal("adj_weather_hits")));
+            toDouble(rs.getBigDecimal("adj_weather_hits")),
+            toDouble(rs.getBigDecimal("adj_defense")));
 
         // Arsenal lists are filled in by ProjectionService (it needs game_date and
         // the pitch repo); mapped here as null so the row is otherwise complete.

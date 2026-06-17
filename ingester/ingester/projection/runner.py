@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
@@ -75,6 +76,10 @@ class TeamSideProjection:
     expected_runs: float
     starter_projs: list[BatterProjection]
     bullpen_projs: list[BatterProjection]
+    # player_id for each slot in starter_projs, aligned 1:1. Padded league-average
+    # slots (see _pad_confirmed_projs) carry None — they have no real batter to attach
+    # the simulator's per-slot props to.
+    starter_player_ids: list[int | None]
     # Workload-model innings for the OPPOSING starter this lineup faces (governs how
     # long these starter_projs are faced in the sim). None → sim uses its default.
     opp_starter_innings: int | None = None
@@ -119,6 +124,60 @@ def set_backtest_weather_carry(flag: bool) -> None:
     """Toggle the trajectory (carry) weather-HR model in the backtest path."""
     global _BACKTEST_WEATHER_CARRY
     _BACKTEST_WEATHER_CARRY = flag
+
+
+# Backtest-only: when set, the backtest runs the Monte-Carlo sim per game (leak-free:
+# snapshot skills, NO bullpen leg) and records the simulator's per-batter prop estimate
+# into backtest_projections.sim_p_*, so the prop-board sim-blend weight can be fit
+# against actuals (the scorer sweeps w per market). Off by default; the sim run roughly
+# doubles backtest time, so it's opt-in.
+_BACKTEST_SIM_PROPS: bool = False
+
+
+def set_backtest_sim_props(flag: bool) -> None:
+    """Toggle Monte-Carlo per-batter prop capture in the backtest path."""
+    global _BACKTEST_SIM_PROPS
+    _BACKTEST_SIM_PROPS = flag
+
+
+# Opposing-team defense hit-suppression (xBA-based). Used by BOTH the live and backtest
+# projection paths (live sets it from DIAMOND_TEAM_DEFENSE_ENABLED in cmd_project;
+# backtest sets it from --team-defense). Backtested leak-free −0.40% hit Brier on 2025.
+_TEAM_DEFENSE: bool = False
+# Phantom in-park BIP that regress a team's season-to-date factor toward league-avg 1.0.
+TEAM_DEFENSE_SHRINK_BIP = 200
+
+
+def set_team_defense(flag: bool) -> None:
+    """Toggle the opposing-team-defense hit adjustment (live + backtest)."""
+    global _TEAM_DEFENSE
+    _TEAM_DEFENSE = flag
+
+
+def _load_team_defense_factor(
+    conn: psycopg.Connection, defending_team_id: int | None, before: date, season: int
+) -> float:
+    """Leak-free season-to-date hit-suppression factor for a defending team: actual
+    non-HR hits / expected (Σ xBA) on in-park balls in play STRICTLY BEFORE ``before``,
+    shrunk toward league-average (1.0) by sample size. Returns 1.0 (neutral) when the
+    feature is off, the team is unknown, or there's no prior data this season."""
+    if not _TEAM_DEFENSE or defending_team_id is None:
+        return 1.0
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(bip), 0), COALESCE(SUM(act_hits), 0), COALESCE(SUM(exp_hits), 0)
+        FROM team_defense_daily
+        WHERE team_id = %s AND game_date < %s
+          AND EXTRACT(YEAR FROM game_date)::int = %s
+        """,
+        (defending_team_id, before, season),
+    ).fetchone()
+    bip, act, exp = int(row[0]), float(row[1]), float(row[2])
+    if bip <= 0 or exp <= 0:
+        return 1.0
+    raw = act / exp
+    w = bip / (bip + TEAM_DEFENSE_SHRINK_BIP)
+    return w * raw + (1.0 - w) * 1.0
 
 
 @dataclass
@@ -617,7 +676,7 @@ def _upsert_batter_projection(
             expected_pa,
             p_hit_1plus, p_hit_2plus, p_hr, p_k_1plus,
             expected_hits, expected_total_bases,
-            adj_park, adj_pitcher, adj_weather_hr, adj_weather_hits,
+            adj_park, adj_pitcher, adj_weather_hr, adj_weather_hits, adj_defense,
             pitcher_data_quality,
             lineup_position, lineup_confirmed,
             matchup_xwoba, matchup_quality,
@@ -628,7 +687,7 @@ def _upsert_batter_projection(
             %s,
             %s, %s, %s, %s,
             %s, %s,
-            %s, %s, %s, %s,
+            %s, %s, %s, %s, %s,
             %s,
             %s, %s,
             %s, %s,
@@ -648,6 +707,7 @@ def _upsert_batter_projection(
             adj_pitcher           = EXCLUDED.adj_pitcher,
             adj_weather_hr        = EXCLUDED.adj_weather_hr,
             adj_weather_hits      = EXCLUDED.adj_weather_hits,
+            adj_defense           = EXCLUDED.adj_defense,
             pitcher_data_quality  = EXCLUDED.pitcher_data_quality,
             lineup_position       = EXCLUDED.lineup_position,
             lineup_confirmed      = EXCLUDED.lineup_confirmed,
@@ -671,6 +731,7 @@ def _upsert_batter_projection(
             round(proj.adj_pitcher_hit, 3),
             round(proj.adj_weather_hr, 3),
             round(proj.adj_weather_hit, 3),
+            round(proj.adj_defense_hit, 3),
             pitcher_data_quality,
             lineup_position,
             lineup_confirmed,
@@ -811,6 +872,10 @@ def _project_team_side(
 
     starter_projs: list[BatterProjection] = []
     bullpen_projs: list[BatterProjection] = []
+    starter_player_ids: list[int | None] = []
+    # Opposing team's leak-free hit-suppression factor (one lookup per side).
+    defense_mult = _load_team_defense_factor(
+        conn, opposing_team_id, summary.game_date, season)
 
     for hitter in hitters:
         skill = _load_batter_skill(conn, hitter.player_id)
@@ -896,6 +961,7 @@ def _project_team_side(
             matchup_xwoba=matchup.xwoba,
             matchup_k_rate=matchup.k_rate,
             matchup_iso=matchup.iso,
+            defense_hit_mult=defense_mult,
         )
         if bundle is not None:
             proj = _xgb_apply(
@@ -921,6 +987,7 @@ def _project_team_side(
 
         if len(starter_projs) < LINEUP_STARTERS:
             starter_projs.append(proj)
+            starter_player_ids.append(hitter.player_id)
             # Same batter (matchup-based skill), re-projected against the opposing
             # bullpen's pitcher quality — only the pitcher adjustment changes.
             pen_split, _pen_quality = resolve_pitcher_skill(
@@ -938,10 +1005,14 @@ def _project_team_side(
                     matchup_xwoba=matchup.xwoba,
                     matchup_k_rate=matchup.k_rate,
                     matchup_iso=matchup.iso,
+                    defense_hit_mult=defense_mult,
                 )
             )
 
     _pad_confirmed_projs(starter_projs, lineup_confirmed, bullpen_projs)
+    # Keep the player-id list aligned to the (possibly padded) starter lineup; padded
+    # league-average slots have no real batter, so they map to None.
+    starter_player_ids.extend([None] * (len(starter_projs) - len(starter_player_ids)))
 
     if len(starter_projs) < LINEUP_STARTERS:
         log.warning(
@@ -981,6 +1052,7 @@ def _project_team_side(
         expected_runs=expected_team_runs(starter_projs, bullpen_projs),
         starter_projs=starter_projs,
         bullpen_projs=bullpen_projs,
+        starter_player_ids=starter_player_ids,
         opp_starter_innings=opp_starter_innings,
     )
 
@@ -1145,6 +1217,10 @@ def _project_game(
         away_starter_innings=away.opp_starter_innings,
     )
     _upsert_game_sim_projection(conn, game.game_id, sim)
+    # Persist the simulator's per-batter prop distributions (aligned to each side's
+    # lineup) so the prop board can blend them against the closed-form binomial.
+    _upsert_game_sim_batter_props(conn, game.game_id, sim.home_props, home.starter_player_ids)
+    _upsert_game_sim_batter_props(conn, game.game_id, sim.away_props, away.starter_player_ids)
 
     conn.execute(
         "UPDATE games SET projected_at = NOW() WHERE id = %s",
@@ -1206,6 +1282,48 @@ def _upsert_game_sim_projection(
     )
 
 
+def _upsert_game_sim_batter_props(
+    conn: psycopg.Connection,
+    game_id: int,
+    props: list,
+    player_ids: list[int | None],
+) -> None:
+    """Persist one side's simulated per-batter props, aligned slot-for-slot to the
+    lineup that produced them. Padded league-average slots (player_id None) are skipped —
+    they have no real batter to attach the distribution to."""
+    for prop, player_id in zip(props, player_ids):
+        if player_id is None:
+            continue
+        conn.execute(
+            """
+            INSERT INTO game_sim_batter_props (
+                game_id, player_id,
+                p_hit_1plus, p_hit_2plus, p_hr, p_k_1plus, expected_tb, expected_hits,
+                computed_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (game_id, player_id) DO UPDATE SET
+                p_hit_1plus   = EXCLUDED.p_hit_1plus,
+                p_hit_2plus   = EXCLUDED.p_hit_2plus,
+                p_hr          = EXCLUDED.p_hr,
+                p_k_1plus     = EXCLUDED.p_k_1plus,
+                expected_tb   = EXCLUDED.expected_tb,
+                expected_hits = EXCLUDED.expected_hits,
+                computed_at   = NOW()
+            """,
+            (
+                game_id,
+                player_id,
+                round(prop.p_hit_1plus, 3),
+                round(prop.p_hit_2plus, 3),
+                round(prop.p_hr, 3),
+                round(prop.p_k_1plus, 3),
+                round(prop.expected_tb, 2),
+                round(prop.expected_hits, 2),
+            ),
+        )
+
+
 def _clear_slate_projections(conn: psycopg.Connection, game_date: date) -> int:
     """
     Drop projections for THIS slate date only, before recomputing it.
@@ -1244,6 +1362,13 @@ def _clear_slate_projections(conn: psycopg.Connection, game_date: date) -> int:
     conn.execute(
         """
         DELETE FROM game_sim_projections
+        WHERE game_id IN (SELECT id FROM games WHERE game_date = %s)
+        """,
+        (game_date,),
+    )
+    conn.execute(
+        """
+        DELETE FROM game_sim_batter_props
         WHERE game_id IN (SELECT id FROM games WHERE game_date = %s)
         """,
         (game_date,),
@@ -1410,6 +1535,34 @@ def _upsert_backtest_projection(
     )
 
 
+def _update_backtest_sim_props(
+    conn: psycopg.Connection,
+    backtest_run_id: int,
+    game_id: int,
+    props: list,
+    player_ids: list[int | None],
+) -> None:
+    """Record one side's simulated per-batter props onto the already-inserted backtest
+    rows (the closed-form upsert ran first). Padded league-average slots (player_id None)
+    are skipped — no real batter to score."""
+    for prop, player_id in zip(props, player_ids):
+        if player_id is None:
+            continue
+        conn.execute(
+            """
+            UPDATE backtest_projections
+               SET sim_p_hit_1plus = %s, sim_p_hr = %s, sim_p_k_1plus = %s
+             WHERE backtest_run_id = %s AND game_id = %s AND player_id = %s
+            """,
+            (
+                round(prop.p_hit_1plus, 3),
+                round(prop.p_hr, 3),
+                round(prop.p_k_1plus, 3),
+                backtest_run_id, game_id, player_id,
+            ),
+        )
+
+
 def _game_ready_backtest(game: SlateGame) -> str | None:
     """Backtest skip check: only gate on missing probable pitchers, not weather."""
     if game.home_probable_pitcher_id is None or game.away_probable_pitcher_id is None:
@@ -1483,12 +1636,22 @@ def _blend_probabilities(
     )
 
 
+@dataclass
+class BacktestSide:
+    """One team side in the backtest: expected runs plus the lineup the (optional)
+    sim-props run needs (starter projections + their player_ids, padded slots → None)."""
+    expected_runs: float
+    starter_projs: list[BatterProjection]
+    starter_player_ids: list[int | None]
+
+
 def _project_team_side_backtest(
     conn: psycopg.Connection,
     *,
     game: SlateGame,
     team_id: int,
     opposing_pitcher_id: int,
+    opposing_team_id: int,
     is_home: bool,
     season: int,
     park: ParkFactors,
@@ -1496,8 +1659,9 @@ def _project_team_side_backtest(
     backtest_run_id: int,
     summary: ProjectSummary,
     bundle=None,
-) -> float | None:
-    """Project one team side using snapshot skill tables; return expected_team_runs or None."""
+) -> BacktestSide | None:
+    """Project one team side using snapshot skill tables; return the side (expected runs
+    + lineup for the sim) or None when the lineup can't be projected."""
     hitters = _resolve_lineup(
         conn, game_id=game.game_id, team_id=team_id, is_home=is_home, as_of=summary.game_date
     )
@@ -1515,6 +1679,9 @@ def _project_team_side_backtest(
 
     is_retractable_open = False
     starter_projs: list[BatterProjection] = []
+    starter_player_ids: list[int | None] = []
+    defense_mult = _load_team_defense_factor(
+        conn, opposing_team_id, summary.game_date, season)
     # No bullpen leg in backtest: bullpen_skill is a full-season aggregate, so using
     # it for a historical game would leak future data. The team-run formula change
     # (linear weights vs the v1 Pythagorean) is what this backtest measures.
@@ -1611,6 +1778,7 @@ def _project_team_side_backtest(
             matchup_xwoba=matchup.xwoba,
             matchup_k_rate=matchup.k_rate,
             matchup_iso=matchup.iso,
+            defense_hit_mult=defense_mult,
         )
         if bundle is not None:
             # Replace the four market probabilities (blended with mechanistic when
@@ -1630,8 +1798,10 @@ def _project_team_side_backtest(
 
         if len(starter_projs) < LINEUP_STARTERS:
             starter_projs.append(proj)
+            starter_player_ids.append(hitter.player_id)
 
     _pad_confirmed_projs(starter_projs, lineup_confirmed)
+    starter_player_ids.extend([None] * (len(starter_projs) - len(starter_player_ids)))
 
     if len(starter_projs) < LINEUP_STARTERS:
         log.warning(
@@ -1640,7 +1810,11 @@ def _project_team_side_backtest(
         )
         return None
 
-    return expected_team_runs(starter_projs)
+    return BacktestSide(
+        expected_runs=expected_team_runs(starter_projs),
+        starter_projs=starter_projs,
+        starter_player_ids=starter_player_ids,
+    )
 
 
 def _project_game_backtest(
@@ -1664,21 +1838,38 @@ def _project_game_backtest(
         geometry=_park_geometry(game),
     )
 
-    home_runs = _project_team_side_backtest(
+    home = _project_team_side_backtest(
         conn, game=game, team_id=game.home_team_id,
         opposing_pitcher_id=game.away_probable_pitcher_id,
+        opposing_team_id=game.away_team_id,
         is_home=True, season=season, park=park,
         as_of_date=as_of_date, backtest_run_id=backtest_run_id, summary=summary, bundle=bundle,
     )
-    away_runs = _project_team_side_backtest(
+    away = _project_team_side_backtest(
         conn, game=game, team_id=game.away_team_id,
         opposing_pitcher_id=game.home_probable_pitcher_id,
+        opposing_team_id=game.home_team_id,
         is_home=False, season=season, park=park,
         as_of_date=as_of_date, backtest_run_id=backtest_run_id, summary=summary, bundle=bundle,
     )
-    if home_runs is None or away_runs is None:
+    if home is None or away is None:
         summary.skip_reasons.append(f"game {game.game_id}: incomplete team projection")
         return False
+
+    # Optional Monte-Carlo per-batter prop capture for sim-blend weight fitting. Leak-free:
+    # snapshot-projected lineups, NO bullpen leg (bullpen_skill is a full-season aggregate
+    # that would leak the future into a historical game). Same seed scheme as live.
+    if _BACKTEST_SIM_PROPS:
+        sim = simulate_game(
+            home.starter_projs,
+            away.starter_projs,
+            n_sims=SIM_N_SIMS,
+            seed=int(game.game_id),
+        )
+        _update_backtest_sim_props(
+            conn, backtest_run_id, game.game_id, sim.home_props, home.starter_player_ids)
+        _update_backtest_sim_props(
+            conn, backtest_run_id, game.game_id, sim.away_props, away.starter_player_ids)
 
     # Persist the predicted game total so the harness can score run accuracy vs the
     # final score (backtest_game_runs). Per-batter rows already went to backtest_projections.
@@ -1689,7 +1880,7 @@ def _project_game_backtest(
         ON CONFLICT (backtest_run_id, game_id)
             DO UPDATE SET expected_total_runs = EXCLUDED.expected_total_runs
         """,
-        (backtest_run_id, game.game_id, round(home_runs + away_runs, 2)),
+        (backtest_run_id, game.game_id, round(home.expected_runs + away.expected_runs, 2)),
     )
     return True
 
@@ -1817,6 +2008,14 @@ def cmd_project(args: argparse.Namespace) -> None:
         if cal is not None:
             set_calibrator(cal)
             print("[project] Calibration: ON (models/calibration.json)")
+
+    # Opposing-team defense hit adjustment — ON by default (validated −0.37% hit Brier on
+    # the 2025 backtest). Safely degrades to neutral (factor 1.0) when team_defense_daily
+    # has no prior rows, so it can't hurt before refresh-team-defense first populates it.
+    # Set DIAMOND_TEAM_DEFENSE_ENABLED=false to disable.
+    if os.environ.get("DIAMOND_TEAM_DEFENSE_ENABLED", "true").lower() in ("1", "true", "yes"):
+        set_team_defense(True)
+        print("[project] Team defense: ON (xBA hit-suppression factor)")
 
     if as_of_date is not None:
         print(

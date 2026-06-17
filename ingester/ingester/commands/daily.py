@@ -26,6 +26,7 @@ from ingester.commands.refresh_weather import cmd_refresh_weather
 from ingester.commands.refresh_umpires import cmd_refresh_umpires
 from ingester.commands.refresh_skills import cmd_refresh_skills
 from ingester.commands.refresh_bullpen import cmd_refresh_bullpen
+from ingester.commands.refresh_team_defense import cmd_refresh_team_defense
 from ingester.commands.lineups import cmd_refresh_lineups
 from ingester.commands.odds import cmd_refresh_odds
 from ingester.commands.scores import cmd_backfill_scores
@@ -89,6 +90,7 @@ def cmd_daily(args: argparse.Namespace) -> None:
             ("refresh-umpires", cmd_refresh_umpires, False),
             ("refresh-skills", cmd_refresh_skills, False),
             ("refresh-bullpen", cmd_refresh_bullpen, False),
+            ("refresh-team-defense", cmd_refresh_team_defense, False),
             ("refresh-lineups", cmd_refresh_lineups, False),
             ("project", cmd_project, True),
             ("refresh-odds", cmd_refresh_odds, False),
@@ -97,7 +99,7 @@ def cmd_daily(args: argparse.Namespace) -> None:
         ]
         if getattr(args, "skip_skills", False):
             # Both skills and bullpen do the slow Statcast-cache re-aggregation.
-            steps = [s for s in steps if s[0] not in ("refresh-skills", "refresh-bullpen")]
+            steps = [s for s in steps if s[0] not in ("refresh-skills", "refresh-bullpen", "refresh-team-defense")]
 
     names = " -> ".join(name for name, _, _ in steps)
     print(f"[daily] {target}: {names}\n")

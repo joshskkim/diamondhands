@@ -538,6 +538,58 @@ def _spray_angle_deg(hc_x: pd.Series, hc_y: pd.Series) -> pd.Series:
     return np.degrees(np.arctan2(hc_x - _HC_X_HOME, _HC_Y_HOME - hc_y))
 
 
+_HIT_EVENTS_INPARK = frozenset({"single", "double", "triple"})
+
+
+def agg_team_defense_daily(chunks, abbrev_to_id: dict[str, int]) -> list[dict]:
+    """Per (defending team, game date) in-park ball-in-play defensive aggregates.
+
+    For each BIP that stayed in the park (``type == 'X'`` with a non-null xBA, HR
+    excluded), records: count, actual non-HR hits allowed, and Σ xBA
+    (``estimated_ba_using_speedangle``). The defending team is the HOME team in the top
+    of the inning (away batting) and the AWAY team in the bottom. Feeds
+    ``team_defense_daily`` → the leak-free hit-suppression factor. One dict per
+    (team_id, game_date).
+    """
+    cols = ("events", "type", "estimated_ba_using_speedangle",
+            "inning_topbot", "home_team", "away_team", "game_date")
+    acc: dict[tuple[int, object], dict] = {}
+
+    for df in chunks:
+        if df is None or df.empty or not all(c in df.columns for c in cols):
+            continue
+        sub = df[list(cols)].copy()
+        xba = _to_float64(sub["estimated_ba_using_speedangle"])
+        keep = (sub["type"] == "X") & xba.notna() & (sub["events"] != "home_run")
+        sub = sub[keep]
+        if sub.empty:
+            continue
+        def_abbrev = pd.Series(
+            np.where(sub["inning_topbot"] == "Top", sub["home_team"], sub["away_team"])
+        )
+        per = pd.DataFrame({
+            "team_id": def_abbrev.map(lambda a: abbrev_to_id.get(_remap(a))).to_numpy(),
+            "game_date": pd.to_datetime(sub["game_date"]).dt.date.to_numpy(),
+            "act": sub["events"].isin(_HIT_EVENTS_INPARK).astype(int).to_numpy(),
+            "exp": _to_float64(sub["estimated_ba_using_speedangle"]).fillna(0.0).to_numpy(),
+        })
+        per = per[per["team_id"].notna()]
+        if per.empty:
+            continue
+        per["team_id"] = per["team_id"].astype("int64")
+        grouped = per.groupby(["team_id", "game_date"]).agg(
+            bip=("act", "size"), act=("act", "sum"), exp=("exp", "sum"))
+        for (tid, gd), r in grouped.iterrows():
+            a = acc.setdefault((int(tid), gd), {"bip": 0, "act": 0, "exp": 0.0})
+            a["bip"] += int(r["bip"]); a["act"] += int(r["act"]); a["exp"] += float(r["exp"])
+
+    return [
+        {"team_id": tid, "game_date": gd,
+         "bip": v["bip"], "act_hits": v["act"], "exp_hits": round(v["exp"], 3)}
+        for (tid, gd), v in acc.items()
+    ]
+
+
 def agg_batter_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
     """
     Aggregate a season's batted-ball / spray profile per batter from Statcast chunks.

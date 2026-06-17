@@ -4,5 +4,6 @@ public record AdjustmentsDto(
     Double park,
     Double pitcher,
     Double weatherHr,
-    Double weatherHit
+    Double weatherHit,
+    Double defense
 ) {}
