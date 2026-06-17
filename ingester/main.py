@@ -43,6 +43,7 @@ from ingester.commands.backfill_birthdates import cmd_backfill_birthdates
 from ingester.commands.ingest_steamer import cmd_ingest_steamer
 from ingester.commands.refresh_bullpen import cmd_refresh_bullpen
 from ingester.commands.refresh_batted_ball import cmd_refresh_batted_ball
+from ingester.commands.refresh_team_defense import cmd_refresh_team_defense
 from ingester.commands.refresh_bat_tracking import cmd_refresh_bat_tracking
 from ingester.commands.skill_snapshots import cmd_refresh_skill_snapshots
 from ingester.commands.pitch_aggregations import (
@@ -219,6 +220,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Aggregate per-batter spray / batted-ball profiles from Statcast into batter_batted_ball",
     )
     p_batted.add_argument("--season", type=int, default=CURRENT_SEASON, help="Season year (default: current season)")
+
+    p_teamdef = sub.add_parser(
+        "refresh-team-defense",
+        help="Aggregate per-team, per-day defensive hit suppression (xBA) into team_defense_daily",
+    )
+    p_teamdef.add_argument("--season", type=int, default=CURRENT_SEASON, help="Season year (default: current season)")
 
     p_battrack = sub.add_parser(
         "refresh-bat-tracking",
@@ -418,6 +425,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_backtest.add_argument(
         "--weather-carry", action="store_true", default=False, dest="weather_carry",
         help="HR weather via the trajectory carry model with spray-weighted wind, prior-season profiles (leak-free A/B)",
+    )
+    p_backtest.add_argument(
+        "--sim-props", action="store_true", default=False, dest="sim_props",
+        help="Run the Monte-Carlo sim per game (leak-free, no bullpen) and sweep the "
+             "prop-board sim-blend weight per market against actuals (hit/hr/k Brier)",
+    )
+    p_backtest.add_argument(
+        "--team-defense", action="store_true", default=False, dest="team_defense",
+        help="Apply the leak-free opposing-team-defense hit-suppression factor "
+             "(needs team_defense_daily; refresh-team-defense)",
     )
 
     p_accuracy = sub.add_parser(
@@ -663,6 +680,7 @@ COMMANDS = {
     "ingest-steamer":           cmd_ingest_steamer,
     "refresh-bullpen":          cmd_refresh_bullpen,
     "refresh-batted-ball":      cmd_refresh_batted_ball,
+    "refresh-team-defense":     cmd_refresh_team_defense,
     "refresh-bat-tracking":     cmd_refresh_bat_tracking,
     "refresh-skill-snapshots":  cmd_refresh_skill_snapshots,
     "refresh-pitch-aggregations": cmd_refresh_pitch_aggregations,

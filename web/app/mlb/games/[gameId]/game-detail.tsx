@@ -59,9 +59,11 @@ function adjParts(finalVal: number, adjs: Adjustments, isHr: boolean) {
   const park = adjs.park ?? 1
   const pitcher = adjs.pitcher ?? 1
   const weather = w ?? 1
-  const combined = park * pitcher * weather
+  // Opposing-team defense scales the hit side only — a HR is never fielded.
+  const defense = isHr ? 1 : (adjs.defense ?? 1)
+  const combined = park * pitcher * weather * defense
   const base = combined !== 0 ? finalVal / combined : finalVal
-  return { base, park, pitcher, weather }
+  return { base, park, pitcher, weather, defense }
 }
 
 function adjTooltip(
@@ -70,9 +72,11 @@ function adjTooltip(
   isHr: boolean,
   pitcherDataQuality: string | null,
 ): string {
-  const { base, park, pitcher, weather } = adjParts(finalVal, adjs, isHr)
+  const { base, park, pitcher, weather, defense } = adjParts(finalVal, adjs, isHr)
   const f = (n: number | null | undefined) => (n != null ? n.toFixed(3) : '—')
-  const breakdown = `Base: ${f(base)} · Park ×${f(park)} · Pitcher ×${f(pitcher)} · Weather ×${f(weather)} → ${f(finalVal)}`
+  // Defense only moves the hit side; omit the term when neutral so HR tooltips stay clean.
+  const def = !isHr && Math.abs(defense - 1) >= 0.005 ? ` · Defense ×${f(defense)}` : ''
+  const breakdown = `Base: ${f(base)} · Park ×${f(park)} · Pitcher ×${f(pitcher)} · Weather ×${f(weather)}${def} → ${f(finalVal)}`
   const ql = pitcherQualityLabel(pitcherDataQuality)
   return ql ? `${breakdown}\n${ql}` : breakdown
 }
@@ -80,9 +84,10 @@ function adjTooltip(
 // Compact, always-visible adjustment hint shown beneath the player name so the
 // breakdown is discoverable without hovering each cell.
 function adjHint(b: BatterProjection): string {
-  const { park, pitcher, weather } = adjParts(b.probabilities.hit1plus, b.adjustments, false)
+  const { park, pitcher, weather, defense } = adjParts(b.probabilities.hit1plus, b.adjustments, false)
   const f = (n: number) => n.toFixed(2)
-  return `Park ×${f(park)} · Pitcher ×${f(pitcher)} · Wx ×${f(weather)}`
+  const def = Math.abs(defense - 1) >= 0.005 ? ` · Def ×${f(defense)}` : ''
+  return `Park ×${f(park)} · Pitcher ×${f(pitcher)} · Wx ×${f(weather)}${def}`
 }
 
 const PITCH_NAMES: Record<string, string> = {

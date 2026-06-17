@@ -82,6 +82,8 @@ export interface Adjustments {
   pitcher: number
   weatherHr: number
   weatherHit: number
+  /** Opposing-team defense hit-suppression factor (hit side only; 1 = neutral). */
+  defense: number
 }
 
 /** One pitch type in the opposing pitcher's arsenal vs this batter's hand. */
@@ -338,6 +340,7 @@ export interface PropBoardPick {
   adjPark: number | null
   adjPitcher: number | null
   adjWeather: number | null
+  adjDefense: number | null
   stadium: string | null
   /** 'L' | 'R' | 'S' — batting side (server defaults unknown to 'R'). */
   bats: string | null

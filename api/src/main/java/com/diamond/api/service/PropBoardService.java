@@ -10,6 +10,7 @@ import com.diamond.api.repository.PropBoardRepository.PitcherPrice;
 import com.diamond.api.repository.PropBoardRepository.PitcherRow;
 import com.diamond.api.repository.PropBoardRepository.SlateRow;
 import io.micrometer.observation.annotation.Observed;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
@@ -31,9 +32,12 @@ import java.util.function.Function;
 @Service
 public class PropBoardService {
 
-    /** A market definition: model probability + the weather adjustment that drives it. */
+    /** A market definition: model probability + the weather adjustment that drives it.
+     *  {@code simProb} is the Monte-Carlo simulator's estimate of the same market, blended
+     *  into the closed-form model probability when sim-blending is enabled. */
     private record Market(String key, String oddsMarket,
                           Function<SlateRow, Double> prob,
+                          Function<SlateRow, Double> simProb,
                           Function<SlateRow, Double> weather,
                           Double minSeasonRate,
                           double leagueRate) {}
@@ -63,14 +67,54 @@ public class PropBoardService {
     // League clear-rates per market (≈2025-26: share of starter games with 1+ hit /
     // 1+ HR / 1+ K) — the prior a thin empirical sample regresses toward.
     private static final List<Market> MARKETS = List.of(
-        new Market("hit", "hit", SlateRow::pHit1, SlateRow::adjWeatherHits, 0.45, 0.62),
-        new Market("hr",  "hr",  SlateRow::pHr,   SlateRow::adjWeatherHr,   0.08, 0.15),
-        new Market("k",   null,  SlateRow::pK1,   r -> null,                null, 0.66));
+        new Market("hit", "hit", SlateRow::pHit1, SlateRow::pSimHit, SlateRow::adjWeatherHits, 0.45, 0.62),
+        new Market("hr",  "hr",  SlateRow::pHr,   SlateRow::pSimHr,  SlateRow::adjWeatherHr,   0.08, 0.15),
+        new Market("k",   null,  SlateRow::pK1,   SlateRow::pSimK,   r -> null,                null, 0.66));
+
+    // Sim-blend (Jun 2026): blend the Monte-Carlo simulator's per-batter prop estimate
+    // into the closed-form binomial BEFORE the empirical shrinkage. The sim captures
+    // lineup turnover and PA-count variance the closed-form model can't. OFF by default
+    // and the per-market weights default to 0 — they are to be fit on the backtest harness
+    // before anything ships live (env: DIAMOND_SIM_PROP_BLEND_ENABLED / _WEIGHT_HIT/_HR/_K).
+    @Value("${diamond.sim-prop-blend.enabled:false}")
+    private boolean simBlendEnabled;
+    @Value("${diamond.sim-prop-blend.weight-hit:0.0}")
+    private double simWeightHit;
+    @Value("${diamond.sim-prop-blend.weight-hr:0.0}")
+    private double simWeightHr;
+    @Value("${diamond.sim-prop-blend.weight-k:0.0}")
+    private double simWeightK;
 
     private final PropBoardRepository repo;
 
     public PropBoardService(PropBoardRepository repo) {
         this.repo = repo;
+    }
+
+    /** The configured sim-blend weight for a market (0 when unset → closed-form only). */
+    private double simWeight(String key) {
+        return switch (key) {
+            case "hit" -> simWeightHit;
+            case "hr"  -> simWeightHr;
+            case "k"   -> simWeightK;
+            default -> 0.0;
+        };
+    }
+
+    /** Closed-form model prob, optionally blended toward the simulator's estimate. Returns
+     *  the closed-form value unchanged when blending is off, weight is 0, or the sim has no
+     *  estimate for this batter (e.g. a padded lineup slot). */
+    double effectiveModelProb(Market m, SlateRow r) {
+        if (!simBlendEnabled) return m.prob().apply(r);
+        return simBlend(m.prob().apply(r), m.simProb().apply(r), simWeight(m.key()));
+    }
+
+    /** Weighted blend of the closed-form model prob toward the simulator's estimate.
+     *  No-op (returns the model prob unchanged) when the sim has no estimate or the
+     *  weight is non-positive. */
+    static double simBlend(double modelProb, Double simProb, double weight) {
+        if (simProb == null || weight <= 0.0) return modelProb;
+        return weight * simProb + (1.0 - weight) * modelProb;
     }
 
     /** A candidate scored for one market: its clear rates and blended probability. */
@@ -105,7 +149,7 @@ public class PropBoardService {
                 .map(r -> {
                     ClearRates rates = ratesByPlayer.get(r.playerId());
                     return new Scored(r, rates,
-                        blend(m.prob().apply(r), seasonRate(m.key(), rates),
+                        blend(effectiveModelProb(m, r), seasonRate(m.key(), rates),
                               nSeasonOf(rates), m.leagueRate()));
                 })
                 .filter(s -> !guardVetoed(m, s.rates()))
@@ -268,6 +312,7 @@ public class PropBoardService {
             r.opposingPitcherId(), r.opposingPitcher(), r.pitcherDataQuality(),
             r.matchupXwoba(), r.matchupQuality(),
             r.adjPark(), r.adjPitcher(), m.weather().apply(r),
+            r.adjDefense(),
             r.stadium(),
             r.bats(), r.pullPct(), r.fbPct(), r.avgLaunchSpeed(),
             pullFence, pullWall,

@@ -82,6 +82,21 @@ function buildReasons(p: PropBoardPick): string[] {
     reasons.push(env.join('; ') + '.')
   }
 
+  // Opposing-team defense (hit card only): the leak-free xBA hit-suppression factor.
+  // < 1 means the defense takes hits away (headwind for the over); > 1 means it leaks them.
+  if (
+    p.market === 'hit' &&
+    p.adjDefense != null &&
+    Math.abs(p.adjDefense - 1) >= ADJ_NOTEWORTHY
+  ) {
+    const delta = Math.round(Math.abs(p.adjDefense - 1) * 100)
+    reasons.push(
+      p.adjDefense < 1
+        ? `Opposing defense is suppressing hits — ${delta}% below average on balls in play (a headwind for this over).`
+        : `Opposing defense is leaking hits — ${delta}% above average on balls in play (a tailwind here).`,
+    )
+  }
+
   // Park fit (HR card only): the batter's pull tendency against the fence his
   // handedness targets. Raw facts — the model's personalization stays server-side.
   if (

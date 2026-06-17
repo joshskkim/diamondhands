@@ -187,6 +187,35 @@ class TestBatterModelHandComputed(unittest.TestCase):
         self.assertAlmostEqual(proj.expected_hits, self.EXP_HITS, places=4)
         self.assertAlmostEqual(proj.expected_total_bases, self.EXP_TB, places=4)
 
+    def test_defense_mult_scales_hits_not_hr_or_k(self) -> None:
+        """A <1 opposing-defense factor lowers the hit rate / P(hit) but leaves the HR and
+        K rates (and probabilities) untouched — defense can't field a HR or a strikeout."""
+        base = project_batter(self.SKILL, self.PITCHER, self.PARK,
+                              self.ADJ_WEATHER_HIT, self.ADJ_WEATHER_HR)
+        suppressed = project_batter(self.SKILL, self.PITCHER, self.PARK,
+                                    self.ADJ_WEATHER_HIT, self.ADJ_WEATHER_HR,
+                                    defense_hit_mult=0.90)
+
+        self.assertLess(suppressed.adjusted.hit_per_pa, base.adjusted.hit_per_pa)
+        self.assertLess(suppressed.probabilities.p_hit_1plus, base.probabilities.p_hit_1plus)
+        # HR and K untouched
+        self.assertAlmostEqual(suppressed.adjusted.hr_per_pa, base.adjusted.hr_per_pa, places=9)
+        self.assertAlmostEqual(suppressed.adjusted.k_per_pa, base.adjusted.k_per_pa, places=9)
+        self.assertEqual(suppressed.probabilities.p_hr, base.probabilities.p_hr)
+        self.assertEqual(suppressed.probabilities.p_k_1plus, base.probabilities.p_k_1plus)
+        # Only the non-HR portion of the hit rate is scaled: new = hr + (hit-hr)*mult
+        non_hr = base.adjusted.hit_per_pa - base.adjusted.hr_per_pa
+        self.assertAlmostEqual(
+            suppressed.adjusted.hit_per_pa,
+            base.adjusted.hr_per_pa + non_hr * 0.90, places=9)
+
+    def test_defense_mult_default_is_noop(self) -> None:
+        base = project_batter(self.SKILL, self.PITCHER, self.PARK,
+                              self.ADJ_WEATHER_HIT, self.ADJ_WEATHER_HR)
+        same = project_batter(self.SKILL, self.PITCHER, self.PARK,
+                             self.ADJ_WEATHER_HIT, self.ADJ_WEATHER_HR, defense_hit_mult=1.0)
+        self.assertEqual(same.probabilities.p_hit_1plus, base.probabilities.p_hit_1plus)
+
 
 class TestAdjustedRateClamps(unittest.TestCase):
     def test_extreme_hr_clamped(self) -> None:

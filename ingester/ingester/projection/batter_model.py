@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from scipy.stats import binom
 
@@ -105,6 +105,9 @@ class BatterProjection:
     adj_pitcher_hit: float
     adj_weather_hit: float
     adj_weather_hr: float
+    # Opposing-team defense hit-suppression factor applied to the non-HR hit rate
+    # (1.0 = neutral / feature off). Surfaced as a prop-board reasoning bullet.
+    adj_defense_hit: float = 1.0
 
 
 def l30_blend_weight(pa_l30: int) -> float:
@@ -262,6 +265,7 @@ def project_batter(
     matchup_xwoba: float | None = None,
     matchup_k_rate: float | None = None,
     matchup_iso: float | None = None,
+    defense_hit_mult: float = 1.0,
 ) -> BatterProjection:
     """
     Compute full batter projection from blended skill and environment adjustments.
@@ -289,6 +293,13 @@ def project_batter(
     # Shrink toward league means before deriving any outputs so probabilities and
     # expected counts stay consistent with the rates actually stored for audit.
     adjusted = shrink_rates(adjusted)
+    # Opposing-team defense (leak-free hit-suppression factor) scales ONLY the non-HR hit
+    # rate — defense can't field a home run. Applied post-shrinkage so it moves the final
+    # probabilities directly (matches how the factor was fit on the backtest).
+    if defense_hit_mult != 1.0:
+        non_hr = max(adjusted.hit_per_pa - adjusted.hr_per_pa, 0.0)
+        adjusted = replace(
+            adjusted, hit_per_pa=adjusted.hr_per_pa + non_hr * defense_hit_mult)
     probs = compute_probabilities(adjusted, expected_pa)
     exp_hits, exp_tb = compute_expected_counts(adjusted, blends.iso, expected_pa)
 
@@ -304,6 +315,7 @@ def project_batter(
         adj_pitcher_hit=pitcher.hit,
         adj_weather_hit=adj_weather_hit,
         adj_weather_hr=adj_weather_hr,
+        adj_defense_hit=defense_hit_mult,
     )
 
 

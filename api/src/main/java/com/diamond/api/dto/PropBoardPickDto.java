@@ -42,6 +42,7 @@ public record PropBoardPickDto(
     Double adjPark,
     Double adjPitcher,
     Double adjWeather,
+    Double adjDefense,
     String stadium,
     String bats,
     Double pullPct,
