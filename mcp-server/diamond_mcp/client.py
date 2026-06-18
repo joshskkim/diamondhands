@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 
-from . import config
+from . import config, metrics
 
 _TIMEOUT = httpx.Timeout(config.API_TIMEOUT_SECONDS)
 
@@ -40,14 +40,18 @@ async def get(path: str, params: dict[str, Any] | None = None) -> Any:
     try:
         resp = await _client.get(path, params=_clean_params(params))
         resp.raise_for_status()
+        metrics.record_upstream(path, "ok")
         if not resp.content:
             return {}
         return resp.json()
     except httpx.HTTPStatusError as e:
+        metrics.record_upstream(path, str(e.response.status_code))
         return {"error": f"HTTP {e.response.status_code} from {path}", "body": e.response.text[:500]}
     except httpx.HTTPError as e:
+        metrics.record_upstream(path, "error")
         return {"error": f"request to {path} failed: {e}"}
     except ValueError as e:  # JSON decode error
+        metrics.record_upstream(path, "decode_error")
         return {"error": f"invalid JSON from {path}: {e}"}
 
 

@@ -44,3 +44,13 @@ RATE_LIMIT_ENABLED = os.environ.get("MCP_RATE_LIMIT_ENABLED", "true").lower() ==
 
 # Paths exempt from auth + rate limiting (liveness probes, metrics scraping).
 EXEMPT_PATHS = ("/healthz", "/metrics")
+
+# ── Observability ─────────────────────────────────────────────────────────────
+# OTLP HTTP traces endpoint — same collector the Java API uses, so a single Claude
+# request becomes one distributed trace spanning diamond-mcp -> diamond-api -> JDBC.
+OTLP_TRACING_ENDPOINT = os.environ.get(
+    "OTLP_TRACING_ENDPOINT", "http://localhost:4318/v1/traces"
+)
+OTEL_SERVICE_NAME = os.environ.get("OTEL_SERVICE_NAME", "diamond-mcp")
+# Tracing is part of the networked path; off by default on stdio to keep Claude Desktop quiet.
+TRACING_ENABLED = os.environ.get("MCP_TRACING_ENABLED", "true").lower() == "true"
