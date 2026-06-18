@@ -17,7 +17,7 @@ services:
     environment:
       DOMAIN: ${DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL:-}
-    depends_on: [web, api]
+    depends_on: [web, api, mcp-server]
 
   web:
     image: ${REGISTRY:-ghcr.io/joshskkim}/diamond-web:${IMAGE_TAG:-latest}
@@ -49,6 +49,26 @@ services:
         condition: service_healthy
       flyway:
         condition: service_completed_successfully
+
+  mcp-server:
+    image: ${REGISTRY:-ghcr.io/joshskkim}/diamond-mcp:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: mcp-server/Dockerfile
+    restart: unless-stopped
+    expose: ["8090"]
+    environment:
+      DIAMOND_API_URL: http://api:8080
+      MCP_TRANSPORT: http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8090"
+      # Must be set in .env — without keys auth is OFF, and /mcp is publicly routed.
+      MCP_API_KEYS: ${MCP_API_KEYS}
+      OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
+      OTEL_SERVICE_NAME: diamond-mcp
+    depends_on:
+      api:
+        condition: service_started
 
   ingester:
     image: ${REGISTRY:-ghcr.io/joshskkim}/diamond-ingester:${IMAGE_TAG:-latest}

@@ -66,6 +66,18 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build & push MCP server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: mcp-server/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/diamond-mcp:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/diamond-mcp:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   deploy:
     needs: build-push
     runs-on: ubuntu-latest
@@ -101,7 +113,16 @@ jobs:
             done
             if [ "$ok" != 1 ]; then
               echo "Smoke test failed — the site did not come up."
-              docker compose -f compose.prod.yml logs --tail=80 api web
+              docker compose -f compose.prod.yml logs --tail=80 api web mcp-server
+              exit 1
+            fi
+
+            # MCP server: /healthz is internal-only, so probe it from inside the container.
+            echo "MCP health…"
+            if ! docker compose -f compose.prod.yml exec -T mcp-server \
+                 python -c "import urllib.request; urllib.request.urlopen('http://localhost:8090/healthz')"; then
+              echo "MCP server health check failed."
+              docker compose -f compose.prod.yml logs --tail=80 mcp-server
               exit 1
             fi
             echo "Smoke test passed."

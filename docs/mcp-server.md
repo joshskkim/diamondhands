@@ -71,6 +71,30 @@ results, saving the model multi-call round trips:
   `mcp_tool_latency_seconds{tool}`, and `mcp_upstream_requests_total{endpoint,status}` (endpoint
   labels normalized — numeric ids → `{id}` — to bound cardinality).
 
+## Deployment
+
+The server ships as a container (`mcp-server/Dockerfile`, ingester-style uv build) and is wired
+into the prod stack but **not yet live** — verified locally only:
+
+- `compose.prod.yml` — a `mcp-server` service (`MCP_TRANSPORT=http`, talks to `api:8080`, traces
+  to `jaeger:4318`, keys from `MCP_API_KEYS`) with a `/healthz` Docker healthcheck.
+- `deploy/Caddyfile` — routes `…/mcp` (Streamable-HTTP) to the container; `/healthz` + `/metrics`
+  stay internal. Auth is enforced by the server, so the public endpoint isn't an open firehose.
+- `monitoring/prometheus.prod.yml` — a `diamond-mcp` scrape job.
+- `.github/workflows/deploy.yml` — a build-push step (GHCR) + an internal MCP health check in the
+  deploy smoke test. The deploy job stays gated on the `DOMAIN` repo var, so nothing goes live
+  until prod is explicitly wired up.
+
+Local verification:
+
+```bash
+docker build -f mcp-server/Dockerfile -t diamond-mcp .
+docker run --rm -p 8095:8090 -e DIAMOND_API_URL=http://host.docker.internal:8080 \
+  -e MCP_API_KEYS=devkey diamond-mcp
+curl localhost:8095/healthz                                   # 200
+curl -X POST localhost:8095/mcp -d '{}'                       # 401 (no key)
+```
+
 ## Load test
 
 `loadtest/driver.py` opens N concurrent real MCP sessions (full Streamable-HTTP + JSON-RPC
