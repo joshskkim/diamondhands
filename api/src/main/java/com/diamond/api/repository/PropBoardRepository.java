@@ -34,7 +34,7 @@ public class PropBoardRepository {
         SELECT bp.game_id, at2.abbreviation || ' @ ' || ht.abbreviation AS matchup,
                bp.player_id, p.full_name, t.abbreviation AS team_abbr,
                bp.lineup_position, bp.lineup_confirmed, bp.expected_pa,
-               bp.p_hit_1plus, bp.p_hr, bp.p_k_1plus,
+               bp.p_hit_1plus, bp.p_hr, bp.p_k_1plus, bp.p_bb_1plus,
                sbp.p_hit_1plus AS sim_hit, sbp.p_hr AS sim_hr, sbp.p_k_1plus AS sim_k,
                bp.adj_park, bp.adj_pitcher, bp.adj_weather_hr, bp.adj_weather_hits, bp.adj_defense,
                bp.matchup_xwoba, bp.matchup_quality, bp.pitcher_data_quality,
@@ -64,7 +64,7 @@ public class PropBoardRepository {
     // current calendar year only.
     private static final String RATES_SQL = """
         WITH logs AS (
-            SELECT hits, home_runs, strikeouts, game_date,
+            SELECT hits, home_runs, strikeouts, walks, game_date,
                    ROW_NUMBER() OVER (ORDER BY game_date DESC) AS rn
             FROM player_game_stats
             WHERE player_id = ? AND game_date < ? AND plate_appearances > 0
@@ -73,9 +73,11 @@ public class PropBoardRepository {
             AVG((hits > 0)::int)       FILTER (WHERE rn <= 10) AS hit_l10,
             AVG((home_runs > 0)::int)  FILTER (WHERE rn <= 10) AS hr_l10,
             AVG((strikeouts > 0)::int) FILTER (WHERE rn <= 10) AS k_l10,
+            AVG((walks > 0)::int)      FILTER (WHERE rn <= 10) AS bb_l10,
             AVG((hits > 0)::int)       FILTER (WHERE game_date >= ?) AS hit_season,
             AVG((home_runs > 0)::int)  FILTER (WHERE game_date >= ?) AS hr_season,
             AVG((strikeouts > 0)::int) FILTER (WHERE game_date >= ?) AS k_season,
+            AVG((walks > 0)::int)      FILTER (WHERE game_date >= ?) AS bb_season,
             COUNT(*)                   FILTER (WHERE game_date >= ?) AS n_season
         FROM logs
         """;
@@ -85,7 +87,7 @@ public class PropBoardRepository {
     // replaces the per-candidate N+1. Player ids are passed as a SQL array (= ANY(?)).
     private static final String RATES_BATCH_SQL = """
         WITH logs AS (
-            SELECT player_id, hits, home_runs, strikeouts, game_date,
+            SELECT player_id, hits, home_runs, strikeouts, walks, game_date,
                    ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY game_date DESC) AS rn
             FROM player_game_stats
             WHERE player_id = ANY(?) AND game_date < ? AND plate_appearances > 0
@@ -95,9 +97,11 @@ public class PropBoardRepository {
             AVG((hits > 0)::int)       FILTER (WHERE rn <= 10) AS hit_l10,
             AVG((home_runs > 0)::int)  FILTER (WHERE rn <= 10) AS hr_l10,
             AVG((strikeouts > 0)::int) FILTER (WHERE rn <= 10) AS k_l10,
+            AVG((walks > 0)::int)      FILTER (WHERE rn <= 10) AS bb_l10,
             AVG((hits > 0)::int)       FILTER (WHERE game_date >= ?) AS hit_season,
             AVG((home_runs > 0)::int)  FILTER (WHERE game_date >= ?) AS hr_season,
             AVG((strikeouts > 0)::int) FILTER (WHERE game_date >= ?) AS k_season,
+            AVG((walks > 0)::int)      FILTER (WHERE game_date >= ?) AS bb_season,
             COUNT(*)                   FILTER (WHERE game_date >= ?) AS n_season
         FROM logs
         GROUP BY player_id
@@ -132,7 +136,8 @@ public class PropBoardRepository {
                (pp.workload->'p_outs'->>'17.5')::float AS po_175,
                spp.n_sims AS spp_n_sims,
                spp.expected_hits AS spp_hits, spp.expected_er AS spp_er,
-               spp.hits_hist, spp.er_hist
+               spp.hits_hist, spp.er_hist,
+               pk.pitcher_k_rate, ol.opp_k_rate, ol.opp_xwoba
         FROM pitcher_projections pp
         JOIN games g   ON g.id  = pp.game_id
         JOIN players p ON p.id  = pp.pitcher_id
@@ -142,6 +147,26 @@ public class PropBoardRepository {
         JOIN teams at2 ON at2.id = g.away_team_id
         LEFT JOIN game_sim_pitcher_props spp
                ON spp.game_id = pp.game_id AND spp.pitcher_id = pp.pitcher_id
+        -- Reasoning driver: the pitcher's own K rate, BF-weighted across handedness
+        -- (filter season — pitcher_skill keeps multiple seasons at one key).
+        LEFT JOIN LATERAL (
+            SELECT SUM(ps.k_rate * ps.batters_faced) / NULLIF(SUM(ps.batters_faced), 0)
+                       AS pitcher_k_rate
+            FROM pitcher_skill ps
+            WHERE ps.player_id = pp.pitcher_id
+              AND ps.season = EXTRACT(YEAR FROM g.game_date)::int
+        ) pk ON TRUE
+        -- Reasoning driver: the opposing lineup he faces — PA-weighted K rate and xwOBA
+        -- over that team's projected batters for this game.
+        LEFT JOIN LATERAL (
+            SELECT SUM(bs.k_rate * bp2.expected_pa) / NULLIF(SUM(bp2.expected_pa), 0)
+                       AS opp_k_rate,
+                   SUM(bs.xwoba  * bp2.expected_pa) / NULLIF(SUM(bp2.expected_pa), 0)
+                       AS opp_xwoba
+            FROM batter_projections bp2
+            JOIN batter_skill bs ON bs.player_id = bp2.player_id
+            WHERE bp2.game_id = pp.game_id AND bp2.is_home <> pp.is_home
+        ) ol ON TRUE
         WHERE g.game_date = ?
         """;
 
@@ -167,7 +192,7 @@ public class PropBoardRepository {
         LocalDate seasonStart = LocalDate.of(date.getYear(), 1, 1);
         return jdbc.query(RATES_SQL,
             rs -> rs.next() ? mapRates(rs) : null,
-            playerId, date, seasonStart, seasonStart, seasonStart, seasonStart);
+            playerId, date, seasonStart, seasonStart, seasonStart, seasonStart, seasonStart);
     }
 
     /** Clear rates for many players in one query (keyed by player_id). Players with no
@@ -187,6 +212,7 @@ public class PropBoardRepository {
                 ps.setObject(4, seasonStart);
                 ps.setObject(5, seasonStart);
                 ps.setObject(6, seasonStart);
+                ps.setObject(7, seasonStart);
                 return ps;
             },
             rs -> {
@@ -218,7 +244,8 @@ public class PropBoardRepository {
             dbl(rs, "po_145"), dbl(rs, "po_175"),
             (Integer) rs.getObject("spp_n_sims"),
             dbl(rs, "spp_hits"), dbl(rs, "spp_er"),
-            toIntArray(rs.getArray("hits_hist")), toIntArray(rs.getArray("er_hist"))),
+            toIntArray(rs.getArray("hits_hist")), toIntArray(rs.getArray("er_hist")),
+            dbl(rs, "pitcher_k_rate"), dbl(rs, "opp_k_rate"), dbl(rs, "opp_xwoba")),
             date);
     }
 
@@ -245,6 +272,7 @@ public class PropBoardRepository {
             dbl(rs, "p_hit_1plus"),
             dbl(rs, "p_hr"),
             dbl(rs, "p_k_1plus"),
+            dbl(rs, "p_bb_1plus"),
             dbl(rs, "sim_hit"),
             dbl(rs, "sim_hr"),
             dbl(rs, "sim_k"),
@@ -271,8 +299,8 @@ public class PropBoardRepository {
 
     private ClearRates mapRates(ResultSet rs) throws SQLException {
         return new ClearRates(
-            dbl(rs, "hit_l10"), dbl(rs, "hr_l10"), dbl(rs, "k_l10"),
-            dbl(rs, "hit_season"), dbl(rs, "hr_season"), dbl(rs, "k_season"),
+            dbl(rs, "hit_l10"), dbl(rs, "hr_l10"), dbl(rs, "k_l10"), dbl(rs, "bb_l10"),
+            dbl(rs, "hit_season"), dbl(rs, "hr_season"), dbl(rs, "k_season"), dbl(rs, "bb_season"),
             rs.getInt("n_season"));
     }
 
@@ -297,7 +325,7 @@ public class PropBoardRepository {
         long gameId, String matchup,
         int playerId, String player, String team,
         Integer lineupPosition, Boolean lineupConfirmed, Double expectedPa,
-        Double pHit1, Double pHr, Double pK1,
+        Double pHit1, Double pHr, Double pK1, Double pBb1,
         // Monte-Carlo simulator's per-batter estimate of the same markets (null when the
         // sim didn't cover this batter — e.g. a padded league-average lineup slot).
         Double pSimHit, Double pSimHr, Double pSimK,
@@ -311,8 +339,8 @@ public class PropBoardRepository {
     ) {}
 
     public record ClearRates(
-        Double hitL10, Double hrL10, Double kL10,
-        Double hitSeason, Double hrSeason, Double kSeason,
+        Double hitL10, Double hrL10, Double kL10, Double bbL10,
+        Double hitSeason, Double hrSeason, Double kSeason, Double bbSeason,
         int nSeason
     ) {}
 
@@ -326,7 +354,10 @@ public class PropBoardRepository {
         Double po145, Double po175,
         // Game-simulator hits-allowed / earned-runs distributions (null when the game
         // had no sim row — e.g. no confirmed lineups). nSims is the histogram denominator.
-        Integer nSims, Double expectedHits, Double expectedEr, int[] hitsHist, int[] erHist
+        Integer nSims, Double expectedHits, Double expectedEr, int[] hitsHist, int[] erHist,
+        // Reasoning drivers: the pitcher's own K rate (BF-weighted) and the opposing
+        // lineup's PA-weighted K rate / xwOBA. Null when skill rows are absent.
+        Double pitcherKRate, Double opponentKRate, Double opponentXwoba
     ) {}
 
     /** Best cached over-price for a pitcher prop, with the line it sits on. */

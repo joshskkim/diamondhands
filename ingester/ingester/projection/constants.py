@@ -25,7 +25,10 @@ import os
 # v2.6.1: Marcel prior regresses each metric by its own constant (K light, ISO heavy).
 # v2.7.0: thin ISO histories regress toward a bat-speed-implied ISO anchor (Statcast
 # bat tracking) instead of the flat league mean.
-MODEL_VERSION: str = "v2.10.0"
+# v2.11.0: per-batter walk rate (batter_skill.bb_rate) × pitcher walk-allowed
+# multiplier now drives a P(>=1 BB) projection (p_bb_1plus) for the walks prop —
+# previously bb_rate was used only as a flat league input to team runs.
+MODEL_VERSION: str = "v2.11.0"
 
 # ---------------------------------------------------------------------------
 # League-average reference (2025 MLB approximations)
@@ -342,11 +345,17 @@ SHRINKAGE_ALPHA: float = 0.20
 ADJUSTED_HIT_PER_PA_CLAMP: tuple[float, float] = (0.10, 0.45)
 ADJUSTED_HR_PER_PA_CLAMP: tuple[float, float] = (0.001, 0.10)
 ADJUSTED_K_PER_PA_CLAMP: tuple[float, float] = (0.05, 0.45)
+# Walks (v2.11): plate discipline × pitcher control, no park/weather term. Band
+# spans a free-swinger (~3%) to an elite eye vs a wild arm (~20%).
+ADJUSTED_BB_PER_PA_CLAMP: tuple[float, float] = (0.02, 0.20)
 
 # Pitcher matchup multipliers (raw rate / league rate).
 PITCHER_MULT_HIT_CLAMP: tuple[float, float] = (0.75, 1.30)
 PITCHER_MULT_HR_CLAMP: tuple[float, float] = (0.60, 1.50)
 PITCHER_MULT_K_CLAMP: tuple[float, float] = (0.70, 1.40)
+# Pitcher walk-allowed multiplier — control varies more arm-to-arm than K, so a
+# slightly wider band than K.
+PITCHER_MULT_BB_CLAMP: tuple[float, float] = (0.60, 1.50)
 
 # expected_total_bases: avg bases per hit ≈ 1 + iso_blend * 3
 AVG_BASES_PER_HIT_ISO_MULT: float = 3.0

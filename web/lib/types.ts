@@ -407,6 +407,11 @@ export interface PitcherPropPick {
   bestBook: string | null
   priceAmerican: number | null
   evPct: number | null
+  /** Reasoning drivers (null when skill rows are absent): the pitcher's own K rate
+   *  and the opposing lineup's PA-weighted K rate / xwOBA. */
+  pitcherKRate: number | null
+  opponentKRate: number | null
+  opponentXwoba: number | null
   runnersUp: PitcherRunnerUp[]
 }
 

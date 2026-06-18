@@ -28,6 +28,11 @@ public record PitcherPropPickDto(
     String bestBook,
     Integer priceAmerican,
     Double evPct,
+    // Reasoning drivers (null when skill rows are absent): the pitcher's own K rate
+    // and the opposing lineup's PA-weighted K rate / xwOBA.
+    Double pitcherKRate,
+    Double opponentKRate,
+    Double opponentXwoba,
     List<RunnerUp> runnersUp
 ) {
     /** One over-threshold from the workload distribution: P(over {@code line}). */

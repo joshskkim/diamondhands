@@ -69,7 +69,11 @@ public class PropBoardService {
     private static final List<Market> MARKETS = List.of(
         new Market("hit", "hit", SlateRow::pHit1, SlateRow::pSimHit, SlateRow::adjWeatherHits, 0.45, 0.62),
         new Market("hr",  "hr",  SlateRow::pHr,   SlateRow::pSimHr,  SlateRow::adjWeatherHr,   0.08, 0.15),
-        new Market("k",   null,  SlateRow::pK1,   SlateRow::pSimK,   r -> null,                null, 0.66));
+        new Market("k",   null,  SlateRow::pK1,   SlateRow::pSimK,   r -> null,                null, 0.66),
+        // Walks (v2.11): no Monte-Carlo prop and no park/weather term. oddsMarket="bb" so a
+        // best over-price attaches IF a book quotes batter walks (rare in our feed); the card
+        // stands on the projection alone otherwise. leagueRate ≈ P(>=1 BB per game).
+        new Market("bb",  "bb",  SlateRow::pBb1,  r -> null,         r -> null,                null, 0.30));
 
     // Sim-blend (Jun 2026): blend the Monte-Carlo simulator's per-batter prop estimate
     // into the closed-form binomial BEFORE the empirical shrinkage. The sim captures
@@ -247,6 +251,7 @@ public class PropBoardService {
             price == null ? null : price.bookmaker(),
             price == null ? null : price.priceAmerican(),
             evPct,
+            round(top.pitcherKRate(), 4), round(top.opponentKRate(), 4), round(top.opponentXwoba(), 4),
             runnersUp);
     }
 
@@ -365,6 +370,7 @@ public class PropBoardService {
             case "hit" -> l10 ? rates.hitL10() : rates.hitSeason();
             case "hr"  -> l10 ? rates.hrL10()  : rates.hrSeason();
             case "k"   -> l10 ? rates.kL10()   : rates.kSeason();
+            case "bb"  -> l10 ? rates.bbL10()  : rates.bbSeason();
             default -> null;
         };
     }

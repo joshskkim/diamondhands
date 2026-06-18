@@ -4,10 +4,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ingester.projection.constants import (
+    LEAGUE_BB_PER_PA,
     LEAGUE_HIT_PER_PA,
     LEAGUE_HR_PER_PA,
     LEAGUE_K_PER_PA,
     MIN_BF_PITCHER_HANDEDNESS,
+    PITCHER_MULT_BB_CLAMP,
     PITCHER_MULT_HIT_CLAMP,
     PITCHER_MULT_HR_CLAMP,
     PITCHER_MULT_K_CLAMP,
@@ -24,6 +26,7 @@ class PitcherHandSplit:
     hits_per_pa: float
     hr_per_pa: float
     k_rate: float
+    bb_rate: float = LEAGUE_BB_PER_PA
 
 
 # Synthetic league-average pitcher used as Tier 3 fallback.
@@ -34,6 +37,7 @@ LEAGUE_AVG_PITCHER = PitcherHandSplit(
     hits_per_pa=LEAGUE_HIT_PER_PA,
     hr_per_pa=LEAGUE_HR_PER_PA,
     k_rate=LEAGUE_K_PER_PA,
+    bb_rate=LEAGUE_BB_PER_PA,
 )
 
 
@@ -42,6 +46,7 @@ class PitcherAdjustments:
     hit: float
     hr: float
     k: float
+    bb: float
 
 
 def _clamp_mult(value: float, bounds: tuple[float, float]) -> float:
@@ -80,6 +85,7 @@ def overall_pitcher_split(splits: list[PitcherHandSplit]) -> PitcherHandSplit:
         hits_per_pa=_weighted_rate(splits, "hits_per_pa"),
         hr_per_pa=_weighted_rate(splits, "hr_per_pa"),
         k_rate=_weighted_rate(splits, "k_rate"),
+        bb_rate=_weighted_rate(splits, "bb_rate"),
     )
 
 
@@ -112,6 +118,7 @@ def compute_pitcher_adjustments(split: PitcherHandSplit) -> PitcherAdjustments:
         ),
         hr=rate_multiplier(split.hr_per_pa, LEAGUE_HR_PER_PA, PITCHER_MULT_HR_CLAMP),
         k=rate_multiplier(split.k_rate, LEAGUE_K_PER_PA, PITCHER_MULT_K_CLAMP),
+        bb=rate_multiplier(split.bb_rate, LEAGUE_BB_PER_PA, PITCHER_MULT_BB_CLAMP),
     )
 
 

@@ -32,6 +32,7 @@ from ingester.projection.workload import (
 )
 from ingester.projection.constants import (
     EXPECTED_PA_PER_STARTER,
+    LEAGUE_BB_PER_PA,
     LINEUP_SIZE_HITTERS,
     LINEUP_STARTERS,
     MIN_PLATOON_PA,
@@ -410,7 +411,8 @@ def _load_batter_skill(
 ) -> BatterSkillInput | None:
     row = conn.execute(
         """
-        SELECT xwoba, xwoba_l30, k_rate, k_rate_l30, iso, iso_l30, pa_l30, barrel_rate
+        SELECT xwoba, xwoba_l30, k_rate, k_rate_l30, iso, iso_l30, pa_l30,
+               barrel_rate, bb_rate
         FROM batter_skill
         WHERE player_id = %s
         """,
@@ -430,6 +432,7 @@ def _load_batter_skill(
         iso_l30=float(row[5]) if row[5] is not None else iso,
         pa_l30=int(row[6] or 0),
         barrel_rate=float(row[7]) if row[7] is not None else None,
+        bb_rate=float(row[8]) if row[8] is not None else LEAGUE_BB_PER_PA,
     )
 
 
@@ -479,7 +482,7 @@ def _load_pitcher_splits(
 ) -> list[PitcherHandSplit]:
     rows = conn.execute(
         """
-        SELECT vs_handedness, batters_faced, hits_per_pa, hr_per_pa, k_rate
+        SELECT vs_handedness, batters_faced, hits_per_pa, hr_per_pa, k_rate, bb_rate
         FROM pitcher_skill
         WHERE player_id = %s AND season = %s
         """,
@@ -496,6 +499,7 @@ def _load_pitcher_splits(
                 hits_per_pa=float(r[2]),
                 hr_per_pa=float(r[3]),
                 k_rate=float(r[4]),
+                bb_rate=float(r[5]) if r[5] is not None else LEAGUE_BB_PER_PA,
             )
         )
     return splits
@@ -674,7 +678,7 @@ def _upsert_batter_projection(
         INSERT INTO batter_projections (
             game_id, player_id, opposing_pitcher_id, is_home,
             expected_pa,
-            p_hit_1plus, p_hit_2plus, p_hr, p_k_1plus,
+            p_hit_1plus, p_hit_2plus, p_hr, p_k_1plus, p_bb_1plus,
             expected_hits, expected_total_bases,
             adj_park, adj_pitcher, adj_weather_hr, adj_weather_hits, adj_defense,
             pitcher_data_quality,
@@ -685,7 +689,7 @@ def _upsert_batter_projection(
         VALUES (
             %s, %s, %s, %s,
             %s,
-            %s, %s, %s, %s,
+            %s, %s, %s, %s, %s,
             %s, %s,
             %s, %s, %s, %s, %s,
             %s,
@@ -701,6 +705,7 @@ def _upsert_batter_projection(
             p_hit_2plus           = EXCLUDED.p_hit_2plus,
             p_hr                  = EXCLUDED.p_hr,
             p_k_1plus             = EXCLUDED.p_k_1plus,
+            p_bb_1plus            = EXCLUDED.p_bb_1plus,
             expected_hits         = EXCLUDED.expected_hits,
             expected_total_bases  = EXCLUDED.expected_total_bases,
             adj_park              = EXCLUDED.adj_park,
@@ -725,6 +730,7 @@ def _upsert_batter_projection(
             proj.probabilities.p_hit_2plus,
             proj.probabilities.p_hr,
             proj.probabilities.p_k_1plus,
+            proj.probabilities.p_bb_1plus,
             round(proj.expected_hits, 3),
             round(proj.expected_total_bases, 3),
             round(proj.adj_park_hit, 3),
@@ -1658,6 +1664,8 @@ def _xgb_apply(
     xprobs = BatterProbabilities(
         p_hit_1plus=round(p["h1"], 4), p_hit_2plus=round(p["h2"], 4),
         p_hr=round(p["hr"], 4), p_k_1plus=round(p["k"], 4),
+        # XGB predicts only the four legacy markets — carry the mechanistic walk prob.
+        p_bb_1plus=proj.probabilities.p_bb_1plus,
     )
     if bundle.blend is not None:
         xprobs = _blend_probabilities(proj.probabilities, xprobs, bundle.blend)
@@ -1681,6 +1689,8 @@ def _blend_probabilities(
         p_hit_2plus=b("h2", mech.p_hit_2plus, xgb.p_hit_2plus),
         p_hr=b("hr", mech.p_hr, xgb.p_hr),
         p_k_1plus=b("k", mech.p_k_1plus, xgb.p_k_1plus),
+        # No XGB walk market — keep the mechanistic walk prob unblended.
+        p_bb_1plus=mech.p_bb_1plus,
     )
 
 

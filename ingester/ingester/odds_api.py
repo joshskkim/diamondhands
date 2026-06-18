@@ -55,6 +55,7 @@ RUN_LINE_MARKETS = {"run_line", "run_line_f5"}
 PROP_MARKETS = {
     "batter_hits": "hit",
     "batter_home_runs": "hr",
+    "batter_walks": "bb",
     "pitcher_strikeouts": "pitcher_k",
     "pitcher_outs": "pitcher_outs",
 }
