@@ -197,5 +197,65 @@ class TestBullpenTransition(unittest.TestCase):
         self.assertLess(withpen.full.expected_total, base.full.expected_total)
 
 
+class TestPitcherProps(unittest.TestCase):
+    def test_hists_sum_to_nsims_and_match_expected(self) -> None:
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=4000, seed=30)
+        for pp in (sim.home_pitcher_props, sim.away_pitcher_props):
+            self.assertEqual(sum(pp.hits_hist), 4000)
+            self.assertEqual(sum(pp.er_hist), 4000)
+            # Expected value reconstructed from the histogram matches the stored mean
+            # (within the >=max clipping — league hits/ER stay well under the ceilings).
+            mean_h = sum(i * c for i, c in enumerate(pp.hits_hist)) / 4000
+            self.assertAlmostEqual(mean_h, pp.expected_hits, delta=0.05)
+
+    def test_league_starter_allows_reasonable_hits_and_er(self) -> None:
+        # A league-average lineup vs a ~5-inning starter: a handful of hits, ~2-3 ER.
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=5000, seed=31)
+        pp = sim.home_pitcher_props
+        self.assertGreater(pp.expected_hits, 3.0)
+        self.assertLess(pp.expected_hits, 7.0)
+        self.assertGreater(pp.expected_er, 1.0)
+        self.assertLess(pp.expected_er, 4.0)
+
+    def test_weaker_lineup_tags_the_starter_less(self) -> None:
+        # The home starter faces the AWAY lineup; a weak away lineup => fewer hits/ER.
+        strong = [_proj(0.330, 0.080, 0.15, pid=i) for i in range(9)]
+        weak = [_proj(0.180, 0.010, 0.30, pid=i) for i in range(9)]
+        sim = simulate_game(strong, weak, n_sims=4000, seed=32)
+        self.assertLess(sim.home_pitcher_props.expected_hits,
+                        sim.away_pitcher_props.expected_hits)
+        self.assertLess(sim.home_pitcher_props.expected_er,
+                        sim.away_pitcher_props.expected_er)
+
+    def test_shorter_starter_allows_fewer_runs(self) -> None:
+        # Pulling the starter an inning earlier can only lower his runs/hits allowed.
+        league = _league_lineup()
+        deep = simulate_game(league, league, n_sims=6000, seed=33,
+                             home_starter_innings=6, away_starter_innings=6)
+        short = simulate_game(league, league, n_sims=6000, seed=33,
+                              home_starter_innings=3, away_starter_innings=3)
+        self.assertLess(short.home_pitcher_props.expected_er,
+                        deep.home_pitcher_props.expected_er)
+
+
+class TestRunLineCover(unittest.TestCase):
+    def test_symmetric_cover_probs_balanced(self) -> None:
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=8000, seed=40)
+        # No push at a .5 line: a side's -1.5 and the other's +1.5 partition the space.
+        self.assertAlmostEqual(
+            sim.full.p_home_cover(-1.5) + sim.full.p_away_cover(1.5), 1.0, places=6)
+        self.assertAlmostEqual(sim.p_home_cover_1_5, sim.full.p_home_cover(-1.5), places=9)
+        # Symmetric lineups => home -1.5 cover roughly equals away +1.5 underdog cover's
+        # complement; the favorite-side cover should sit below 0.5.
+        self.assertLess(sim.p_home_cover_1_5, 0.5)
+
+    def test_strong_home_covers_more(self) -> None:
+        strong = [_proj(0.330, 0.080, 0.15, pid=i) for i in range(9)]
+        weak = [_proj(0.180, 0.010, 0.30, pid=i) for i in range(9)]
+        sim = simulate_game(strong, weak, n_sims=4000, seed=41)
+        self.assertGreater(sim.p_home_cover_1_5, 0.5)
+        self.assertGreater(sim.p_home_cover_1_5, sim.p_away_cover_1_5)
+
+
 if __name__ == "__main__":
     unittest.main()

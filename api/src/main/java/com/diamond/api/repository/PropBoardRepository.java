@@ -3,6 +3,7 @@ package com.diamond.api.repository;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.sql.Array;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -116,7 +117,9 @@ public class PropBoardRepository {
 
     // Starting-pitcher projections + workload distribution for the pitcher-prop cards.
     // p_k thresholds are 4.5/5.5/6.5; p_outs are 14.5/17.5 (fixed by the workload model).
-    // opponent = the lineup this starter faces.
+    // hits-allowed / earned-runs come from the game simulator (game_sim_pitcher_props):
+    // raw histogram counts the service turns into P(over line). opponent = the lineup
+    // this starter faces.
     private static final String PITCHER_SQL = """
         SELECT pp.game_id, at2.abbreviation || ' @ ' || ht.abbreviation AS matchup,
                pp.pitcher_id, p.full_name, t.abbreviation AS team,
@@ -126,7 +129,10 @@ public class PropBoardRepository {
                (pp.workload->'p_k'->>'5.5')::float     AS pk_55,
                (pp.workload->'p_k'->>'6.5')::float     AS pk_65,
                (pp.workload->'p_outs'->>'14.5')::float AS po_145,
-               (pp.workload->'p_outs'->>'17.5')::float AS po_175
+               (pp.workload->'p_outs'->>'17.5')::float AS po_175,
+               spp.n_sims AS spp_n_sims,
+               spp.expected_hits AS spp_hits, spp.expected_er AS spp_er,
+               spp.hits_hist, spp.er_hist
         FROM pitcher_projections pp
         JOIN games g   ON g.id  = pp.game_id
         JOIN players p ON p.id  = pp.pitcher_id
@@ -134,6 +140,8 @@ public class PropBoardRepository {
         JOIN teams opp ON opp.id = CASE WHEN pp.is_home THEN g.away_team_id ELSE g.home_team_id END
         JOIN teams ht  ON ht.id = g.home_team_id
         JOIN teams at2 ON at2.id = g.away_team_id
+        LEFT JOIN game_sim_pitcher_props spp
+               ON spp.game_id = pp.game_id AND spp.pitcher_id = pp.pitcher_id
         WHERE g.game_date = ?
         """;
 
@@ -207,7 +215,10 @@ public class PropBoardRepository {
             rs.getString("team"), rs.getString("opponent"),
             dbl(rs, "expected_k"), dbl(rs, "expected_outs"), dbl(rs, "expected_ip"),
             dbl(rs, "pk_45"), dbl(rs, "pk_55"), dbl(rs, "pk_65"),
-            dbl(rs, "po_145"), dbl(rs, "po_175")),
+            dbl(rs, "po_145"), dbl(rs, "po_175"),
+            (Integer) rs.getObject("spp_n_sims"),
+            dbl(rs, "spp_hits"), dbl(rs, "spp_er"),
+            toIntArray(rs.getArray("hits_hist")), toIntArray(rs.getArray("er_hist"))),
             date);
     }
 
@@ -270,6 +281,18 @@ public class PropBoardRepository {
         return v == null ? null : ((Number) v).doubleValue();
     }
 
+    /** Postgres INTEGER[] -> int[]; empty array when the column is NULL (no sim row). */
+    private static int[] toIntArray(Array a) throws SQLException {
+        if (a == null) return new int[0];
+        Object raw = a.getArray();
+        if (raw instanceof Number[] nums) {
+            int[] out = new int[nums.length];
+            for (int i = 0; i < nums.length; i++) out[i] = nums[i] == null ? 0 : nums[i].intValue();
+            return out;
+        }
+        return new int[0];
+    }
+
     public record SlateRow(
         long gameId, String matchup,
         int playerId, String player, String team,
@@ -300,7 +323,10 @@ public class PropBoardRepository {
         int pitcherId, String pitcher, String team, String opponent,
         Double expectedK, Double expectedOuts, Double expectedIp,
         Double pk45, Double pk55, Double pk65,
-        Double po145, Double po175
+        Double po145, Double po175,
+        // Game-simulator hits-allowed / earned-runs distributions (null when the game
+        // had no sim row — e.g. no confirmed lineups). nSims is the histogram denominator.
+        Integer nSims, Double expectedHits, Double expectedEr, int[] hitsHist, int[] erHist
     ) {}
 
     /** Best cached over-price for a pitcher prop, with the line it sits on. */

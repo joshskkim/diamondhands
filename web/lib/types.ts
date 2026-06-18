@@ -391,7 +391,7 @@ export interface PitcherRunnerUp {
  * fields are the best cached over-price and are null when odds haven't been pulled.
  */
 export interface PitcherPropPick {
-  /** 'pitcher_k' | 'pitcher_outs' */
+  /** 'pitcher_k' | 'pitcher_outs' | 'pitcher_hits_allowed' | 'pitcher_earned_runs' */
   market: string
   gameId: number
   matchup: string
@@ -518,17 +518,18 @@ export interface MostLikelyNrfi {
   leanProb: number
 }
 
-/** First-five-innings (F5) market. */
-export interface MostLikelyF5 {
+/** Full-game run-line (±1.5 spread) lean from the simulator's joint run distribution. */
+export interface MostLikelyRunLine {
   gameId: number
   matchup: string
-  f5Total: number
-  bookLine: number | null
-  edge: number | null
-  pOver: number | null
+  /** Team abbr laying the -1.5. */
   favorite: string
-  favoriteProb: number
-  pTie: number
+  /** That side's simulated probability of covering -1.5. */
+  coverProb: number
+  /** -1.5 when run-line odds exist, else null. */
+  bookLine: number | null
+  /** coverProb minus the no-vig book implied for the same side; null without odds. */
+  edge: number | null
 }
 
 /** One player's entry on a prop leaderboard (value = probability or expected count). */
@@ -552,6 +553,6 @@ export interface MostLikely {
   date: string
   totals: MostLikelyTotal[]
   nrfi: MostLikelyNrfi[]
-  f5: MostLikelyF5[]
+  runLine: MostLikelyRunLine[]
   props: PropLeaders
 }

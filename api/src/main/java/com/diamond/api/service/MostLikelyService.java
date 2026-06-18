@@ -16,7 +16,7 @@ import java.util.function.Function;
 /**
  * Assembles the "Most Likely" board from the game simulator's stored outputs: full-game
  * totals vs the consensus book line (edge + P(over) from the sim's run histogram), the
- * first-five-innings (F5) markets, NRFI/YRFI, and the top player props. Read-only and
+ * ±1.5 run-line cover leans, NRFI/YRFI, and the top player props. Read-only and
  * cached per date.
  */
 @Service
@@ -36,7 +36,7 @@ public class MostLikelyService {
     public MostLikelyResponse board(LocalDate date) {
         List<SimRow> sims = repo.findSimRows(date);
         return new MostLikelyResponse(
-            date.toString(), totals(sims), nrfi(sims), f5(sims), props(repo.findPropRows(date)));
+            date.toString(), totals(sims), nrfi(sims), runLine(sims), props(repo.findPropRows(date)));
     }
 
     // ── Full-game totals vs the line ──────────────────────────────────────────
@@ -71,22 +71,30 @@ public class MostLikelyService {
         return out;
     }
 
-    // ── First five innings (F5) ────────────────────────────────────────────────
-    private List<F5Dto> f5(List<SimRow> sims) {
-        List<F5Dto> out = new ArrayList<>();
+    // ── Run line (±1.5 spread) ─────────────────────────────────────────────────
+    private List<RunLineDto> runLine(List<SimRow> sims) {
+        List<RunLineDto> out = new ArrayList<>();
         for (SimRow s : sims) {
-            Double edge = s.bookF5Total() == null ? null : round(s.f5Total() - s.bookF5Total(), 2);
-            Double pOver = pOver(s.f5TotalHist(), s.nSims(), s.bookF5Total());
-            boolean homeFav = s.f5PHomeLead() >= s.f5PAwayLead();
-            out.add(new F5Dto(
-                s.gameId(), s.matchup(), round(s.f5Total(), 2),
-                s.bookF5Total() == null ? null : round(s.bookF5Total(), 1),
-                edge, pOver,
+            // Favorite = the side the sim makes likelier to win by 2+ (cover -1.5).
+            boolean homeFav = s.pHomeCover15() >= s.pAwayCover15();
+            double coverProb = homeFav ? s.pHomeCover15() : s.pAwayCover15();
+            // De-vig the book's -1.5 (favorite-covers) side against the +1.5 side; edge is
+            // the sim's cover prob minus that no-vig implied. Null when no run-line odds.
+            Double edge = null;
+            if (s.bookFavImplied() != null && s.bookDogImplied() != null) {
+                double sum = s.bookFavImplied() + s.bookDogImplied();
+                if (sum > 0) {
+                    edge = round(coverProb - s.bookFavImplied() / sum, 3);
+                }
+            }
+            Double bookLine = (s.bookFavImplied() != null && s.bookDogImplied() != null) ? -1.5 : null;
+            out.add(new RunLineDto(
+                s.gameId(), s.matchup(),
                 homeFav ? s.homeAbbr() : s.awayAbbr(),
-                round(homeFav ? s.f5PHomeLead() : s.f5PAwayLead(), 3),
-                round(s.f5PTie(), 3)));
+                round(coverProb, 3), bookLine, edge));
         }
-        out.sort(Comparator.comparingDouble((F5Dto g) ->
+        // Strongest cover edges first; games without run-line odds fall to the bottom.
+        out.sort(Comparator.comparingDouble((RunLineDto g) ->
             g.edge() == null ? Double.NEGATIVE_INFINITY : g.edge()).reversed());
         return out;
     }

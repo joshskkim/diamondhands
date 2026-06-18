@@ -81,37 +81,37 @@ function TotalsCard({ data }: { data: MostLikely['totals'] }) {
   )
 }
 
-function F5Card({ data }: { data: MostLikely['f5'] }) {
+function RunLineCard({ data }: { data: MostLikely['runLine'] }) {
   const rows = data.slice(0, N)
   return (
     <BoardCard
-      title="First 5 Innings"
-      blurb="The starter-driven period the sim predicts best — F5 total + the moneyline lean"
+      title="Run Line"
+      blurb="Sim ±1.5 cover lean vs the de-vigged book price — strongest edges first"
     >
       {rows.length === 0 && <Empty />}
-      {rows.map((f, i) => (
-        <div key={f.gameId} className="flex items-center gap-3 px-4 py-2 hover:bg-white/[0.03] transition-colors">
+      {rows.map((r, i) => (
+        <div key={r.gameId} className="flex items-center gap-3 px-4 py-2 hover:bg-white/[0.03] transition-colors">
           <Rank n={i + 1} />
           <div className="min-w-0 flex-1">
-            <Matchup gameId={f.gameId} label={f.matchup} />
+            <Matchup gameId={r.gameId} label={r.matchup} />
             <div className="text-[11px] text-zinc-500 mt-0.5">
-              F5 lean <span className="text-zinc-300 font-semibold">{f.favorite}</span>{' '}
-              {pct(f.favoriteProb)} · tie {pct(f.pTie)}
+              cover <span className="text-zinc-300 font-semibold">{r.favorite}</span> -1.5{' '}
+              {pct(r.coverProb)}
             </div>
           </div>
-          <div className="text-right shrink-0 w-14">
-            <div className={microLabel}>F5 Tot</div>
-            <div className="text-[13px] font-mono tabular-nums text-zinc-300">{f.f5Total.toFixed(1)}</div>
-          </div>
           <div className="text-right shrink-0 w-12">
+            <div className={microLabel}>Cover</div>
+            <div className="text-[13px] font-mono tabular-nums text-zinc-300">{pct(r.coverProb)}</div>
+          </div>
+          <div className="text-right shrink-0 w-14">
             <div className={microLabel}>Edge</div>
             <div
               className={cn(
                 'text-[13px] font-mono tabular-nums',
-                f.edge == null ? 'text-zinc-600' : f.edge > 0 ? 'text-emerald-400' : 'text-rose-400',
+                r.edge == null ? 'text-zinc-600' : r.edge > 0 ? 'text-emerald-400' : 'text-rose-400',
               )}
             >
-              {f.edge == null ? '—' : signed(f.edge)}
+              {r.edge == null ? '—' : signed(r.edge, 2)}
             </div>
           </div>
         </div>
@@ -160,7 +160,7 @@ export function SimBoards() {
   const { data } = useQuery(mostLikelyQueryOptions())
 
   if (!data) return null
-  if (data.totals.length === 0 && data.f5.length === 0 && data.nrfi.length === 0) return null
+  if (data.totals.length === 0 && data.runLine.length === 0 && data.nrfi.length === 0) return null
 
   return (
     <section className="mb-10">
@@ -168,12 +168,12 @@ export function SimBoards() {
         Sim Signals
       </h2>
       <p className="text-zinc-500 text-xs mb-3">
-        Monte-Carlo game-simulator leans — totals vs the book line, first five innings, and
+        Monte-Carlo game-simulator leans — totals vs the book line, the ±1.5 run line, and
         first-inning runs. Top {N} per market.
       </p>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <TotalsCard data={data.totals} />
-        <F5Card data={data.f5} />
+        <RunLineCard data={data.runLine} />
         <NrfiCard data={data.nrfi} />
       </div>
     </section>
