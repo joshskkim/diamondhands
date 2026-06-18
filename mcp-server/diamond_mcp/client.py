@@ -63,8 +63,11 @@ async def get(path: str, params: dict[str, Any] | None = None) -> Any:
     cleaned = _clean_params(params)
     key = _cache_key(path, cleaned)
 
-    if config.CACHE_ENABLED and key in _cache:
-        return _cache[key]
+    if config.CACHE_ENABLED:
+        if key in _cache:
+            metrics.record_cache(hit=True)
+            return _cache[key]
+        metrics.record_cache(hit=False)
 
     if not _breaker.allow():
         metrics.record_upstream(path, "circuit_open")

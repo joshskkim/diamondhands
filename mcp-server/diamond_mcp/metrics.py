@@ -27,6 +27,9 @@ TOOL_LATENCY = Histogram(
 UPSTREAM_REQUESTS = Counter(
     "mcp_upstream_requests_total", "Upstream Diamond API requests", ["endpoint", "status"]
 )
+CACHE_EVENTS = Counter(
+    "mcp_cache_events_total", "MCP response-cache lookups", ["result"]  # result = hit | miss
+)
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
@@ -66,3 +69,7 @@ def record_upstream(endpoint: str, status: str) -> None:
     # Collapse numeric path segments (/api/games/42/... -> /api/games/{id}/...) to keep
     # the metric's label cardinality bounded.
     UPSTREAM_REQUESTS.labels(_ID_SEGMENT.sub("/{id}", endpoint), status).inc()
+
+
+def record_cache(hit: bool) -> None:
+    CACHE_EVENTS.labels("hit" if hit else "miss").inc()
