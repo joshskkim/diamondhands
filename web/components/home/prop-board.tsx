@@ -17,6 +17,7 @@ const MARKET_META: Record<string, { chip: string; verb: string }> = {
   hit: { chip: 'Hit', verb: 'to record a hit' },
   hr: { chip: 'Home Run', verb: 'to homer' },
   k: { chip: 'Strikeout', verb: 'to strike out at least once' },
+  bb: { chip: 'Walk', verb: 'to draw a walk' },
 }
 
 const PITCHER_MARKET_META: Record<string, { chip: string; unit: string; noun: string }> = {
@@ -58,7 +59,9 @@ function buildReasons(p: PropBoardPick): string[] {
   }
 
   if (p.opposingPitcher) {
-    if (p.matchupXwoba != null) {
+    // matchup xwOBA is a hit/power signal — irrelevant to drawing a walk, so the
+    // walk card just names the pitcher.
+    if (p.market !== 'bb' && p.matchupXwoba != null) {
       const basis =
         p.matchupQuality === 'matchup'
           ? 'his swing profile against this exact pitch mix'
@@ -71,13 +74,14 @@ function buildReasons(p: PropBoardPick): string[] {
     }
   }
 
+  // Park / weather move balls in play and carry — not plate discipline. Skip for walks.
   const env: string[] = []
-  if (p.adjPark != null && Math.abs(p.adjPark - 1) >= ADJ_NOTEWORTHY) {
+  if (p.market !== 'bb' && p.adjPark != null && Math.abs(p.adjPark - 1) >= ADJ_NOTEWORTHY) {
     env.push(
       `${p.stadium ?? 'the park'} plays ${signedPctFromAdj(p.adjPark)} for this stat`,
     )
   }
-  if (p.adjWeather != null && Math.abs(p.adjWeather - 1) >= ADJ_NOTEWORTHY) {
+  if (p.market !== 'bb' && p.adjWeather != null && Math.abs(p.adjWeather - 1) >= ADJ_NOTEWORTHY) {
     env.push(`today's weather adds ${signedPctFromAdj(p.adjWeather)}`)
   }
   if (env.length > 0) {
@@ -224,17 +228,48 @@ function PropCard({ pick }: { pick: PropBoardPick }) {
   )
 }
 
-// Pitcher cards are AMBER (batter cards are cyan) so "whose prop is this" is never
-// ambiguous — these are the starter's line, ranked by expected volume, not P(clear).
-function PitcherCard({ pick }: { pick: PitcherPropPick }) {
-  const meta =
-    PITCHER_MARKET_META[pick.market] ?? { chip: pick.market, unit: '', noun: pick.market }
+// The pitcher card's reasoning bullets — the actual DRIVERS of the line (the header
+// number + the over-distribution row already show the projection itself, so we don't
+// restate it). K/outs lean on strikeout rates; hits/ER lean on the lineup's offense.
+function buildPitcherReasons(pick: PitcherPropPick): string[] {
+  const reasons: string[] = []
+  const kMarket = pick.market === 'pitcher_k' || pick.market === 'pitcher_outs'
 
-  const reasons: string[] = [
-    `Projects for ${pick.expectedValue.toFixed(1)} ${meta.noun}${
-      pick.expectedIp != null ? ` across ~${pick.expectedIp.toFixed(1)} innings` : ''
-    } against ${pick.opponent}.`,
-  ]
+  if (kMarket) {
+    if (pick.pitcherKRate != null) {
+      reasons.push(`Strikes out ${pct(pick.pitcherKRate)} of the batters he faces.`)
+    }
+    if (pick.opponentKRate != null) {
+      reasons.push(
+        `The ${pick.opponent} lineup strikes out ${pct(pick.opponentKRate)} of the time.`,
+      )
+    }
+  } else {
+    // hits allowed / earned runs: the lineup's offensive strength drives the line.
+    if (pick.opponentXwoba != null) {
+      const k =
+        pick.opponentKRate != null
+          ? ` and strikes out ${pct(pick.opponentKRate)} of the time`
+          : ''
+      reasons.push(`The ${pick.opponent} lineup is hitting ${xwoba(pick.opponentXwoba)} xwOBA${k}.`)
+    } else if (pick.opponentKRate != null) {
+      reasons.push(
+        `The ${pick.opponent} lineup strikes out ${pct(pick.opponentKRate)} of the time.`,
+      )
+    }
+  }
+
+  // Early-season fallback when no skill rows exist yet: name the projection so the
+  // card never renders an empty reasoning list.
+  if (reasons.length === 0) {
+    const meta = PITCHER_MARKET_META[pick.market]
+    reasons.push(
+      `Projects for ${pick.expectedValue.toFixed(1)} ${
+        meta?.noun ?? pick.market
+      } against ${pick.opponent}.`,
+    )
+  }
+
   if (pick.priceAmerican != null && pick.bookLine != null) {
     const ev =
       pick.evPct != null
@@ -246,6 +281,16 @@ function PitcherCard({ pick }: { pick: PitcherPropPick }) {
       )})${ev}. Cached lines can be stale; treat as context.`,
     )
   }
+  return reasons
+}
+
+// Pitcher cards are AMBER (batter cards are cyan) so "whose prop is this" is never
+// ambiguous — these are the starter's line, ranked by expected volume, not P(clear).
+function PitcherCard({ pick }: { pick: PitcherPropPick }) {
+  const meta =
+    PITCHER_MARKET_META[pick.market] ?? { chip: pick.market, unit: '', noun: pick.market }
+
+  const reasons = buildPitcherReasons(pick)
 
   return (
     <div className="rounded-xl border border-amber-400/20 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">

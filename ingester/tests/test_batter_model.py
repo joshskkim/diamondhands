@@ -25,6 +25,7 @@ from ingester.projection.constants import (
     ADJUSTED_HR_PER_PA_CLAMP,
     ADJUSTED_K_PER_PA_CLAMP,
     EXPECTED_PA_PER_STARTER,
+    LEAGUE_BB_PER_PA,
     LEAGUE_HIT_PER_PA,
     LEAGUE_HR_PER_PA,
     LEAGUE_ISO,
@@ -66,7 +67,7 @@ class TestBatterModelHandComputed(unittest.TestCase):
         iso_l30=0.190,
         pa_l30=50,
     )
-    PITCHER = PitcherAdjustments(hit=1.1, hr=0.9, k=1.2)
+    PITCHER = PitcherAdjustments(hit=1.1, hr=0.9, k=1.2, bb=1.0)
     PARK = ParkAdjustments(hit=1.05, hr=1.10)
     ADJ_WEATHER_HIT = 1.02
     ADJ_WEATHER_HR = 1.0
@@ -222,7 +223,7 @@ class TestAdjustedRateClamps(unittest.TestCase):
         base = base_rates_from_blend(
             SkillBlends(xwoba=0.45, k_rate=0.20, iso=0.35, weight_l30=0.0)
         )
-        pitcher = PitcherAdjustments(hit=1.3, hr=1.5, k=1.4)
+        pitcher = PitcherAdjustments(hit=1.3, hr=1.5, k=1.4, bb=1.2)
         park = ParkAdjustments(hit=1.05, hr=1.4)
         rates = adjusted_rates_from_factors(base, pitcher, park, 1.05, 1.2)
         self.assertLessEqual(rates.hr_per_pa, ADJUSTED_HR_PER_PA_CLAMP[1])
@@ -243,6 +244,62 @@ class TestPitcherMultiplierClamps(unittest.TestCase):
         adj = compute_pitcher_adjustments(split)
         self.assertEqual(adj.hr, PITCHER_MULT_HR_CLAMP[1])
         self.assertGreater(0.06 / LEAGUE_HR_PER_PA, PITCHER_MULT_HR_CLAMP[1])
+
+
+class TestWalksProjection(unittest.TestCase):
+    """v2.11 walk prop: batter discipline × pitcher control, no park/weather."""
+
+    PARK = ParkAdjustments(hit=1.0, hr=1.0)
+    NEUTRAL = PitcherAdjustments(hit=1.0, hr=1.0, k=1.0, bb=1.0)
+
+    @staticmethod
+    def _skill(bb_rate: float) -> BatterSkillInput:
+        return BatterSkillInput(
+            xwoba=0.320, xwoba_l30=0.320, k_rate=0.22, k_rate_l30=0.22,
+            iso=0.15, iso_l30=0.15, pa_l30=0, bb_rate=bb_rate,
+        )
+
+    @staticmethod
+    def _base(bb_rate: float):
+        return base_rates_from_blend(
+            SkillBlends(xwoba=0.32, k_rate=0.22, iso=0.15, weight_l30=0.0, bb_rate=bb_rate)
+        )
+
+    def test_p_bb_increases_with_walk_rate(self) -> None:
+        low = project_batter(self._skill(0.05), self.NEUTRAL, self.PARK, 1.0, 1.0)
+        high = project_batter(self._skill(0.16), self.NEUTRAL, self.PARK, 1.0, 1.0)
+        self.assertGreater(high.adjusted.bb_per_pa, low.adjusted.bb_per_pa)
+        self.assertGreater(high.probabilities.p_bb_1plus, low.probabilities.p_bb_1plus)
+
+    def test_pitcher_bb_multiplier_scales_walk_rate(self) -> None:
+        base = self._base(0.09)
+        wild = adjusted_rates_from_factors(
+            base, PitcherAdjustments(hit=1.0, hr=1.0, k=1.0, bb=1.4), self.PARK, 1.0, 1.0)
+        control = adjusted_rates_from_factors(
+            base, PitcherAdjustments(hit=1.0, hr=1.0, k=1.0, bb=0.7), self.PARK, 1.0, 1.0)
+        self.assertGreater(wild.bb_per_pa, control.bb_per_pa)
+
+    def test_walks_ignore_park_and_weather(self) -> None:
+        base = self._base(0.09)
+        a = adjusted_rates_from_factors(
+            base, self.NEUTRAL, ParkAdjustments(hit=1.3, hr=1.3), 1.2, 1.2)
+        b = adjusted_rates_from_factors(
+            base, self.NEUTRAL, ParkAdjustments(hit=0.8, hr=0.8), 0.9, 0.9)
+        self.assertAlmostEqual(a.bb_per_pa, b.bb_per_pa, places=9)
+
+    def test_league_avg_projection_has_zero_walk_prob(self) -> None:
+        proj = league_average_projection(4.0)
+        self.assertEqual(proj.probabilities.p_bb_1plus, 0.0)
+        self.assertAlmostEqual(proj.adjusted.bb_per_pa, LEAGUE_BB_PER_PA)
+
+    def test_matchup_override_keeps_skill_walk_rate(self) -> None:
+        # The pitch-mix matchup replaces xwOBA/K/ISO but never the walk rate.
+        without = project_batter(self._skill(0.13), self.NEUTRAL, self.PARK, 1.0, 1.0)
+        with_matchup = project_batter(
+            self._skill(0.13), self.NEUTRAL, self.PARK, 1.0, 1.0,
+            matchup_xwoba=0.40, matchup_k_rate=0.30, matchup_iso=0.25)
+        self.assertAlmostEqual(
+            without.adjusted.bb_per_pa, with_matchup.adjusted.bb_per_pa, places=9)
 
 
 def _proj_with_rates(hit_per_pa: float, hr_per_pa: float, pa: float) -> BatterProjection:

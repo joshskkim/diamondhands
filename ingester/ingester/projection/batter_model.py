@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from scipy.stats import binom
 
 from ingester.projection.constants import (
+    ADJUSTED_BB_PER_PA_CLAMP,
     ADJUSTED_HIT_PER_PA_CLAMP,
     ADJUSTED_HR_PER_PA_CLAMP,
     ADJUSTED_K_PER_PA_CLAMP,
@@ -55,6 +56,9 @@ class BatterSkillInput:
     # v2.9: prior-season regressed barrel rate (true-talent HR signal). None →
     # the HR rate falls back to the pure-ISO basis (pre-v2.9 behaviour).
     barrel_rate: float | None = None
+    # v2.11: season walk rate (regressed in refresh-skills). Season-only — no L30
+    # walk column is computed. Defaults to the league rate when absent.
+    bb_rate: float = LEAGUE_BB_PER_PA
 
 
 @dataclass(frozen=True)
@@ -65,6 +69,8 @@ class SkillBlends:
     weight_l30: float
     # Carried through from skill (no L30 blend — it's a season-constant prior).
     barrel_rate: float | None = None
+    # v2.11: walk rate, carried through from skill (season-only, no L30 blend).
+    bb_rate: float = LEAGUE_BB_PER_PA
 
 
 @dataclass(frozen=True)
@@ -72,6 +78,7 @@ class BaseRates:
     hit_per_pa: float
     hr_per_pa: float
     k_per_pa: float
+    bb_per_pa: float
 
 
 @dataclass(frozen=True)
@@ -79,6 +86,9 @@ class AdjustedRates:
     hit_per_pa: float
     hr_per_pa: float
     k_per_pa: float
+    # Defaulted so callers that don't model walks (game sim, count-only fixtures)
+    # need not supply it; the live batter model always sets it explicitly.
+    bb_per_pa: float = LEAGUE_BB_PER_PA
 
 
 @dataclass(frozen=True)
@@ -87,6 +97,9 @@ class BatterProbabilities:
     p_hit_2plus: float
     p_hr: float
     p_k_1plus: float
+    # Defaulted for the same reason as AdjustedRates.bb_per_pa (e.g. the XGB
+    # backtest path predicts only the four legacy markets).
+    p_bb_1plus: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -135,6 +148,7 @@ def blend_batter_skills(skill: BatterSkillInput) -> SkillBlends:
         iso=blend_metric(skill.iso, l30_iso, skill.pa_l30),
         weight_l30=w_l30,
         barrel_rate=skill.barrel_rate,
+        bb_rate=skill.bb_rate,
     )
 
 
@@ -157,6 +171,7 @@ def base_rates_from_blend(blends: SkillBlends) -> BaseRates:
         hit_per_pa=LEAGUE_HIT_PER_PA * hit_scale,
         hr_per_pa=LEAGUE_HR_PER_PA * hr_scale,
         k_per_pa=blends.k_rate,
+        bb_per_pa=blends.bb_rate,
     )
 
 
@@ -184,6 +199,11 @@ def adjusted_rates_from_factors(
             base.k_per_pa * pitcher.k,
             *ADJUSTED_K_PER_PA_CLAMP,
         ),
+        # Walks: batter discipline × pitcher control only — no park/weather term.
+        bb_per_pa=_clamp(
+            base.bb_per_pa * pitcher.bb,
+            *ADJUSTED_BB_PER_PA_CLAMP,
+        ),
     )
 
 
@@ -201,6 +221,7 @@ def shrink_rates(rates: AdjustedRates) -> AdjustedRates:
         hit_per_pa=(1.0 - a) * rates.hit_per_pa + a * LEAGUE_HIT_PER_PA,
         hr_per_pa=(1.0 - a) * rates.hr_per_pa + a * LEAGUE_HR_PER_PA,
         k_per_pa=(1.0 - a) * rates.k_per_pa + a * LEAGUE_K_PER_PA,
+        bb_per_pa=(1.0 - a) * rates.bb_per_pa + a * LEAGUE_BB_PER_PA,
     )
 
 
@@ -239,6 +260,10 @@ def compute_probabilities(
         ),
         p_k_1plus=round(
             at_least_one_probability(rates.k_per_pa, expected_pa),
+            PROB_DECIMAL_PLACES,
+        ),
+        p_bb_1plus=round(
+            at_least_one_probability(rates.bb_per_pa, expected_pa),
             PROB_DECIMAL_PLACES,
         ),
     )
@@ -285,6 +310,8 @@ def project_batter(
             iso=matchup_iso if matchup_iso is not None else blends.iso,
             weight_l30=blends.weight_l30,
             barrel_rate=blends.barrel_rate,
+            # Walk rate has no pitch-mix matchup analogue — carry the skill blend.
+            bb_rate=blends.bb_rate,
         )
     base = base_rates_from_blend(blends)
     adjusted = adjusted_rates_from_factors(
@@ -325,11 +352,12 @@ def league_average_projection(expected_pa: float) -> BatterProjection:
         hit_per_pa=LEAGUE_HIT_PER_PA,
         hr_per_pa=LEAGUE_HR_PER_PA,
         k_per_pa=LEAGUE_K_PER_PA,
+        bb_per_pa=LEAGUE_BB_PER_PA,
     )
     return BatterProjection(
         expected_pa=expected_pa,
         adjusted=rates,
-        probabilities=BatterProbabilities(0.0, 0.0, 0.0, 0.0),
+        probabilities=BatterProbabilities(0.0, 0.0, 0.0, 0.0, 0.0),
         expected_hits=expected_pa * LEAGUE_HIT_PER_PA,
         expected_total_bases=0.0,
         xwoba_blend=LEAGUE_XWOBA,
