@@ -1,8 +1,10 @@
 'use client'
 
-import { useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import Link from 'next/link'
+import { Search } from 'lucide-react'
 import { AppSidebar } from '@/components/app-sidebar'
+import { AskSearch } from '@/components/ask-search'
 import { MobileNav } from '@/components/mobile-nav'
 import { DiamondMark } from '@/components/diamond-mark'
 import { cn } from '@/lib/utils'
@@ -37,6 +39,19 @@ function useCollapsed(): [boolean, () => void] {
  */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [collapsed, toggleCollapsed] = useCollapsed()
+  const [searchOpen, setSearchOpen] = useState(false)
+
+  // Global ⌘K / Ctrl+K opens the Ask Diamond search palette.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setSearchOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   return (
     <div className="flex min-h-screen">
@@ -48,17 +63,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         )}
       >
         <div className="flex-1 min-h-0">
-          <AppSidebar collapsed={collapsed} onToggleCollapse={toggleCollapsed} />
+          <AppSidebar
+            collapsed={collapsed}
+            onToggleCollapse={toggleCollapsed}
+            onOpenSearch={() => setSearchOpen(true)}
+          />
         </div>
       </aside>
 
       <div className="flex flex-1 min-w-0 flex-col">
-        {/* mobile top bar — brand only; navigation lives in the bottom bar */}
+        {/* mobile top bar — brand + search; primary navigation lives in the bottom bar */}
         <header className="md:hidden sticky top-0 z-40 flex items-center h-12 px-4 bg-[#0e1015]/80 backdrop-blur border-b border-white/10">
           <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight text-zinc-100">
             <DiamondMark />
             <span className="text-base">Diamond</span>
           </Link>
+          <button
+            type="button"
+            onClick={() => setSearchOpen(true)}
+            aria-label="Ask Diamond"
+            className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-white/5 hover:text-zinc-100"
+          >
+            <Search className="h-4 w-4" />
+          </button>
         </header>
 
         {/* pb-20 keeps content clear of the fixed bottom nav on mobile */}
@@ -67,6 +94,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* mobile bottom nav (self-gates to md:hidden) */}
       <MobileNav />
+
+      {/* global Ask Diamond search palette (⌘K) */}
+      {searchOpen && <AskSearch onClose={() => setSearchOpen(false)} />}
     </div>
   )
 }

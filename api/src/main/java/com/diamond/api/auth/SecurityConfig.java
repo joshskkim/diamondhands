@@ -72,6 +72,9 @@ public class SecurityConfig {
                 .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/auth/signup", "/api/auth/signin", "/api/auth/signout").permitAll()
+                // "Ask Diamond" AI query is a public read-like endpoint (POST only because it
+                // takes a question body). Gate to .authenticated() later if it needs sign-in.
+                .requestMatchers(HttpMethod.POST, "/api/ask").permitAll()
                 .requestMatchers("/health").permitAll()
                 // Health probes + Prometheus scrape are unauthenticated on the local
                 // network; other actuator endpoints stay behind auth.
