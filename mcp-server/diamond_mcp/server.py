@@ -234,6 +234,36 @@ async def get_tennis_accuracy() -> Any:
     return await client.get("/api/tennis/accuracy")
 
 
+# ── Composite tools (concurrent fan-out, one call) ──────────────────────────────
+
+
+@mcp.tool()
+@instrument_tool
+async def get_game_briefing(game_id: int) -> Any:
+    """One-shot briefing for an MLB game: batter projections + full sportsbook odds,
+    fetched concurrently and merged. Saves the model a multi-call round trip."""
+    projections, odds = await asyncio.gather(
+        client.get(f"/api/games/{game_id}/projections"),
+        client.get(f"/api/games/{game_id}/odds"),
+    )
+    return {"projections": projections, "odds": odds}
+
+
+@mcp.tool()
+@instrument_tool
+async def get_slate_summary(date: str | None = None) -> Any:
+    """One-shot slate overview: today's games + best-EV plays + the model's prop-board
+    headline, fetched concurrently.
+
+    date: slate date as YYYY-MM-DD; omit for today."""
+    games, best_plays, prop_board = await asyncio.gather(
+        client.get("/api/games/today"),
+        client.get("/api/odds/best", {"date": date, "limit": _BEST_PLAYS_CAP}),
+        client.get("/api/props/board", {"date": date}),
+    )
+    return {"games": games, "best_plays": best_plays, "prop_board": prop_board}
+
+
 def main() -> None:
     """Console-script entry point. stdio by default; HTTP when MCP_TRANSPORT=http."""
     if config.TRANSPORT == "http":

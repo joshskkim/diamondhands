@@ -42,6 +42,9 @@ MCP_TRANSPORT=http uv run diamond-mcp    # networked HTTP on :8090
 | `OTLP_TRACING_ENDPOINT` | `http://localhost:4318/v1/traces` | OTLP-HTTP traces endpoint (same collector as the API) |
 | `OTEL_SERVICE_NAME` | `diamond-mcp` | Service name in traces |
 | `MCP_TRACING_ENABLED` | `true` | Toggle distributed tracing (HTTP transport) |
+| `DIAMOND_API_RETRIES` | `2` | Retries on transient upstream failures |
+| `MCP_BREAKER_FAIL_MAX` / `MCP_BREAKER_RESET_SECONDS` | `5` / `30` | Circuit-breaker trip threshold + cooldown |
+| `MCP_CACHE_ENABLED` / `MCP_CACHE_TTL_SECONDS` | `true` / `45` | Short-TTL response cache |
 
 On the HTTP transport, send the key as `Authorization: Bearer <key>` or `X-API-Key: <key>`.
 `/healthz` and `/metrics` are always exempt. Rate-limit state is in-memory per process; a
@@ -89,3 +92,5 @@ Mirror of the Ask Diamond set: `get_today_games`, `get_game_projections`, `get_b
 Richer surface: `get_game_odds`, `get_prop_odds`, `get_hit_rates`, `get_line_shop`,
 `get_player_spray`, `get_pitcher_skill`, `list_pitch_types`, `get_pitch_type_leaderboard`,
 `get_tennis_rankings`, `get_tennis_accuracy`.
+
+Composite (concurrent fan-out): `get_game_briefing`, `get_slate_summary`.

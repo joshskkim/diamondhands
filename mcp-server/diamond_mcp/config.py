@@ -13,6 +13,20 @@ import os
 API_BASE_URL = os.environ.get("DIAMOND_API_URL", "http://localhost:8080").rstrip("/")
 API_TIMEOUT_SECONDS = float(os.environ.get("DIAMOND_API_TIMEOUT", "10"))
 
+# ── Resilience ──────────────────────────────────────────────────────────────────
+# Extra retries on transient upstream failures (timeouts, connect errors, 5xx).
+API_RETRIES = int(os.environ.get("DIAMOND_API_RETRIES", "2"))
+API_RETRY_BACKOFF_INITIAL = float(os.environ.get("DIAMOND_API_RETRY_BACKOFF_INITIAL", "0.1"))
+API_RETRY_BACKOFF_MAX = float(os.environ.get("DIAMOND_API_RETRY_BACKOFF_MAX", "2.0"))
+# Circuit breaker: open after N consecutive failures, probe again after the cooldown.
+BREAKER_FAIL_MAX = int(os.environ.get("MCP_BREAKER_FAIL_MAX", "5"))
+BREAKER_RESET_SECONDS = float(os.environ.get("MCP_BREAKER_RESET_SECONDS", "30"))
+# Short-TTL response cache. The API already Redis-caches ~5 min, so this mainly cuts
+# repeat round-trips within a conversation + shields against brief upstream blips.
+CACHE_ENABLED = os.environ.get("MCP_CACHE_ENABLED", "true").lower() == "true"
+CACHE_TTL_SECONDS = float(os.environ.get("MCP_CACHE_TTL_SECONDS", "45"))
+CACHE_MAXSIZE = int(os.environ.get("MCP_CACHE_MAXSIZE", "512"))
+
 # ── Transport ───────────────────────────────────────────────────────────────────
 # "stdio" (default, trusted local path for Claude Desktop) or "http" (networked,
 # hardened path with auth + rate limiting + metrics).

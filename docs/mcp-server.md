@@ -22,11 +22,30 @@ Two transports, selected by `MCP_TRANSPORT`:
 
 ## Tools
 
-20 read tools. The first 10 mirror the in-app "Ask Diamond" surface (names + descriptions ported
-from `AskToolRegistry`); the rest expose the richer read endpoints (game/prop odds, hit-rates,
-line-shop, spray, pitcher skill, pitch-type leaderboard, tennis rankings/accuracy). Each is a
-thin async wrapper over one REST endpoint; `client.get()` returns parsed JSON or an
-`{"error": ...}` payload on failure (never raises), so the model can recover gracefully.
+22 read tools. The first 10 mirror the in-app "Ask Diamond" surface (names + descriptions ported
+from `AskToolRegistry`); the next 10 expose the richer read endpoints (game/prop odds, hit-rates,
+line-shop, spray, pitcher skill, pitch-type leaderboard, tennis rankings/accuracy). Most are thin
+async wrappers over one REST endpoint; `client.get()` returns parsed JSON or an `{"error": ...}`
+payload on failure (never raises), so the model can recover gracefully.
+
+The last two are **composite tools** that fan out concurrent upstream calls and merge the
+results, saving the model multi-call round trips:
+
+- `get_game_briefing(game_id)` → batter projections + full odds for a game (2 calls in parallel).
+- `get_slate_summary(date?)` → today's games + best-EV plays + prop-board headline (3 in parallel).
+
+## Resilience
+
+`client.get()` layers three protections around every upstream call:
+
+- **Retry** with exponential backoff + jitter on *transient* failures only (timeouts, connect
+  errors, 5xx); 4xx are caller errors and are not retried.
+- **Circuit breaker** — after `MCP_BREAKER_FAIL_MAX` consecutive failures it opens and fails
+  fast (`{"error": "upstream unavailable (circuit open)"}`) for `MCP_BREAKER_RESET_SECONDS`,
+  then half-opens to probe. Keeps the model from hanging on a dead API.
+- **Short-TTL cache** (`MCP_CACHE_TTL_SECONDS`, default 45s) on successful responses. The API
+  already Redis-caches ~5 min, so this mainly cuts repeat round-trips within a conversation and
+  shields against brief blips (measured cache hit ~0.005ms vs ~5ms miss).
 
 ## Security (HTTP transport)
 

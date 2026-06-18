@@ -81,10 +81,34 @@ async def test_network_error_becomes_error_dict():
     assert "error" in result
 
 
+@respx.mock
+async def test_game_briefing_fans_out_and_merges():
+    proj = respx.get(f"{BASE}/api/games/7/projections").mock(
+        return_value=httpx.Response(200, json={"batters": []})
+    )
+    odds = respx.get(f"{BASE}/api/games/7/odds").mock(
+        return_value=httpx.Response(200, json={"markets": []})
+    )
+    result = await server.get_game_briefing(game_id=7)
+    assert result == {"projections": {"batters": []}, "odds": {"markets": []}}
+    assert proj.called and odds.called
+
+
+@respx.mock
+async def test_slate_summary_fans_out_three():
+    respx.get(f"{BASE}/api/games/today").mock(return_value=httpx.Response(200, json=[]))
+    respx.get(f"{BASE}/api/odds/best").mock(return_value=httpx.Response(200, json=[]))
+    respx.get(f"{BASE}/api/props/board").mock(return_value=httpx.Response(200, json={}))
+    result = await server.get_slate_summary()
+    assert set(result) == {"games", "best_plays", "prop_board"}
+
+
 async def test_all_tools_registered():
-    # 10 Ask-Diamond mirror tools + 10 richer tools = 20
+    # 10 Ask-Diamond mirror + 10 richer + 2 composite = 22
     tools = await server.mcp.list_tools()
-    assert len(tools) == 20
+    assert len(tools) == 22
     names = {t.name for t in tools}
     assert "search_player" in names
     assert "get_pitch_type_leaderboard" in names
+    assert "get_game_briefing" in names
+    assert "get_slate_summary" in names
