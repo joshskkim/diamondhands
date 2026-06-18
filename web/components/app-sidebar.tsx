@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutGrid, TrendingUp, Target, LineChart, Calendar, BarChart3, LogIn, LogOut, Menu, type LucideIcon } from 'lucide-react'
+import { LayoutGrid, TrendingUp, Target, LineChart, Calendar, BarChart3, Search, LogIn, LogOut, Menu, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { DiamondMark } from '@/components/diamond-mark'
 import { SportSwitcher } from '@/components/sport-switcher'
@@ -48,10 +48,12 @@ export function AppSidebar({
   collapsed = false,
   onNavigate,
   onToggleCollapse,
+  onOpenSearch,
 }: {
   collapsed?: boolean
   onNavigate?: () => void
   onToggleCollapse?: () => void
+  onOpenSearch?: () => void
 }) {
   const pathname = usePathname()
   const { user, signOut } = useAuth()
@@ -106,6 +108,33 @@ export function AppSidebar({
             baseHref={isTennis ? '/tennis' : '/mlb'}
             items={SPORT_ITEMS}
           />
+        </div>
+      )}
+
+      {/* Ask Diamond search trigger (expanded: a search-bar button; collapsed: an icon) */}
+      {onOpenSearch && (
+        <div className={cn('pt-3', collapsed ? 'px-2' : 'px-4')}>
+          {collapsed ? (
+            <button
+              type="button"
+              onClick={onOpenSearch}
+              title="Ask Diamond (⌘K)"
+              aria-label="Ask Diamond"
+              className="flex h-9 w-full items-center justify-center rounded-lg border border-white/10 bg-white/5 text-zinc-400 transition-colors hover:bg-white/10 hover:text-zinc-100"
+            >
+              <Search className="h-4 w-4" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onOpenSearch}
+              className="flex w-full items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-500 transition-colors hover:bg-white/10 hover:text-zinc-300"
+            >
+              <Search className="h-4 w-4 shrink-0" />
+              <span className="flex-1 text-left">Ask Diamond…</span>
+              <kbd className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-500">⌘K</kbd>
+            </button>
+          )}
         </div>
       )}
 

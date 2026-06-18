@@ -23,6 +23,17 @@ public class PlayerStatRepository {
         WHERE p.id = ?
         """;
 
+    // Name search for the AI "search_player" tool: case-insensitive substring, capped.
+    private static final String SEARCH_BY_NAME_SQL = """
+        SELECT p.id, p.full_name, p.team_id, t.abbreviation AS team_abbr,
+               p.position, p.bats, p.throws
+        FROM players p
+        LEFT JOIN teams t ON t.id = p.team_id
+        WHERE p.full_name ILIKE ?
+        ORDER BY p.full_name
+        LIMIT ?
+        """;
+
     private static final String RECENT_STATS_SQL = """
         SELECT
             pgs.game_date,
@@ -72,6 +83,19 @@ public class PlayerStatRepository {
 
     public List<RecentStatDto> findRecent(int playerId, int limit) {
         return jdbc.query(RECENT_STATS_SQL, this::mapRow, playerId, limit);
+    }
+
+    /** Case-insensitive name search (substring), capped — backs the AI search_player tool. */
+    public List<PlayerDetailDto> searchByName(String query, int limit) {
+        return jdbc.query(SEARCH_BY_NAME_SQL, (rs, n) -> new PlayerDetailDto(
+            rs.getInt("id"),
+            rs.getString("full_name"),
+            nullableInt(rs, "team_id"),
+            rs.getString("team_abbr"),
+            rs.getString("position"),
+            rs.getString("bats"),
+            rs.getString("throws")),
+            "%" + query + "%", limit);
     }
 
     public List<SprayResponse.SprayBinDto> findSprayBins(int playerId, int season) {

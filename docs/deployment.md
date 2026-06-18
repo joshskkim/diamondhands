@@ -99,6 +99,7 @@ cp .env.prod.example .env       # then edit:
 #   DB_PASSWORD=$(openssl rand -base64 24)
 #   AUTH_JWT_SECRET=$(openssl rand -base64 48)
 #   GRAFANA_ADMIN_PASSWORD=...   ODDS_API_KEY=...   (REGISTRY/IMAGE_TAG defaults are fine)
+#   GEMINI_API_KEY=...  AI_ENABLED=true   (optional — turns on the Ask Diamond AI search)
 
 # GHCR images are private by default — log in once (read:packages PAT), or make the
 # packages public and skip this:
@@ -116,6 +117,16 @@ Install the schedule (edit paths/TZ first):
 ```bash
 crontab deploy/crontab.example     # morning daily + */30 12-18 quick loop + nightly backup
 ```
+
+## Ask Diamond AI (optional)
+The ⌘K "Ask Diamond" search needs a Gemini key. It's read **only** from the `GEMINI_API_KEY`
+env var (`app.ai.api-key` in `application.yml`) and is never committed — with `AI_ENABLED` unset the
+`/api/ask` endpoint stays dark (503), so the key is purely opt-in.
+- **Prod:** put `GEMINI_API_KEY` + `AI_ENABLED=true` in the host `.env` (gitignored), same as the
+  other secrets. Optionally `AI_MODEL=gemini-2.5-pro` to trade cost for quality.
+- **Local dev:** don't hardcode it. Either `export GEMINI_API_KEY=… AI_ENABLED=true` before
+  `mvn spring-boot:run`, or keep it in a gitignored `api/.env.local` and source it:
+  `set -a; source api/.env.local; set +a; mvn spring-boot:run`.
 
 ## CD setup (GitHub)
 - Repo **variable** `DOMAIN` = your domain (baked into the web image at build time). The `deploy`

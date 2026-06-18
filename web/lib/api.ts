@@ -52,6 +52,97 @@ async function apiPost<T>(path: string, body: unknown): Promise<T> {
   return (res.status === 204 ? undefined : await res.json()) as T
 }
 
+// ── Ask Diamond (AI natural-language query, SSE) ──────────────────────────────
+
+/** A navigable result row: a friendly label + an in-app route to push to. */
+export type AskLink = { label: string; href: string }
+
+/** One event off the /api/ask stream: live tool-call status, links, the answer, sources, or error. */
+export type AskEvent =
+  | { type: 'status'; tool: string; label: string }
+  | { type: 'links'; links: AskLink[] }
+  | { type: 'answer'; text: string }
+  | { type: 'sources'; tools: string[] }
+  | { type: 'error'; message: string }
+
+/** Parse one SSE record ("event: x\ndata: {...}") into an {@link AskEvent}. */
+function parseAskEvent(record: string): AskEvent | null {
+  let event = 'message'
+  let data = ''
+  for (const line of record.split('\n')) {
+    if (line.startsWith('event:')) event = line.slice(6).trim()
+    else if (line.startsWith('data:')) data += line.slice(5).trim()
+  }
+  if (!data) return null
+  try {
+    const payload = JSON.parse(data) as Record<string, unknown>
+    switch (event) {
+      case 'status':
+        return { type: 'status', tool: String(payload.tool), label: String(payload.label) }
+      case 'links':
+        return { type: 'links', links: (payload.links as AskLink[]) ?? [] }
+      case 'answer':
+        return { type: 'answer', text: String(payload.text) }
+      case 'sources':
+        return { type: 'sources', tools: (payload.tools as string[]) ?? [] }
+      case 'error':
+        return { type: 'error', message: String(payload.message) }
+      default:
+        return null
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Stream an answer from the AI assistant. POSTs the question and reads the SSE response,
+ * invoking {@link onEvent} for each status/answer/sources/error event as it arrives.
+ */
+export async function askDiamond(
+  question: string,
+  onEvent: (event: AskEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}/api/ask`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify({ question }),
+      signal,
+    })
+  } catch {
+    onEvent({ type: 'error', message: 'Could not reach the server.' })
+    return
+  }
+  if (res.status === 503) {
+    onEvent({ type: 'error', message: 'The AI assistant is not enabled on this server.' })
+    return
+  }
+  if (!res.ok || !res.body) {
+    onEvent({ type: 'error', message: `Request failed (${res.status}).` })
+    return
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let sep: number
+    while ((sep = buffer.indexOf('\n\n')) !== -1) {
+      const record = buffer.slice(0, sep)
+      buffer = buffer.slice(sep + 2)
+      const parsed = parseAskEvent(record)
+      if (parsed) onEvent(parsed)
+    }
+  }
+}
+
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 export type AuthUser = { id: number; email: string; handle: string }

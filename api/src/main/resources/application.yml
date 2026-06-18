@@ -81,3 +81,12 @@ app:
     session-ttl: ${AUTH_SESSION_TTL:7d}
     # Secure cookie requires HTTPS; false for local http dev, true in prod.
     cookie-secure: ${AUTH_COOKIE_SECURE:false}
+  ai:
+    # "Ask Diamond" natural-language query. Disabled unless a key is present so the
+    # endpoint degrades gracefully (503) rather than erroring when no key is configured.
+    enabled: ${AI_ENABLED:false}
+    api-key: ${GEMINI_API_KEY:}
+    model: ${AI_MODEL:gemini-2.5-flash}
+    # Caps so a public endpoint can't run away: answer length + tool-call rounds.
+    max-tokens: ${AI_MAX_TOKENS:3000}
+    max-tool-iterations: ${AI_MAX_TOOL_ITERATIONS:6}
