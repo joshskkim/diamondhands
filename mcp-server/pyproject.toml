@@ -7,6 +7,8 @@ requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
     "mcp[cli]>=1.16.0",
+    "starlette>=0.40.0",
+    "uvicorn>=0.34.0",
 ]
 
 [project.scripts]
@@ -15,7 +17,10 @@ diamond-mcp = "diamond_mcp.server:main"
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
+    "pytest-asyncio>=1.0.0",
     "respx>=0.22.0",
+    "ruff>=0.9.0",
+    "mypy>=1.15.0",
 ]
 
 [build-system]
@@ -28,3 +33,11 @@ packages = ["diamond_mcp"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
