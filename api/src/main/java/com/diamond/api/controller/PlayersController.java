@@ -20,6 +20,16 @@ public class PlayersController {
         this.playerStatRepository = playerStatRepository;
     }
 
+    /** Case-insensitive name search → numeric ids; resolves names for downstream lookups. */
+    @GetMapping("/search")
+    public List<PlayerDetailDto> search(
+        @RequestParam String name,
+        @RequestParam(defaultValue = "8") int limit
+    ) {
+        int safeLimit = Math.min(Math.max(limit, 1), 8);
+        return playerStatRepository.searchByName(name, safeLimit);
+    }
+
     @GetMapping("/{playerId}")
     public ResponseEntity<PlayerDetailDto> getPlayer(@PathVariable int playerId) {
         return playerStatRepository.findById(playerId)
