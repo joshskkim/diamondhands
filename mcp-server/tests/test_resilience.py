@@ -3,9 +3,13 @@
 import httpx
 import respx
 
-from diamond_mcp import client, config
+from diamond_mcp import client, config, metrics
 
 BASE = client.config.API_BASE_URL
+
+
+def _counter_value(counter, **labels) -> float:
+    return counter.labels(**labels)._value.get()
 
 
 @respx.mock
@@ -13,10 +17,17 @@ async def test_cache_serves_second_call_without_upstream():
     route = respx.get(f"{BASE}/api/games/today").mock(
         return_value=httpx.Response(200, json=[{"g": 1}])
     )
+    hits0 = _counter_value(metrics.CACHE_EVENTS, result="hit")
+    miss0 = _counter_value(metrics.CACHE_EVENTS, result="miss")
+
     first = await client.get("/api/games/today")
     second = await client.get("/api/games/today")
+
     assert first == second == [{"g": 1}]
     assert route.call_count == 1  # second served from cache
+    # one miss (first call) then one hit (second call)
+    assert _counter_value(metrics.CACHE_EVENTS, result="miss") == miss0 + 1
+    assert _counter_value(metrics.CACHE_EVENTS, result="hit") == hits0 + 1
 
 
 @respx.mock

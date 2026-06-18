@@ -95,8 +95,13 @@ results, saving the model multi-call round trips:
   request → JDBC query spans.
 - **Metrics (RED).** Prometheus at `GET /metrics`, scraped by the `diamond-mcp` job
   (`monitoring/prometheus.yml`): `mcp_tool_calls_total{tool,status}`,
-  `mcp_tool_latency_seconds{tool}`, and `mcp_upstream_requests_total{endpoint,status}` (endpoint
-  labels normalized — numeric ids → `{id}` — to bound cardinality).
+  `mcp_tool_latency_seconds{tool}`, `mcp_upstream_requests_total{endpoint,status}` (endpoint
+  labels normalized — numeric ids → `{id}` — to bound cardinality), and
+  `mcp_cache_events_total{result}` for cache hit/miss (hit ratio =
+  `rate(…{result="hit"}) / rate(…)`).
+- **Grafana dashboard.** `monitoring/grafana/provisioning/dashboards/diamond-mcp.json` is
+  auto-provisioned: per-tool RPS/errors/p50-p95-p99, overall error ratio, cache hit ratio, and
+  upstream-by-status panels. (Grafana is localhost-bound in prod — reach it via SSH tunnel.)
 
 ## Deployment
 
