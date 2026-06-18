@@ -36,6 +36,9 @@ public class OddsRepository {
         ORDER BY market, side, price_decimal DESC, bookmaker
         """;
 
+    // The batter_projections join requires a CONFIRMED lineup so model probabilities
+    // (p_hit/p_hr) — and therefore prop EV / best plays — are withheld until the real
+    // lineup posts. Projected-lineup games still show the book line, just no edge.
     private static final String PROP_ODDS_SQL = """
         SELECT po.player_id, po.player_name, p.bats, p.position,
                po.market, po.side, po.line, po.bookmaker,
@@ -45,13 +48,21 @@ public class OddsRepository {
         JOIN players p ON p.id = po.player_id
         LEFT JOIN batter_projections bp
                ON bp.game_id = po.game_id AND bp.player_id = po.player_id
+              AND bp.lineup_confirmed = TRUE
         WHERE po.game_id = ?
         ORDER BY po.market, po.player_name, po.line, po.side, po.price_decimal DESC, po.bookmaker
         """;
 
+    // Game-market model edge comes from game_projections, but only for games whose BOTH
+    // lineups are confirmed — projected-lineup games are excluded so their runs never
+    // drive moneyline/run-line/total EV.
     private static final String RUN_PROJ_SQL = """
-        SELECT expected_home_runs, expected_away_runs
-        FROM game_projections WHERE game_id = ?
+        SELECT gp.expected_home_runs, gp.expected_away_runs
+        FROM game_projections gp
+        JOIN games g ON g.id = gp.game_id
+        WHERE gp.game_id = ?
+          AND g.home_lineup_confirmed_at IS NOT NULL
+          AND g.away_lineup_confirmed_at IS NOT NULL
         """;
 
     private static final String META_SQL = """
@@ -116,6 +127,7 @@ public class OddsRepository {
         JOIN players p ON p.id = po.player_id
         LEFT JOIN batter_projections bp
                ON bp.game_id = po.game_id AND bp.player_id = po.player_id
+              AND bp.lineup_confirmed = TRUE
         ORDER BY po.game_id, po.market, po.player_name, po.line, po.side, po.price_decimal DESC, po.bookmaker
         """;
 
@@ -123,6 +135,8 @@ public class OddsRepository {
         SELECT gp.game_id, gp.expected_home_runs, gp.expected_away_runs
         FROM game_projections gp
         JOIN games g ON g.id = gp.game_id AND g.game_date = ?
+        WHERE g.home_lineup_confirmed_at IS NOT NULL
+          AND g.away_lineup_confirmed_at IS NOT NULL
         """;
 
     private static final String META_BY_DATE_SQL = """

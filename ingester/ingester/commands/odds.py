@@ -11,7 +11,6 @@ inside `daily`.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import re
 import unicodedata
@@ -21,20 +20,6 @@ from dotenv import load_dotenv
 
 from ingester.db import build_team_abbrev_map, eastern_today, get_connection
 from ingester import odds_api
-
-
-def odds_input_hash(inputs: tuple) -> str:
-    """sha256 of a game's odds-relevant inputs (pure; no DB).
-
-    `inputs` is a tuple of the values that, when changed, should trigger a fresh
-    odds pull: confirmed-lineup timestamps, weather (temp / wind speed / wind
-    direction / weather-fetched-at), and the two probable pitcher ids. We render
-    each element to a stable string ("" for None) joined by a separator that
-    cannot appear in the rendered values, then sha256 it. Returns the first 64
-    hex chars (a full sha256 digest is 64 chars, so this is the whole digest).
-    """
-    canonical = "|".join("" if v is None else str(v) for v in inputs)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:64]
 
 
 def _norm_name(name: str) -> str:
@@ -60,43 +45,20 @@ def _games_by_team_pair(conn, game_date) -> dict[tuple[int, int], int]:
     return {(home, away): gid for gid, home, away in rows}
 
 
-def _slate_hashes(conn, game_date) -> dict[int, str]:
-    """{game_id: freshly-computed odds_input_hash} for every game on the date.
+def _games_needing_odds(conn, game_date, force: bool = False) -> set[int]:
+    """Game ids on the date that still need an odds pull (haven't started yet).
 
-    The hash covers only inputs that should force a fresh odds pull when they
-    change: confirmed-lineup timestamps, weather, and probable pitcher ids.
-    """
-    rows = conn.execute(
-        """
-        SELECT id,
-               home_lineup_confirmed_at, away_lineup_confirmed_at,
-               temperature_f, wind_speed_mph, wind_direction_degrees, weather_fetched_at,
-               home_probable_pitcher_id, away_probable_pitcher_id
-        FROM games
-        WHERE game_date = %s
-        """,
-        (game_date,),
-    ).fetchall()
-    return {row[0]: odds_input_hash(tuple(row[1:])) for row in rows}
+    A game is *locked* — skipped from further pulls — only once it has odds AND both
+    lineups are confirmed AND its last pull happened after both confirmations. That
+    guarantees exactly one final pull capturing the late-posting player props (books post
+    props after lineups lock) for both teams, then we stop touching the API for it.
 
+    A game therefore still needs a pull when any of these hold:
+      • we've never pulled it (odds_pulled_at IS NULL) — the "new game" case,
+      • either lineup isn't confirmed yet (lines/props still firming), or
+      • we last pulled before the lineups locked (haven't captured the final board).
 
-def _stored_hashes(conn, game_date) -> dict[int, str | None]:
-    """{game_id: stored games.odds_input_hash} for every game on the date."""
-    rows = conn.execute(
-        "SELECT id, odds_input_hash FROM games WHERE game_date = %s",
-        (game_date,),
-    ).fetchall()
-    return {gid: h for gid, h in rows}
-
-
-def _games_needing_props(conn, game_date) -> set[int]:
-    """Game ids on the date with no player-prop rows yet that haven't started.
-
-    Books post player props later than game markets — usually after our first
-    pull of the day. The input-hash gate keys only on lineup/weather/pitcher
-    inputs, so once those lock it would skip the game forever and never capture
-    late-posting props (nor the provider's refreshed event id). We force a
-    re-pull of such games until first pitch or until at least one prop row lands.
+    ``force`` returns every not-yet-started game (the --force override).
     """
     rows = conn.execute(
         """
@@ -104,9 +66,16 @@ def _games_needing_props(conn, game_date) -> set[int]:
         FROM games g
         WHERE g.game_date = %s
           AND g.start_time_utc > NOW()
-          AND NOT EXISTS (SELECT 1 FROM player_prop_odds p WHERE p.game_id = g.id)
+          AND (
+                %s
+             OR g.odds_pulled_at IS NULL
+             OR g.home_lineup_confirmed_at IS NULL
+             OR g.away_lineup_confirmed_at IS NULL
+             OR g.odds_pulled_at < GREATEST(g.home_lineup_confirmed_at,
+                                            g.away_lineup_confirmed_at)
+          )
         """,
-        (game_date,),
+        (game_date, force),
     ).fetchall()
     return {r[0] for r in rows}
 
@@ -151,25 +120,15 @@ def cmd_refresh_odds(args: argparse.Namespace) -> None:
         team_names = _team_name_map(conn)
         games = _games_by_team_pair(conn, game_date)
 
-        # ── Cache gate: compute fresh hashes from DB inputs, compare to stored ──
-        fresh_hashes = _slate_hashes(conn, game_date)
-        stored_hashes = _stored_hashes(conn, game_date)
-        # A game is "fresh" (skippable) only if it has been pulled before
-        # (stored hash non-NULL) AND its inputs are unchanged.
-        changed_game_ids = {
-            gid for gid, h in fresh_hashes.items()
-            if force or stored_hashes.get(gid) is None or stored_hashes[gid] != h
-        }
-        # Also (re)pull games still missing props before first pitch — books
-        # post props after the early game-markets pull, and the hash gate alone
-        # would never revisit them once lineups/weather/pitchers lock.
-        changed_game_ids |= _games_needing_props(conn, game_date)
+        # ── Pull gate: only fetch games that still need odds (see _games_needing_odds) ──
+        changed_game_ids = _games_needing_odds(conn, game_date, force)
 
-        # Slate-wide saver: if nothing changed, never touch the API.
+        # Slate-wide saver: if every game is locked (odds + both lineups confirmed),
+        # never touch the API.
         if not changed_game_ids:
             print(
-                f"[refresh-odds] {game_date}: no slate games changed — "
-                f"skipped {len(fresh_hashes)} (inputs unchanged), no API call"
+                f"[refresh-odds] {game_date}: no games need odds — "
+                f"all pulled with confirmed lineups, no API call"
             )
             return
 
@@ -198,8 +157,8 @@ def cmd_refresh_odds(args: argparse.Namespace) -> None:
                 unmatched_events += 1
                 continue
 
-            # Per-game gate: skip games whose inputs are unchanged. This also
-            # skips the per-event player-props API call for them.
+            # Per-game gate: skip games that are already locked (odds pulled with both
+            # lineups confirmed). This also skips the per-event player-props API call.
             if game_id not in changed_game_ids:
                 skipped += 1
                 continue
@@ -314,14 +273,15 @@ def cmd_refresh_odds(args: argparse.Namespace) -> None:
                 (run_ts, game_id),
             )
 
-            # Record the gate state for this game's successful pull.
+            # Stamp the pull time; the gate locks the game once this is after both
+            # lineup confirmations (see _games_needing_odds).
             conn.execute(
-                "UPDATE games SET odds_input_hash = %s, odds_pulled_at = NOW() WHERE id = %s",
-                (fresh_hashes[game_id], game_id),
+                "UPDATE games SET odds_pulled_at = NOW() WHERE id = %s",
+                (game_id,),
             )
 
-        # Any changed game that the provider did not return an event for stays
-        # un-pulled (its stored hash is unchanged), so the next run retries it.
+        # Any game that still needs odds but for which the provider returned no event
+        # stays un-pulled (odds_pulled_at unchanged), so the next run retries it.
         conn.commit()
     except Exception:
         conn.rollback()
@@ -330,7 +290,7 @@ def cmd_refresh_odds(args: argparse.Namespace) -> None:
         conn.close()
 
     print(
-        f"[refresh-odds] pulled {matched} game(s), skipped {skipped} (inputs unchanged); "
+        f"[refresh-odds] pulled {matched} game(s), skipped {skipped} (locked); "
         f"{unmatched_events} event(s) had no slate match; "
         f"{game_rows_total} game-odds rows, {prop_rows_total} prop rows"
         + (f", {unmatched_players} prop outcome(s) skipped (unmatched player)"

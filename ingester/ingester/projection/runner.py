@@ -372,12 +372,20 @@ def _resolve_lineup(
     """
     Resolve the batting order to project for one team side.
 
-    Project ONLY a confirmed lineup (game_lineups holds all nine slots), in order, with
-    expected PA weighted by lineup position (``PA_BY_ORDER``). If the lineup is not yet
-    confirmed, return [] so the caller skips this side: the old L30 "likely hitters" proxy
-    guessed both the roster and the order and was unreliable (off-roster names, scrambled
-    order), and a wrong projection is worse than none. The afternoon ``daily --quick`` loop
-    re-projects as real lineups post.
+    Prefer the game's CONFIRMED lineup (game_lineups holds all nine slots), in order,
+    with expected PA weighted by lineup position (``PA_BY_ORDER``) and
+    ``lineup_confirmed=True``.
+
+    If today's lineup is not yet confirmed, fall back to this team's most recent PRIOR
+    confirmed lineup (the order they last actually batted) and return it with
+    ``lineup_confirmed=False`` so everything downstream can flag it as projected. This is
+    a far better proxy than the old L30 "likely hitters" guess (which scrambled both the
+    roster and the order): it is a real, ordered nine that the team used. Betting surfaces
+    still gate on ``lineup_confirmed`` so projected lineups never drive picks/EV, and the
+    afternoon ``daily --quick`` loop overwrites these with the real lineup as it posts.
+
+    If neither a confirmed nor a prior lineup exists, return [] so the caller skips this
+    side (a wrong projection is worse than none).
     """
     rows = conn.execute(
         """
@@ -402,7 +410,58 @@ def _resolve_lineup(
             for order_pid_bats in rows
         ]
 
-    return []
+    return _resolve_projected_lineup(conn, team_id=team_id, as_of=as_of)
+
+
+def _resolve_projected_lineup(
+    conn: psycopg.Connection,
+    *,
+    team_id: int,
+    as_of: date,
+) -> list[LineupHitter]:
+    """Most recent confirmed nine-man order this team batted on a PRIOR date.
+
+    Returns the order with ``lineup_confirmed=False`` (a projected lineup) so callers can
+    flag it, or [] if the team has no prior confirmed lineup on record. The team may have
+    been home in some past games and away in others, so we match either side via the games
+    join rather than assuming today's home/away.
+    """
+    rows = conn.execute(
+        """
+        WITH last_game AS (
+            SELECT gl.game_id, gl.is_home
+            FROM game_lineups gl
+            JOIN games g ON g.id = gl.game_id
+            WHERE g.game_date < %s
+              AND ( (g.home_team_id = %s AND gl.is_home = TRUE)
+                 OR (g.away_team_id = %s AND gl.is_home = FALSE) )
+            GROUP BY gl.game_id, gl.is_home, g.game_date
+            HAVING COUNT(*) = %s
+            ORDER BY g.game_date DESC, gl.game_id DESC
+            LIMIT 1
+        )
+        SELECT gl.batting_order, gl.player_id, COALESCE(p.bats, 'R')
+        FROM game_lineups gl
+        JOIN last_game lg ON lg.game_id = gl.game_id AND lg.is_home = gl.is_home
+        JOIN players p ON p.id = gl.player_id
+        ORDER BY gl.batting_order
+        """,
+        (as_of, team_id, team_id, LINEUP_STARTERS),
+    ).fetchall()
+
+    if len(rows) != LINEUP_STARTERS:
+        return []
+
+    return [
+        LineupHitter(
+            player_id=int(order_pid_bats[1]),
+            bats=str(order_pid_bats[2]),
+            expected_pa=PA_BY_ORDER[int(order_pid_bats[0])],
+            lineup_position=int(order_pid_bats[0]),
+            lineup_confirmed=False,
+        )
+        for order_pid_bats in rows
+    ]
 
 
 def _load_batter_skill(
@@ -1096,24 +1155,24 @@ def _upsert_pitcher_projection(
     )
 
 
-def _any_lineup_posted(conn: psycopg.Connection, game_id: int) -> bool:
-    """True if at least one side has a full nine-man order in game_lineups.
+def _any_lineup_resolvable(conn: psycopg.Connection, game: SlateGame, as_of: date) -> bool:
+    """True if at least one side has a full nine-man order to project.
 
-    Mirrors the LINEUP_STARTERS=9 threshold _resolve_lineup uses per side; a transient
-    partial fetch (< 9) doesn't count as posted.
+    This counts both a confirmed lineup for THIS game and the projected fallback (the
+    team's most recent prior confirmed nine), mirroring what ``_resolve_lineup`` returns.
+    A transient partial fetch (< 9) with no prior lineup doesn't count, so the game is
+    deferred until a real or projectable lineup exists.
     """
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM game_lineups
-        WHERE game_id = %s
-        GROUP BY is_home
-        HAVING COUNT(*) = %s
-        LIMIT 1
-        """,
-        (game_id, LINEUP_STARTERS),
-    ).fetchone()
-    return row is not None
+    for team_id, is_home in (
+        (game.home_team_id, True),
+        (game.away_team_id, False),
+    ):
+        hitters = _resolve_lineup(
+            conn, game_id=game.game_id, team_id=team_id, is_home=is_home, as_of=as_of
+        )
+        if len(hitters) == LINEUP_STARTERS:
+            return True
+    return False
 
 
 def _project_game(
@@ -1129,10 +1188,11 @@ def _project_game(
         summary.skip_reasons.append(f"game {game.game_id}: {reason}")
         return False
 
-    # Only project once a lineup is actually posted. _resolve_lineup needs the full
-    # nine-man order per side; if neither side has it yet, defer the game (a later cron
-    # tick re-projects as lineups drop) rather than fall through to a partial/empty run.
-    if not _any_lineup_posted(conn, game.game_id):
+    # Only project once a lineup is resolvable. _resolve_lineup needs a full nine-man
+    # order per side — either confirmed for this game or the projected fallback (the
+    # team's last confirmed nine). If neither side has either yet, defer the game (a later
+    # cron tick re-projects as lineups drop) rather than fall through to a partial run.
+    if not _any_lineup_resolvable(conn, game, summary.game_date):
         summary.skip_reasons.append(f"game {game.game_id}: lineups not posted (deferred)")
         return False
 

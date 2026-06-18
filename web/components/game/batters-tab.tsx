@@ -7,9 +7,9 @@ import { BatterDetail } from './batter-detail'
 import { pct, STAT_INFO } from './batter-stats'
 import { Chip, microLabel } from './ui'
 
-// Confirmed lineups have a real batting order; projected ones do not (every
-// batter shares a flat expected PA), so we never imply an order — we surface the
-// most relevant bats first by hit probability instead. See plan §4.
+// Confirmed lineups have today's real batting order. Projected ones carry the
+// team's PREVIOUS confirmed order, which may not match today's, so we don't imply a
+// definitive order — we surface the most relevant bats first by hit probability instead.
 function orderBatters(side: TeamBatters): BatterProjection[] {
   return side.lineupConfirmed
     ? [...side.batters].sort((a, b) => (a.lineupPosition ?? 99) - (b.lineupPosition ?? 99))
