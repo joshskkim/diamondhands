@@ -22,6 +22,8 @@ const MARKET_META: Record<string, { chip: string; verb: string }> = {
 const PITCHER_MARKET_META: Record<string, { chip: string; unit: string; noun: string }> = {
   pitcher_k: { chip: 'Pitcher Ks', unit: 'K', noun: 'strikeouts' },
   pitcher_outs: { chip: 'Outs', unit: 'outs', noun: 'outs recorded' },
+  pitcher_hits_allowed: { chip: 'Hits allowed', unit: 'H', noun: 'hits allowed' },
+  pitcher_earned_runs: { chip: 'Earned runs', unit: 'ER', noun: 'earned runs' },
 }
 
 function pct(v: number) {

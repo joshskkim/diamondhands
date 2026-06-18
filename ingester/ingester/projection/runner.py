@@ -1221,6 +1221,11 @@ def _project_game(
     # lineup) so the prop board can blend them against the closed-form binomial.
     _upsert_game_sim_batter_props(conn, game.game_id, sim.home_props, home.starter_player_ids)
     _upsert_game_sim_batter_props(conn, game.game_id, sim.away_props, away.starter_player_ids)
+    # Each starter's hits/ER distribution (faced by the opposing lineup in the sim).
+    _upsert_game_sim_pitcher_props(
+        conn, game.game_id, game.home_probable_pitcher_id, sim.n_sims, sim.home_pitcher_props)
+    _upsert_game_sim_pitcher_props(
+        conn, game.game_id, game.away_probable_pitcher_id, sim.n_sims, sim.away_pitcher_props)
 
     conn.execute(
         "UPDATE games SET projected_at = NOW() WHERE id = %s",
@@ -1242,9 +1247,9 @@ def _upsert_game_sim_projection(
             expected_home_runs, expected_away_runs, expected_total, p_home_win, total_hist,
             f5_expected_home, f5_expected_away, f5_expected_total,
             f5_p_home_lead, f5_p_away_lead, f5_p_tie, f5_total_hist,
-            p_yrfi, computed_at
+            p_yrfi, p_home_cover_1_5, p_away_cover_1_5, computed_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
         ON CONFLICT (game_id) DO UPDATE SET
             n_sims             = EXCLUDED.n_sims,
             expected_home_runs = EXCLUDED.expected_home_runs,
@@ -1260,6 +1265,8 @@ def _upsert_game_sim_projection(
             f5_p_tie           = EXCLUDED.f5_p_tie,
             f5_total_hist      = EXCLUDED.f5_total_hist,
             p_yrfi             = EXCLUDED.p_yrfi,
+            p_home_cover_1_5   = EXCLUDED.p_home_cover_1_5,
+            p_away_cover_1_5   = EXCLUDED.p_away_cover_1_5,
             computed_at        = NOW()
         """,
         (
@@ -1278,6 +1285,8 @@ def _upsert_game_sim_projection(
             round(f5.p_tie, 3),
             f5.total_hist(SIM_F5_HIST_MAX),
             round(sim.p_yrfi, 3),
+            round(sim.p_home_cover_1_5, 3),
+            round(sim.p_away_cover_1_5, 3),
         ),
     )
 
@@ -1322,6 +1331,45 @@ def _upsert_game_sim_batter_props(
                 round(prop.expected_hits, 2),
             ),
         )
+
+
+def _upsert_game_sim_pitcher_props(
+    conn: psycopg.Connection,
+    game_id: int,
+    pitcher_id: int | None,
+    n_sims: int,
+    props,
+) -> None:
+    """Persist one starter's simulated hits-allowed / earned-runs distributions. Skips
+    games with no announced probable starter (pitcher_id None) — there's no pitcher to
+    attach the distribution to."""
+    if pitcher_id is None:
+        return
+    conn.execute(
+        """
+        INSERT INTO game_sim_pitcher_props (
+            game_id, pitcher_id, n_sims,
+            expected_hits, expected_er, hits_hist, er_hist, computed_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+        ON CONFLICT (game_id, pitcher_id) DO UPDATE SET
+            n_sims        = EXCLUDED.n_sims,
+            expected_hits = EXCLUDED.expected_hits,
+            expected_er   = EXCLUDED.expected_er,
+            hits_hist     = EXCLUDED.hits_hist,
+            er_hist       = EXCLUDED.er_hist,
+            computed_at   = NOW()
+        """,
+        (
+            game_id,
+            pitcher_id,
+            n_sims,
+            round(props.expected_hits, 2),
+            round(props.expected_er, 2),
+            props.hits_hist,
+            props.er_hist,
+        ),
+    )
 
 
 def _clear_slate_projections(conn: psycopg.Connection, game_date: date) -> int:

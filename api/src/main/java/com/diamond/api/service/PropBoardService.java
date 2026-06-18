@@ -182,11 +182,22 @@ public class PropBoardService {
         List<Double> lines,                          // distribution thresholds shown
         Function<PitcherRow, List<Double>> probs) {} // P(over each line), aligned to lines
 
+    private static final List<Double> HITS_LINES = List.of(4.5, 5.5, 6.5);
+    private static final List<Double> ER_LINES = List.of(1.5, 2.5, 3.5);
+
     private static final List<PitcherMarket> PITCHER_MARKETS = List.of(
         new PitcherMarket("pitcher_k", PitcherRow::expectedK, List.of(4.5, 5.5, 6.5),
             r -> List.of(nz(r.pk45()), nz(r.pk55()), nz(r.pk65()))),
         new PitcherMarket("pitcher_outs", PitcherRow::expectedOuts, List.of(14.5, 17.5),
-            r -> List.of(nz(r.po145()), nz(r.po175()))));
+            r -> List.of(nz(r.po145()), nz(r.po175()))),
+        // Hits allowed / earned runs come from the simulator's histograms, so P(over) is
+        // read off the distribution rather than a closed form. Like Ks/outs, ranked by
+        // expected volume — here that surfaces the starter most exposed to a big line
+        // (the over lean), not the stingiest arm.
+        new PitcherMarket("pitcher_hits_allowed", PitcherRow::expectedHits, HITS_LINES,
+            r -> histPOver(r.hitsHist(), r.nSims(), HITS_LINES)),
+        new PitcherMarket("pitcher_earned_runs", PitcherRow::expectedEr, ER_LINES,
+            r -> histPOver(r.erHist(), r.nSims(), ER_LINES)));
 
     private List<PitcherPropPickDto> pitcherPicks(LocalDate date) {
         List<PitcherRow> rows = repo.findPitcherRows(date);
@@ -241,6 +252,23 @@ public class PropBoardService {
 
     private static double nz(Double v) {
         return v == null ? 0.0 : v;
+    }
+
+    /** P(over each line) from a simulator count histogram (bin i = sims with exactly i,
+     *  last bin a >=N catch-all). Empty list when the game had no sim row. */
+    private static List<Double> histPOver(int[] hist, Integer nSims, List<Double> lines) {
+        if (hist == null || hist.length == 0 || nSims == null || nSims <= 0) {
+            return lines.stream().map(l -> (Double) 0.0).toList();
+        }
+        List<Double> out = new ArrayList<>(lines.size());
+        for (double line : lines) {
+            int over = 0;
+            for (int i = 0; i < hist.length; i++) {
+                if (i > line) over += hist[i];
+            }
+            out.add((double) over / nSims);
+        }
+        return out;
     }
 
     /** Union, across markets, of the top-{@code depth} players by raw model probability —

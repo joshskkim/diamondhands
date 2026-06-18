@@ -77,6 +77,8 @@ class TeamSim:
     slot_hr: np.ndarray         # (n_sims, 9)
     slot_tb: np.ndarray         # (n_sims, 9)
     slot_k: np.ndarray          # (n_sims, 9)
+    starter_hits: np.ndarray    # (n_sims,) team hits through the opposing starter's exit
+    starter_runs: np.ndarray    # (n_sims,) team runs through the opposing starter's exit
 
 
 def _sim_team(
@@ -98,8 +100,16 @@ def _sim_team(
     cum_starter = np.cumsum(probs, axis=1)
     cum_bullpen = np.cumsum(bullpen_probs, axis=1) if bullpen_probs is not None else None
     runs = np.zeros(n_sims, dtype=np.int32)
+    team_hits = np.zeros(n_sims, dtype=np.int32)  # cumulative team hits (for pitcher props)
     period_runs: dict[int, np.ndarray] = {}
     period_set = {p for p in periods if p <= innings}
+    # Inning the starter is pulled at: the whole-inning boundary nearest his projected
+    # depth. The sim advances by full innings, so a 5.4-IP projection exits after the 5th.
+    # The opposing-team runs/hits accumulated through here are the starter's earned-runs
+    # and hits-allowed distributions (pitcher props).
+    starter_exit = int(min(max(round(starter_innings), 1), innings))
+    starter_hits = np.zeros(n_sims, dtype=np.int32)
+    starter_runs = np.zeros(n_sims, dtype=np.int32)
     slot_hits = np.zeros((n_sims, 9), dtype=np.int32)
     slot_hr = np.zeros((n_sims, 9), dtype=np.int32)
     slot_tb = np.zeros((n_sims, 9), dtype=np.int32)
@@ -126,6 +136,7 @@ def _sim_team(
                 if cm.any():
                     np.add.at(slot_hits, (s[cm], slot[cm]), 1)
                     np.add.at(slot_tb, (s[cm], slot[cm]), tb)
+                    team_hits[s[cm]] += 1
             hm = oc == 6
             if hm.any():
                 np.add.at(slot_hr, (s[hm], slot[hm]), 1)
@@ -188,8 +199,12 @@ def _sim_team(
         done = inning + 1
         if done in period_set:
             period_runs[done] = runs.copy()
+        if done == starter_exit:
+            starter_hits = team_hits.copy()
+            starter_runs = runs.copy()
 
-    return TeamSim(runs, period_runs, slot_hits, slot_hr, slot_tb, slot_k)
+    return TeamSim(runs, period_runs, slot_hits, slot_hr, slot_tb, slot_k,
+                   starter_hits, starter_runs)
 
 
 @dataclass
@@ -200,6 +215,41 @@ class BatterProps:
     p_k_1plus: float
     expected_tb: float
     expected_hits: float
+
+
+# Histogram bin ceilings for the starting-pitcher prop distributions. Books rarely set
+# hits-allowed lines above ~7.5 or earned-runs above ~3.5, so these comfortably cover
+# every quotable O/U while keeping the stored arrays small.
+PITCHER_HITS_HIST_MAX = 12
+PITCHER_ER_HIST_MAX = 8
+
+
+@dataclass
+class PitcherProps:
+    """Starting-pitcher prop distributions over the starter's projected outing, derived
+    from the opposing team's hits/runs accumulated through the starter's exit inning.
+    Earned runs are approximated by total runs (the sim has no error model — a small,
+    slightly conservative bias)."""
+    expected_hits: float
+    expected_er: float
+    hits_hist: list[int]   # counts over n_sims, bins 0..PITCHER_HITS_HIST_MAX (last is >=)
+    er_hist: list[int]     # counts over n_sims, bins 0..PITCHER_ER_HIST_MAX (last is >=)
+
+
+def _counts_hist(arr: np.ndarray, max_bin: int) -> list[int]:
+    """Histogram of integer counts, bins 0..max_bin (last bin is >=max_bin)."""
+    clipped = np.minimum(arr, max_bin)
+    return np.bincount(clipped, minlength=max_bin + 1).astype(int).tolist()
+
+
+def _pitcher_props(team: TeamSim) -> PitcherProps:
+    """The opposing starter's prop distributions from the team that faced him."""
+    return PitcherProps(
+        expected_hits=float(team.starter_hits.mean()),
+        expected_er=float(team.starter_runs.mean()),
+        hits_hist=_counts_hist(team.starter_hits, PITCHER_HITS_HIST_MAX),
+        er_hist=_counts_hist(team.starter_runs, PITCHER_ER_HIST_MAX),
+    )
 
 
 @dataclass
@@ -238,6 +288,15 @@ class PeriodMarket:
         """P(combined runs strictly over `line`) for this period."""
         return float(((self.home_runs + self.away_runs) > line).mean())
 
+    def p_home_cover(self, line: float) -> float:
+        """P(home covers a run line of `line` (signed, e.g. -1.5)). Integer margins
+        never land on a .5 line, so home + away cover sum to 1 (no push)."""
+        return float(((self.home_runs - self.away_runs) > -line).mean())
+
+    def p_away_cover(self, line: float) -> float:
+        """P(away covers a run line of `line` (signed, e.g. +1.5))."""
+        return float(((self.away_runs - self.home_runs) > -line).mean())
+
     def total_hist(self, max_runs: int) -> list[int]:
         """Histogram of combined-run counts, bins 0..max_runs (last bin is >=max_runs)."""
         total = self.home_runs + self.away_runs
@@ -251,11 +310,23 @@ class GameSim:
     periods: dict[int, PeriodMarket]   # innings_completed -> market (1,3,5,7,9)
     home_props: list[BatterProps]      # per lineup slot 0..8
     away_props: list[BatterProps]
+    home_pitcher_props: PitcherProps   # the HOME starter's hits-allowed / earned-runs
+    away_pitcher_props: PitcherProps   # the AWAY starter's hits-allowed / earned-runs
 
     @property
     def full(self) -> PeriodMarket:
         """Full-game (9-inning) market."""
         return self.periods[max(self.periods)]
+
+    @property
+    def p_home_cover_1_5(self) -> float:
+        """Full-game run line: P(home covers -1.5)."""
+        return self.full.p_home_cover(-1.5)
+
+    @property
+    def p_away_cover_1_5(self) -> float:
+        """Full-game run line: P(away covers +1.5)."""
+        return self.full.p_away_cover(1.5)
 
     @property
     def f5(self) -> PeriodMarket:
@@ -354,6 +425,9 @@ def simulate_game(
         periods=periods,
         home_props=_slot_props(home),
         away_props=_slot_props(away),
+        # A starter's hits/runs allowed = what the OPPOSING lineup put up against him.
+        home_pitcher_props=_pitcher_props(away),
+        away_pitcher_props=_pitcher_props(home),
     )
 
 

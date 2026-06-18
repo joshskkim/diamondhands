@@ -13,7 +13,7 @@ import java.util.List;
 /**
  * Reads the Monte-Carlo game simulator's outputs (game_sim_projections) joined to team
  * abbreviations and the consensus book lines (game_odds) for the "Most Likely" board:
- * full-game totals vs the line, first-five-innings (F5) markets, NRFI/YRFI, and the
+ * full-game totals vs the line, run-line (±1.5) cover leans, NRFI/YRFI, and the
  * top player props (batter_projections).
  */
 @Repository
@@ -25,20 +25,22 @@ public class MostLikelyRepository {
         this.jdbc = jdbc;
     }
 
-    // One row per game: sim distributions + consensus (avg) book lines for the
-    // full-game total, the F5 total, and the first-inning total.
+    // One row per game: sim distributions + consensus (avg) book data for the full-game
+    // total and the ±1.5 run line. Run-line book implied probs are split by the -1.5
+    // (favorite covers) and +1.5 (underdog covers) sides so the service can de-vig.
     private static final String SIM_SQL = """
         SELECT gsp.game_id, ht.abbreviation AS home_abbr, at2.abbreviation AS away_abbr,
                gsp.n_sims,
-               gsp.expected_total, gsp.expected_home_runs, gsp.expected_away_runs,
+               gsp.expected_total,
                gsp.p_home_win, gsp.total_hist,
-               gsp.f5_expected_total, gsp.f5_p_home_lead, gsp.f5_p_away_lead,
-               gsp.f5_p_tie, gsp.f5_total_hist,
+               gsp.p_home_cover_1_5, gsp.p_away_cover_1_5,
                gsp.p_yrfi,
                (SELECT AVG(line) FROM game_odds o
-                  WHERE o.game_id = gsp.game_id AND o.market = 'total'    AND o.side = 'over') AS book_total,
-               (SELECT AVG(line) FROM game_odds o
-                  WHERE o.game_id = gsp.game_id AND o.market = 'total_f5' AND o.side = 'over') AS book_f5_total
+                  WHERE o.game_id = gsp.game_id AND o.market = 'total' AND o.side = 'over') AS book_total,
+               (SELECT AVG(implied_prob) FROM game_odds o
+                  WHERE o.game_id = gsp.game_id AND o.market = 'run_line' AND o.line = -1.5) AS book_fav_implied,
+               (SELECT AVG(implied_prob) FROM game_odds o
+                  WHERE o.game_id = gsp.game_id AND o.market = 'run_line' AND o.line = 1.5)  AS book_dog_implied
         FROM game_sim_projections gsp
         JOIN games g  ON g.id  = gsp.game_id
         JOIN teams ht ON ht.id = g.home_team_id
@@ -79,14 +81,12 @@ public class MostLikelyRepository {
             rs.getDouble("expected_total"),
             rs.getDouble("p_home_win"),
             toIntArray(rs.getArray("total_hist")),
-            rs.getDouble("f5_expected_total"),
-            rs.getDouble("f5_p_home_lead"),
-            rs.getDouble("f5_p_away_lead"),
-            rs.getDouble("f5_p_tie"),
-            toIntArray(rs.getArray("f5_total_hist")),
+            rs.getDouble("p_home_cover_1_5"),
+            rs.getDouble("p_away_cover_1_5"),
             rs.getDouble("p_yrfi"),
             toDouble(rs.getBigDecimal("book_total")),
-            toDouble(rs.getBigDecimal("book_f5_total")));
+            toDouble(rs.getBigDecimal("book_fav_implied")),
+            toDouble(rs.getBigDecimal("book_dog_implied")));
     }
 
     private PropRow mapProp(ResultSet rs, int n) throws SQLException {
@@ -124,8 +124,8 @@ public class MostLikelyRepository {
     public record SimRow(
         long gameId, String matchup, String homeAbbr, String awayAbbr, int nSims,
         double expectedTotal, double pHomeWin, int[] totalHist,
-        double f5Total, double f5PHomeLead, double f5PAwayLead, double f5PTie, int[] f5TotalHist,
-        double pYrfi, Double bookTotal, Double bookF5Total) {}
+        double pHomeCover15, double pAwayCover15,
+        double pYrfi, Double bookTotal, Double bookFavImplied, Double bookDogImplied) {}
 
     public record PropRow(
         int playerId, String player, String team, String matchup,
