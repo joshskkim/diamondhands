@@ -100,9 +100,17 @@ export function GameSelectorBar({ activeGameId }: { activeGameId?: number }) {
     const el = stripRef.current
     if (!el) return
     const onWheel = (e: WheelEvent) => {
-      if (el.scrollWidth <= el.clientWidth) return // nothing to scroll
-      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return // let native horizontal pass
-      el.scrollLeft += e.deltaY
+      if (el.scrollWidth <= el.clientWidth) return // nothing to scroll horizontally
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return // horizontal gesture → native
+      // Normalize wheel units to pixels. Some browsers/mice report lines (deltaMode 1,
+      // deltaY ~1-3) or pages (2); applying deltaY raw then barely moves the strip.
+      const step =
+        e.deltaMode === 1
+          ? e.deltaY * 16
+          : e.deltaMode === 2
+            ? e.deltaY * el.clientWidth
+            : e.deltaY
+      el.scrollLeft += step
       e.preventDefault()
     }
     el.addEventListener('wheel', onWheel, { passive: false })
