@@ -7,12 +7,39 @@ truth; no model/business logic is duplicated.
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    CD["Claude Desktop<br/>(MCP client)"]
+
+    subgraph host["Diamond host — docker compose"]
+      Caddy["Caddy<br/>(TLS, same-origin)"]
+      MCP["diamond-mcp · Python<br/>auth · rate-limit<br/>retry · breaker · cache"]
+      API["diamond-api<br/>Spring Boot"]
+      WEB["diamond-web<br/>Next.js"]
+      PG[("Postgres")]
+      RD[("Redis")]
+      J["Jaeger"]
+      P["Prometheus"]
+      G["Grafana"]
+    end
+
+    CD -->|"stdio (local dev)"| MCP
+    CD -->|"HTTPS /mcp + API key"| Caddy
+    Caddy -->|"/mcp"| MCP
+    Caddy -->|"/api/*"| API
+    Caddy -->|"/*"| WEB
+    MCP -->|"HTTP + W3C traceparent"| API
+    API --> PG
+    API --> RD
+    MCP -.->|"OTLP spans"| J
+    API -.->|"OTLP spans"| J
+    P -.->|"scrape /metrics"| MCP
+    P -.->|"scrape /actuator"| API
+    G --> P
 ```
-┌────────────────┐   MCP (stdio | Streamable-HTTP)   ┌──────────────┐   HTTP   ┌──────────┐   JDBC   ┌──────────┐
-│ Claude Desktop │ ────────────────────────────────▶ │ diamond-mcp  │ ───────▶ │ diamond  │ ───────▶ │ Postgres │
-│  (MCP client)  │      tools/call get_best_plays     │  (Python)    │  +trace  │   -api   │  spans   │          │
-└────────────────┘                                    └──────────────┘ parent   └──────────┘          └──────────┘
-```
+
+A single Claude request becomes one distributed trace: **diamond-mcp → diamond-api → Postgres**
+(via JDBC spans), because the MCP server propagates a W3C `traceparent` the Spring API continues.
 
 Two transports, selected by `MCP_TRANSPORT`:
 
