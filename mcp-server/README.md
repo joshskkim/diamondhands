@@ -13,16 +13,36 @@ skill, pitch-type leaderboard, tennis rankings, …).
 - The Diamond API running and reachable (default `http://localhost:8080`).
 - [`uv`](https://docs.astral.sh/uv/).
 
-## Run
+## Transports
+
+The server runs over one of two transports, selected by `MCP_TRANSPORT`:
+
+- **`stdio`** (default) — the trusted local path Claude Desktop launches as a subprocess. No
+  auth/rate limiting (the only client is you, locally).
+- **`http`** — networked Streamable-HTTP, with **API-key auth**, **per-client rate limiting**,
+  and a `/healthz` probe. This is the hardened path meant for shared/remote use.
 
 ```bash
 cd mcp-server
-uv run diamond-mcp           # stdio server (what Claude Desktop launches)
+uv run diamond-mcp                       # stdio (Claude Desktop)
+MCP_TRANSPORT=http uv run diamond-mcp    # networked HTTP on :8090
 ```
 
-Configuration via environment:
+## Configuration (environment)
 
-- `DIAMOND_API_URL` — base URL of the Diamond API (default `http://localhost:8080`).
+| Var | Default | Purpose |
+|---|---|---|
+| `DIAMOND_API_URL` | `http://localhost:8080` | Base URL of the Diamond API |
+| `DIAMOND_API_TIMEOUT` | `10` | Upstream request timeout (seconds) |
+| `MCP_TRANSPORT` | `stdio` | `stdio` or `http` |
+| `MCP_HOST` / `MCP_PORT` | `127.0.0.1` / `8090` | HTTP bind address |
+| `MCP_API_KEYS` | _(empty)_ | Comma-separated API keys for the HTTP transport. **Empty ⇒ auth OFF** (dev only); set it for any networked deployment. Keys are compared by SHA-256. |
+| `MCP_RATE_LIMIT_RPS` / `MCP_RATE_LIMIT_BURST` | `5` / `20` | Token-bucket sustained rate + burst, per client |
+| `MCP_RATE_LIMIT_ENABLED` | `true` | Toggle rate limiting |
+
+On the HTTP transport, send the key as `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+`/healthz` and `/metrics` are always exempt. Rate-limit state is in-memory per process; a
+Redis-backed limiter (Redis is already in the stack) is the multi-instance upgrade.
 
 ## Develop
 
