@@ -9,6 +9,13 @@ dependencies = [
     "mcp[cli]>=1.16.0",
     "starlette>=0.40.0",
     "uvicorn>=0.34.0",
+    "prometheus-client>=0.21.0",
+    "opentelemetry-sdk>=1.29.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.29.0",
+    "opentelemetry-instrumentation-httpx>=0.50b0",
+    "opentelemetry-instrumentation-asgi>=0.50b0",
+    "tenacity>=9.0.0",
+    "cachetools>=5.5.0",
 ]
 
 [project.scripts]

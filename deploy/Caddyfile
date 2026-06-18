@@ -14,6 +14,12 @@
 {$DOMAIN} {
 	encode gzip
 
+	# Remote MCP endpoint (Streamable-HTTP). Auth is enforced by the MCP server itself
+	# (API key); /healthz + /metrics stay internal (not routed publicly).
+	handle /mcp /mcp/* {
+		reverse_proxy mcp-server:8090
+	}
+
 	handle /api/* {
 		reverse_proxy api:8080
 	}
