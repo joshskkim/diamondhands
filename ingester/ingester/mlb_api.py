@@ -138,3 +138,45 @@ def fetch_people_birthdates(player_ids: list[int], chunk: int = 100) -> dict[int
             if pid is not None and bd:
                 out[int(pid)] = bd
     return out
+
+
+def _parse_innings(ip: str | float | None) -> float:
+    """MLB reports innings as a string like '42.1' meaning 42⅓ (the decimal is OUTS,
+    not a fraction). '42.1' → 42 + 1/3, '42.2' → 42 + 2/3. Returns 0.0 on bad input."""
+    if ip is None:
+        return 0.0
+    try:
+        whole, _, frac = str(ip).partition(".")
+        outs = int(frac[:1]) if frac else 0
+        return int(whole) + outs / 3.0
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def fetch_pitcher_season_stats(player_id: int, season: int) -> dict | None:
+    """Season pitching role stats for one pitcher, or None if no pitching split exists
+    (e.g. a position player, a true debut with no MLB innings, or a network error).
+
+    Returns {games_started, games_pitched, innings_pitched, games_finished}. Innings is
+    converted from MLB's outs-decimal string (see _parse_innings). Callers treat None as
+    "no season role info" and fall back to a project-anyway default.
+    """
+    try:
+        resp = requests.get(
+            f"{MLB_BASE}/people/{player_id}/stats",
+            params={"stats": "season", "group": "pitching", "season": season},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        splits = (resp.json().get("stats") or [{}])[0].get("splits") or []
+        if not splits:
+            return None
+        stat = splits[0].get("stat", {})
+    except Exception:  # noqa: BLE001 — one bad fetch shouldn't break the slate
+        return None
+    return {
+        "games_started": stat.get("gamesStarted"),
+        "games_pitched": stat.get("gamesPitched"),
+        "innings_pitched": _parse_innings(stat.get("inningsPitched")),
+        "games_finished": stat.get("gamesFinished"),
+    }
