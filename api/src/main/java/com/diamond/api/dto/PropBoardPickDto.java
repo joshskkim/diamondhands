@@ -59,8 +59,6 @@ public record PropBoardPickDto(
     Double evPct,
     List<RunnerUp> runnersUp
 ) {
-    /** An honorable mention: same blended ranking, with the two factors the card uses to
-     *  explain why it ranks behind the top pick (expected PAs and matchup xwOBA). */
-    public record RunnerUp(int playerId, String player, String team, double prob,
-                           Double expectedPa, Double matchupXwoba) {}
+    /** An honorable mention: same blended ranking, no explanation payload. */
+    public record RunnerUp(int playerId, String player, String team, double prob) {}
 }
