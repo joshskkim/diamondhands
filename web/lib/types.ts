@@ -382,15 +382,12 @@ export interface PropBoardPick {
   runnersUp: PropBoardRunnerUp[]
 }
 
-/** An honorable mention on a prop card: name + blended probability, plus the two
- *  factors the card uses to explain why it ranks behind the top pick. */
+/** An honorable mention on a prop card: name + blended probability, no reasoning. */
 export interface PropBoardRunnerUp {
   playerId: number
   player: string
   team: string
   prob: number
-  expectedPa: number | null
-  matchupXwoba: number | null
 }
 
 /** One over-threshold from a pitcher's workload distribution: P(over `line`). */

@@ -1,11 +1,10 @@
 'use client'
 
 import Link from 'next/link'
-import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Target } from 'lucide-react'
+import { Target } from 'lucide-react'
 import { propBoardQueryOptions } from '@/lib/api'
-import type { PitcherPropPick, PropBoardPick, PropBoardRunnerUp } from '@/lib/types'
+import type { PitcherPropPick, PropBoardPick } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
 import { WhyDisclosure } from './why-disclosure'
@@ -168,81 +167,38 @@ function Factor({ label, value }: { label: string; value: string }) {
   )
 }
 
-// ── runners-up dropdown (shared by batter + pitcher cards) ──────────────────────
+// ── runners-up: one compact muted line, shared by batter + pitcher cards ─────────
 
-interface RunnerUpItem {
-  id: number
-  name: string
-  team: string
-  href: string
-  value: string // the headline metric for this runner-up (e.g. "58%" or "5.2 K")
-  why: string // why it ranks behind the top pick
-}
-
-function RunnersUpDisclosure({
-  items,
+function RunnersUpLine({
   accent,
+  items,
 }: {
-  items: RunnerUpItem[]
   accent: 'cyan' | 'amber'
+  items: { id: number; name: string; team: string; href: string; value: string }[]
 }) {
-  const [open, setOpen] = useState(false)
   if (items.length === 0) return null
   const hover = accent === 'amber' ? 'hover:text-amber-300' : 'hover:text-cyan-400'
   return (
-    <div className="mt-auto pt-2 border-t border-white/5">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className="inline-flex items-center gap-1 text-[11px] uppercase tracking-[0.12em] font-medium text-zinc-500 hover:text-zinc-300 transition-colors"
-      >
-        {open ? <ChevronRight size={12} className="rotate-90" /> : <ChevronRight size={12} />}
-        Runners-up ({items.length})
-      </button>
-      {open && (
-        <ul className="mt-2 space-y-2">
-          {items.map((it) => (
-            <li key={it.id}>
-              <div className="flex items-baseline justify-between gap-2 text-sm">
-                <Link href={it.href} className={`text-zinc-300 transition-colors ${hover}`}>
-                  {it.name} <span className="text-zinc-600 text-xs">{it.team}</span>
-                </Link>
-                <span className="shrink-0 font-mono tabular-nums text-zinc-400">{it.value}</span>
-              </div>
-              <div className="mt-0.5 text-xs text-zinc-500 leading-snug">{it.why}</div>
-            </li>
-          ))}
-        </ul>
-      )}
+    <div className="pt-2 border-t border-white/5 text-xs text-zinc-500">
+      <span className={microLabel}>Also&nbsp;</span>
+      {items.map((it, i) => (
+        <span key={it.id}>
+          {i > 0 && <span className="text-zinc-700"> · </span>}
+          <Link href={it.href} className={`text-zinc-400 transition-colors ${hover}`}>
+            {it.name}
+          </Link>{' '}
+          <span className="text-zinc-600">{it.team}</span>{' '}
+          <span className="font-mono tabular-nums text-zinc-400">{it.value}</span>
+        </span>
+      ))}
     </div>
   )
-}
-
-// Why a batter runner-up ranks behind the top pick: the model ranks on a blended
-// probability, so the gap is the headline and we name the factual differentiator
-// (matchup xwOBA / expected PAs) that explains it when there is one.
-function batterRunnerWhy(ru: PropBoardRunnerUp, top: PropBoardPick): string {
-  const gap = Math.max(0, (top.prob - ru.prob) * 100)
-  const diffs: string[] = []
-  if (
-    ru.matchupXwoba != null &&
-    top.matchupXwoba != null &&
-    top.matchupXwoba - ru.matchupXwoba >= 0.008
-  ) {
-    diffs.push(`tougher matchup (xwOBA ${xwoba(ru.matchupXwoba)} vs ${xwoba(top.matchupXwoba)})`)
-  }
-  if (ru.expectedPa != null && top.expectedPa != null && top.expectedPa - ru.expectedPa >= 0.3) {
-    diffs.push(`fewer PAs (${ru.expectedPa.toFixed(1)} vs ${top.expectedPa.toFixed(1)})`)
-  }
-  const lead = `${gap.toFixed(1)} pts behind ${top.player}`
-  return diffs.length > 0 ? `${lead} — ${diffs.join(', ')}.` : `${lead} on the blended number.`
 }
 
 function PropCard({ pick }: { pick: PropBoardPick }) {
   const meta = MARKET_META[pick.market] ?? { chip: pick.market, verb: pick.market }
   return (
-    <div className="h-full rounded-xl border border-white/10 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">
+    <div className="rounded-xl border border-white/10 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-cyan-300 border-cyan-400/40 bg-cyan-500/10">
           {meta.chip}
@@ -287,7 +243,7 @@ function PropCard({ pick }: { pick: PropBoardPick }) {
 
       <WhyDisclosure reasons={buildReasons(pick)} />
 
-      <RunnersUpDisclosure
+      <RunnersUpLine
         accent="cyan"
         items={pick.runnersUp.map((ru) => ({
           id: ru.playerId,
@@ -295,7 +251,6 @@ function PropCard({ pick }: { pick: PropBoardPick }) {
           team: ru.team,
           href: `/mlb/players/${ru.playerId}`,
           value: pct(ru.prob),
-          why: batterRunnerWhy(ru, pick),
         }))}
       />
     </div>
@@ -401,7 +356,7 @@ function PitcherCard({ pick }: { pick: PitcherPropPick }) {
   const reasons = buildPitcherReasons(pick)
 
   return (
-    <div className="h-full rounded-xl border border-amber-400/20 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">
+    <div className="rounded-xl border border-amber-400/20 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-300 border-amber-400/40 bg-amber-500/10">
           {meta.chip}
@@ -437,7 +392,7 @@ function PitcherCard({ pick }: { pick: PitcherPropPick }) {
 
       <WhyDisclosure reasons={reasons} />
 
-      <RunnersUpDisclosure
+      <RunnersUpLine
         accent="amber"
         items={pick.runnersUp.map((ru) => ({
           id: ru.pitcherId,
@@ -445,9 +400,6 @@ function PitcherCard({ pick }: { pick: PitcherPropPick }) {
           team: ru.team,
           href: `/mlb/players/${ru.pitcherId}`,
           value: `${ru.expectedValue.toFixed(1)} ${meta.unit}`,
-          why: `${Math.max(0, pick.expectedValue - ru.expectedValue).toFixed(1)} fewer projected ${
-            meta.noun
-          } than ${pick.pitcher}.`,
         }))}
       />
     </div>
@@ -499,8 +451,10 @@ export function PropBoard() {
           className={cn(
             'grid gap-4',
             data.picks.length === 1 && 'lg:max-w-xl',
-            data.picks.length === 2 && 'lg:grid-cols-2',
-            data.picks.length >= 3 && 'lg:grid-cols-3',
+            // 2 or 4 cards → 2 columns (4 fills a clean 2×2, no stray empty cells);
+            // 3 (or the rare 5+) → 3 columns so the last row still fills.
+            (data.picks.length === 2 || data.picks.length === 4) && 'lg:grid-cols-2',
+            (data.picks.length === 3 || data.picks.length >= 5) && 'lg:grid-cols-3',
           )}
         >
           {data.picks.map((pick) => (
