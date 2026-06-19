@@ -100,8 +100,13 @@ class PropBoardServiceTest {
         PitcherPropPickDto k = resp.pitcherPicks().stream()
             .filter(p -> p.market().equals("pitcher_k")).findFirst().orElseThrow();
         assertThat(k.pitcherKRate()).isEqualTo(0.28);
+        assertThat(k.pitcherBbRate()).isEqualTo(0.07);
+        assertThat(k.pitcherXwobaAgainst()).isEqualTo(0.30);
+        assertThat(k.pitcherHrPerPa()).isEqualTo(0.03);
         assertThat(k.opponentKRate()).isEqualTo(0.24);
         assertThat(k.opponentXwoba()).isEqualTo(0.31);
+        assertThat(k.arsenal()).singleElement()
+            .extracting(PitcherPropPickDto.ArsenalPitch::pitchType).isEqualTo("SL");
     }
 
     /** A slate row with only the walk probability populated (other markets null). */
@@ -129,6 +134,7 @@ class PropBoardServiceTest {
             0.71, 0.52, 0.31,
             0.62, 0.38,
             null, null, null, new int[0], new int[0],
-            0.28, 0.24, 0.31);
+            0.28, 0.07, 0.30, 0.03, 0.24, 0.31,
+            List.of(new PitcherPropPickDto.ArsenalPitch("SL", 0.38, 0.33, 86.2)));
     }
 }

@@ -165,11 +165,31 @@ export interface TeamBatters {
   batters: BatterProjection[]
 }
 
+/** One starting pitcher's full breakdown for the game view's Pitchers tab. */
+export interface PitcherDetail {
+  id: number
+  name: string
+  throws: string | null
+  teamAbbr: string
+  /** Pitch mix vs both batter hands (collapsed by type in the UI). */
+  arsenal: PitchArsenal[]
+  /** Season K%/BB%/xwOBA-against/HR-per-PA splits vs LHB / RHB. */
+  skill: PitcherSkillSplit[]
+}
+
+/** The two probable starters: `home` = the home team's starter. */
+export interface GamePitchers {
+  home: PitcherDetail | null
+  away: PitcherDetail | null
+}
+
 /** GET /api/games/:gameId/projections */
 export interface GameProjections {
   gameId: number
   home: TeamBatters
   away: TeamBatters
+  /** Null when neither probable starter is known yet. */
+  pitchers: GamePitchers | null
 }
 
 /**
@@ -362,12 +382,15 @@ export interface PropBoardPick {
   runnersUp: PropBoardRunnerUp[]
 }
 
-/** An honorable mention on a prop card: name + blended probability, no reasoning. */
+/** An honorable mention on a prop card: name + blended probability, plus the two
+ *  factors the card uses to explain why it ranks behind the top pick. */
 export interface PropBoardRunnerUp {
   playerId: number
   player: string
   team: string
   prob: number
+  expectedPa: number | null
+  matchupXwoba: number | null
 }
 
 /** One over-threshold from a pitcher's workload distribution: P(over `line`). */
@@ -407,12 +430,25 @@ export interface PitcherPropPick {
   bestBook: string | null
   priceAmerican: number | null
   evPct: number | null
-  /** Reasoning drivers (null when skill rows are absent): the pitcher's own K rate
-   *  and the opposing lineup's PA-weighted K rate / xwOBA. */
+  /** Reasoning drivers (null when skill rows are absent): the pitcher's own BF-weighted
+   *  profile and the opposing lineup's PA-weighted K rate / xwOBA. */
   pitcherKRate: number | null
+  pitcherBbRate: number | null
+  pitcherXwobaAgainst: number | null
+  pitcherHrPerPa: number | null
   opponentKRate: number | null
   opponentXwoba: number | null
+  /** The starter's top pitches by usage (empty when no arsenal snapshot). */
+  arsenal: PitcherArsenalPitch[]
   runnersUp: PitcherRunnerUp[]
+}
+
+/** One pitch in a starter's mix for the prop-board reasoning. */
+export interface PitcherArsenalPitch {
+  pitchType: string
+  usageRate: number | null
+  whiffRate: number | null
+  avgVelocity: number | null
 }
 
 /** GET /api/props/board — model-first prop board for a slate. */

@@ -1,5 +1,8 @@
 package com.diamond.api.repository;
 
+import com.diamond.api.dto.PitcherPropPickDto;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -22,6 +25,10 @@ import java.util.Map;
  */
 @Repository
 public class PropBoardRepository {
+
+    private static final ObjectMapper ARSENAL_JSON = new ObjectMapper();
+    private static final TypeReference<List<PitcherPropPickDto.ArsenalPitch>> ARSENAL_TYPE =
+        new TypeReference<>() {};
 
     private final JdbcTemplate jdbc;
 
@@ -137,7 +144,9 @@ public class PropBoardRepository {
                spp.n_sims AS spp_n_sims,
                spp.expected_hits AS spp_hits, spp.expected_er AS spp_er,
                spp.hits_hist, spp.er_hist,
-               pk.pitcher_k_rate, ol.opp_k_rate, ol.opp_xwoba
+               pk.pitcher_k_rate, pk.pitcher_bb_rate, pk.pitcher_xwoba_against, pk.pitcher_hr_per_pa,
+               ol.opp_k_rate, ol.opp_xwoba,
+               ars.arsenal_json
         FROM pitcher_projections pp
         JOIN games g   ON g.id  = pp.game_id
         JOIN players p ON p.id  = pp.pitcher_id
@@ -147,15 +156,42 @@ public class PropBoardRepository {
         JOIN teams at2 ON at2.id = g.away_team_id
         LEFT JOIN game_sim_pitcher_props spp
                ON spp.game_id = pp.game_id AND spp.pitcher_id = pp.pitcher_id
-        -- Reasoning driver: the pitcher's own K rate, BF-weighted across handedness
+        -- Reasoning drivers: the pitcher's own profile, BF-weighted across handedness
         -- (filter season — pitcher_skill keeps multiple seasons at one key).
         LEFT JOIN LATERAL (
-            SELECT SUM(ps.k_rate * ps.batters_faced) / NULLIF(SUM(ps.batters_faced), 0)
-                       AS pitcher_k_rate
+            SELECT SUM(ps.k_rate       * ps.batters_faced) / NULLIF(SUM(ps.batters_faced), 0) AS pitcher_k_rate,
+                   SUM(ps.bb_rate      * ps.batters_faced) / NULLIF(SUM(ps.batters_faced), 0) AS pitcher_bb_rate,
+                   SUM(ps.xwoba_against* ps.batters_faced) / NULLIF(SUM(ps.batters_faced), 0) AS pitcher_xwoba_against,
+                   SUM(ps.hr_per_pa    * ps.batters_faced) / NULLIF(SUM(ps.batters_faced), 0) AS pitcher_hr_per_pa
             FROM pitcher_skill ps
             WHERE ps.player_id = pp.pitcher_id
               AND ps.season = EXTRACT(YEAR FROM g.game_date)::int
         ) pk ON TRUE
+        -- Reasoning driver: the pitcher's top pitches, aggregated across handedness over the
+        -- latest snapshot on/before the game date (pitch-weighted usage / whiff / velocity).
+        LEFT JOIN LATERAL (
+            WITH snap AS (
+                SELECT season, as_of_date FROM pitcher_arsenal
+                WHERE player_id = pp.pitcher_id AND as_of_date <= g.game_date
+                ORDER BY as_of_date DESC, season DESC LIMIT 1
+            ),
+            agg AS (
+                SELECT a.pitch_type,
+                       SUM(a.pitches_thrown) AS pitches,
+                       SUM(a.usage_rate   * a.pitches_thrown) / NULLIF(SUM(a.pitches_thrown), 0) AS usage_rate,
+                       SUM(a.whiff_rate   * a.pitches_thrown) / NULLIF(SUM(a.pitches_thrown), 0) AS whiff_rate,
+                       SUM(a.avg_velocity * a.pitches_thrown) / NULLIF(SUM(a.pitches_thrown), 0) AS avg_velocity
+                FROM pitcher_arsenal a
+                JOIN snap ON snap.season = a.season AND snap.as_of_date = a.as_of_date
+                WHERE a.player_id = pp.pitcher_id
+                GROUP BY a.pitch_type
+            )
+            SELECT json_agg(json_build_object(
+                       'pitchType', pitch_type, 'usageRate', usage_rate,
+                       'whiffRate', whiff_rate, 'avgVelocity', avg_velocity)
+                   ORDER BY pitches DESC) AS arsenal_json
+            FROM (SELECT * FROM agg ORDER BY pitches DESC LIMIT 4) top
+        ) ars ON TRUE
         -- Reasoning driver: the opposing lineup he faces — PA-weighted K rate and xwOBA
         -- over that team's projected batters for this game.
         LEFT JOIN LATERAL (
@@ -245,8 +281,23 @@ public class PropBoardRepository {
             (Integer) rs.getObject("spp_n_sims"),
             dbl(rs, "spp_hits"), dbl(rs, "spp_er"),
             toIntArray(rs.getArray("hits_hist")), toIntArray(rs.getArray("er_hist")),
-            dbl(rs, "pitcher_k_rate"), dbl(rs, "opp_k_rate"), dbl(rs, "opp_xwoba")),
+            dbl(rs, "pitcher_k_rate"), dbl(rs, "pitcher_bb_rate"),
+            dbl(rs, "pitcher_xwoba_against"), dbl(rs, "pitcher_hr_per_pa"),
+            dbl(rs, "opp_k_rate"), dbl(rs, "opp_xwoba"),
+            parseArsenal(rs.getString("arsenal_json"))),
             date);
+    }
+
+    /** json_agg of the pitcher's top pitches → typed list; empty when null or unparseable. */
+    private static List<PitcherPropPickDto.ArsenalPitch> parseArsenal(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            return ARSENAL_JSON.readValue(json, ARSENAL_TYPE);
+        } catch (Exception e) {
+            return List.of();
+        }
     }
 
     /** Consensus over-line + best price for a starter's prop; null when no odds. */
@@ -355,9 +406,12 @@ public class PropBoardRepository {
         // Game-simulator hits-allowed / earned-runs distributions (null when the game
         // had no sim row — e.g. no confirmed lineups). nSims is the histogram denominator.
         Integer nSims, Double expectedHits, Double expectedEr, int[] hitsHist, int[] erHist,
-        // Reasoning drivers: the pitcher's own K rate (BF-weighted) and the opposing
-        // lineup's PA-weighted K rate / xwOBA. Null when skill rows are absent.
-        Double pitcherKRate, Double opponentKRate, Double opponentXwoba
+        // Reasoning drivers: the pitcher's own profile (BF-weighted K/BB/xwOBA-against/HR-PA)
+        // and the opposing lineup's PA-weighted K rate / xwOBA. Null when skill rows are
+        // absent. `arsenal` is the top pitches by usage (empty when no snapshot).
+        Double pitcherKRate, Double pitcherBbRate, Double pitcherXwobaAgainst, Double pitcherHrPerPa,
+        Double opponentKRate, Double opponentXwoba,
+        List<PitcherPropPickDto.ArsenalPitch> arsenal
     ) {}
 
     /** Best cached over-price for a pitcher prop, with the line it sits on. */

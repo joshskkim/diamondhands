@@ -7,6 +7,7 @@ import { bestPlaysQueryOptions, hitRatesQueryOptions, mostLikelyQueryOptions } f
 import type { BestPlay, HitRate, MostLikely } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican, MARKET_LABEL, teamForSide } from '@/lib/odds'
+import { WhyDisclosure } from './why-disclosure'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
@@ -251,11 +252,7 @@ function PickCard({ pick, rank }: { pick: ModelPick; rank: number }) {
         <Stat label="EV" value={signedPct(p.evPct)} className="text-emerald-300" />
       </div>
 
-      <ul className="space-y-1.5 text-[13px] leading-relaxed text-zinc-400 list-disc pl-4 marker:text-zinc-600">
-        {pick.reasons.map((r, i) => (
-          <li key={i}>{r}</li>
-        ))}
-      </ul>
+      <WhyDisclosure reasons={pick.reasons} />
     </div>
   )
 }

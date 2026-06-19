@@ -9,6 +9,7 @@ import { api } from '@/lib/api'
 import type { BatterProjection, Adjustments } from '@/lib/types'
 import { cn, parseApiDate } from '@/lib/utils'
 import { OddsPanel } from './odds-panel'
+import { PitchersView } from './pitchers-view'
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -399,6 +400,7 @@ export function GameDetail({ gameId }: { gameId: number }) {
   // batting order when a lineup is confirmed, else most-likely outcomes.
   const [sortCol, setSortCol] = useState<SortCol | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [view, setView] = useState<'batters' | 'pitchers'>('batters')
 
   const { data, isPending, isError } = useQuery({
     queryKey: ['game', 'projections', gameId],
@@ -548,15 +550,43 @@ export function GameDetail({ gameId }: { gameId: number }) {
         awayAbbr={game?.away.abbr ?? data.away.teamAbbr}
       />
 
-      {/* empty state */}
-      {data.home.batters.length === 0 && data.away.batters.length === 0 && (
-        <p className="text-amber-300 bg-amber-400/10 border border-amber-400/30 rounded-xl p-4 text-sm">
-          Projection pending — probable pitchers or lineups not yet confirmed.
-        </p>
+      {/* batters / pitchers view switch */}
+      <div className="flex items-center gap-2 mb-5">
+        {(['batters', 'pitchers'] as const).map((v) => (
+          <button
+            key={v}
+            onClick={() => setView(v)}
+            className={cn(
+              'text-xs px-3 py-1.5 rounded border transition-colors capitalize',
+              view === v
+                ? 'bg-cyan-500/15 text-cyan-300 border-cyan-400/40'
+                : 'bg-white/5 text-zinc-400 border-white/10 hover:text-zinc-200 hover:border-white/20',
+            )}
+          >
+            {v}
+          </button>
+        ))}
+      </div>
+
+      {view === 'pitchers' && (
+        <PitchersView
+          data={data}
+          homeName={game?.home.name ?? data.home.teamAbbr}
+          awayName={game?.away.name ?? data.away.teamAbbr}
+        />
       )}
 
+      {/* empty state */}
+      {view === 'batters' &&
+        data.home.batters.length === 0 &&
+        data.away.batters.length === 0 && (
+          <p className="text-amber-300 bg-amber-400/10 border border-amber-400/30 rounded-xl p-4 text-sm">
+            Projection pending — probable pitchers or lineups not yet confirmed.
+          </p>
+        )}
+
       {/* sort toggle */}
-      {(data.home.batters.length > 0 || data.away.batters.length > 0) && (
+      {view === 'batters' && (data.home.batters.length > 0 || data.away.batters.length > 0) && (
         <>
           <div className="flex items-center gap-2 mb-4">
             <span className={microLabel}>Sort</span>

@@ -28,11 +28,16 @@ public record PitcherPropPickDto(
     String bestBook,
     Integer priceAmerican,
     Double evPct,
-    // Reasoning drivers (null when skill rows are absent): the pitcher's own K rate
-    // and the opposing lineup's PA-weighted K rate / xwOBA.
+    // Reasoning drivers (null when skill rows are absent): the pitcher's own BF-weighted
+    // profile, the opposing lineup's PA-weighted K rate / xwOBA, and the pitcher's top
+    // pitches by usage (empty list when no arsenal snapshot exists).
     Double pitcherKRate,
+    Double pitcherBbRate,
+    Double pitcherXwobaAgainst,
+    Double pitcherHrPerPa,
     Double opponentKRate,
     Double opponentXwoba,
+    List<ArsenalPitch> arsenal,
     List<RunnerUp> runnersUp
 ) {
     /** One over-threshold from the workload distribution: P(over {@code line}). */
@@ -40,4 +45,7 @@ public record PitcherPropPickDto(
 
     /** An honorable mention: same expected-volume ranking, no distribution. */
     public record RunnerUp(int pitcherId, String pitcher, String team, double expectedValue) {}
+
+    /** One pitch in the starter's mix: usage / whiff / velocity (any may be null). */
+    public record ArsenalPitch(String pitchType, Double usageRate, Double whiffRate, Double avgVelocity) {}
 }

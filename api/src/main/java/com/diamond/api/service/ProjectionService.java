@@ -2,8 +2,12 @@ package com.diamond.api.service;
 
 import com.diamond.api.dto.BatterProjectionDto;
 import com.diamond.api.dto.BatterVsArsenalDto;
+import com.diamond.api.dto.GamePitchersDto;
 import com.diamond.api.dto.GameProjectionsResponse;
 import com.diamond.api.dto.PitchArsenalDto;
+import com.diamond.api.dto.PitcherDetailDto;
+import com.diamond.api.dto.PitcherDto;
+import com.diamond.api.dto.PitcherSkillSplitDto;
 import com.diamond.api.dto.TeamBattersDto;
 import com.diamond.api.repository.PitchRepository;
 import com.diamond.api.repository.ProjectionRepository;
@@ -39,7 +43,8 @@ public class ProjectionService {
             return new GameProjectionsResponse(
                 gameId,
                 new TeamBattersDto(null, false, List.of()),
-                new TeamBattersDto(null, false, List.of()));
+                new TeamBattersDto(null, false, List.of()),
+                null);
         }
 
         String homeAbbr = rows.get(0).homeAbbr();
@@ -68,7 +73,48 @@ public class ProjectionService {
         return new GameProjectionsResponse(
             gameId,
             new TeamBattersDto(homeAbbr, homeConfirmed, homeBatters),
-            new TeamBattersDto(awayAbbr, awayConfirmed, awayBatters));
+            new TeamBattersDto(awayAbbr, awayConfirmed, awayBatters),
+            buildPitchers(rows, homeAbbr, awayAbbr));
+    }
+
+    /** The game's two starters with arsenal + season skill splits, for the Pitchers tab.
+     *  Home batters face the away starter and vice-versa, so each side's SP is read off the
+     *  opposing-pitcher field of the other side's first batter. Null when neither is known. */
+    private GamePitchersDto buildPitchers(List<BatterRow> rows, String homeAbbr, String awayAbbr) {
+        LocalDate asOf = rows.get(0).gameDate();
+        PitcherDto homeSp = null, awaySp = null;
+        for (BatterRow row : rows) {
+            PitcherDto opp = row.projection().opposingPitcher();
+            if (opp == null || opp.id() == 0) continue;
+            if (row.isHome()) {
+                if (awaySp == null) awaySp = opp;   // home batter faces the away starter
+            } else if (homeSp == null) {
+                homeSp = opp;                        // away batter faces the home starter
+            }
+        }
+        if (homeSp == null && awaySp == null) {
+            return null;
+        }
+        return new GamePitchersDto(
+            buildPitcherDetail(homeSp, homeAbbr, asOf),
+            buildPitcherDetail(awaySp, awayAbbr, asOf));
+    }
+
+    /** Identity + arsenal (vs both hands) + season splits for one starter; null when unknown. */
+    private PitcherDetailDto buildPitcherDetail(PitcherDto sp, String teamAbbr, LocalDate asOf) {
+        if (sp == null) {
+            return null;
+        }
+        List<PitchArsenalDto> arsenal = new ArrayList<>();
+        List<PitcherSkillSplitDto> skill = List.of();
+        if (asOf != null) {
+            String hand = sp.throws_();
+            // The pitch mix can differ by the batter's hand; show the full arsenal vs both.
+            arsenal.addAll(pitchRepository.arsenal(sp.id(), hand, "L", asOf));
+            arsenal.addAll(pitchRepository.arsenal(sp.id(), hand, "R", asOf));
+            skill = projectionRepository.pitcherSkillSplits(sp.id(), asOf.getYear());
+        }
+        return new PitcherDetailDto(sp.id(), sp.name(), sp.throws_(), teamAbbr, arsenal, skill);
     }
 
     /** Pitch-mix data for a whole game: arsenal keyed "pitcherId|batterHand", batter pitch
