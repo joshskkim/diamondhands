@@ -41,6 +41,18 @@ from ingester.commands.refresh_skills import cmd_refresh_skills
 from ingester.commands.refresh_priors import cmd_refresh_priors
 from ingester.commands.backfill_birthdates import cmd_backfill_birthdates
 from ingester.commands.ingest_steamer import cmd_ingest_steamer
+from ingester.commands.refresh_projections import (
+    cmd_refresh_projections,
+    add_arguments as add_projections_args,
+)
+from ingester.commands.blend_priors import (
+    cmd_blend_priors,
+    add_arguments as add_blend_args,
+)
+from ingester.commands.tune_prior_blend import (
+    cmd_tune_prior_blend,
+    add_arguments as add_tune_prior_args,
+)
 from ingester.commands.refresh_bullpen import cmd_refresh_bullpen
 from ingester.commands.refresh_batted_ball import cmd_refresh_batted_ball
 from ingester.commands.refresh_team_defense import cmd_refresh_team_defense
@@ -190,12 +202,34 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_skills = sub.add_parser("refresh-skills", help="Recompute batter/pitcher skill aggregates")
     p_skills.add_argument("--season", type=int, default=CURRENT_SEASON, help="Season year (default: current season)")
+    p_skills.add_argument(
+        "--prior-method", default="marcel", dest="prior_method",
+        help="batter_projection_prior.method to regress toward (default: marcel; e.g. blend)",
+    )
 
     p_priors = sub.add_parser(
         "refresh-priors",
         help="Compute Marcel-style multi-year true-talent priors into batter_projection_prior",
     )
     p_priors.add_argument("--season", type=int, default=2026, help="Target season year (default: 2026)")
+
+    p_projections = sub.add_parser(
+        "refresh-projections",
+        help="Fetch external projection systems (Steamer/THE BAT X/ATC/ZiPS) into batter_projection_prior",
+    )
+    add_projections_args(p_projections)
+
+    p_blend = sub.add_parser(
+        "blend-priors",
+        help="Ensemble the per-system priors into a single method='blend' prior (per-metric weights)",
+    )
+    add_blend_args(p_blend)
+
+    p_tune_prior = sub.add_parser(
+        "tune-prior-blend",
+        help="Fit per-metric ensemble weights from realized outcomes into models/prior_blend.json",
+    )
+    add_tune_prior_args(p_tune_prior)
 
     p_birth = sub.add_parser(
         "backfill-birthdates", help="Populate players.birth_date from the MLB Stats API (aging curve)"
@@ -254,6 +288,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--force-rebuild", action="store_true", default=False, dest="force_rebuild",
         help="Delete existing snapshots for the target dates before rebuilding "
              "(required to clear stale rows when the player population changes)",
+    )
+    p_snapshots.add_argument(
+        "--prior-method", default="marcel", dest="prior_method",
+        help="batter_projection_prior.method to regress toward (default: marcel; e.g. blend)",
     )
 
     p_pitch_agg = sub.add_parser(
@@ -678,6 +716,9 @@ COMMANDS = {
     "refresh-priors":           cmd_refresh_priors,
     "backfill-birthdates":      cmd_backfill_birthdates,
     "ingest-steamer":           cmd_ingest_steamer,
+    "refresh-projections":      cmd_refresh_projections,
+    "blend-priors":             cmd_blend_priors,
+    "tune-prior-blend":         cmd_tune_prior_blend,
     "refresh-bullpen":          cmd_refresh_bullpen,
     "refresh-batted-ball":      cmd_refresh_batted_ball,
     "refresh-team-defense":     cmd_refresh_team_defense,

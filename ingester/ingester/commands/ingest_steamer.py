@@ -54,16 +54,21 @@ def _to_rate(value) -> float | None:
     return v / 100.0 if v > 1.0 else v
 
 
-def cmd_ingest_steamer(args: argparse.Namespace) -> None:
-    season: int = args.season
-    method: str = getattr(args, "method", "steamer")
-    path: str = args.csv
+def ingest_prior_frame(
+    conn, df: pd.DataFrame, season: int, method: str
+) -> tuple[int, int]:
+    """Map a projection DataFrame to batter_projection_prior rows and upsert them.
 
-    df = pd.read_csv(path)
+    Shared by the manual Steamer CSV path (cmd_ingest_steamer) and the automated
+    FanGraphs fetch (refresh-projections). Accepts any frame whose columns include
+    wOBA, PA, and an MLBAMID/xMLBAMID or Name column (FanGraphs export or JSON).
+
+    Returns (written, unmatched). Caller owns commit()/close().
+    """
     cols = {c.lower().strip(): c for c in df.columns}
 
     c_name = _find_col(cols, "name", "playername", "player")
-    c_mlbam = _find_col(cols, "mlbamid", "mlbam", "mlb_id", "mlbid")
+    c_mlbam = _find_col(cols, "mlbamid", "xmlbamid", "mlbam", "mlb_id", "mlbid")
     c_woba = _find_col(cols, "woba")
     c_pa = _find_col(cols, "pa")
     c_so = _find_col(cols, "so", "k")
@@ -74,11 +79,10 @@ def cmd_ingest_steamer(args: argparse.Namespace) -> None:
 
     if c_woba is None or c_pa is None or (c_mlbam is None and c_name is None):
         raise SystemExit(
-            "[ingest-steamer] CSV missing required columns (need wOBA, PA, and "
+            f"[ingest-prior:{method}] missing required columns (need wOBA, PA, and "
             "MLBAMID or Name). Found: " + ", ".join(df.columns)
         )
 
-    conn = get_connection()
     known_ids = {int(r[0]) for r in conn.execute("SELECT id FROM players").fetchall()}
     by_name: dict[str, int] = {}
     ambiguous: set[str] = set()
@@ -135,17 +139,28 @@ def cmd_ingest_steamer(args: argparse.Namespace) -> None:
                      method, updated_at)
                 VALUES (%(player_id)s, %(season)s, %(proj_xwoba)s, %(proj_k_rate)s,
                         %(proj_iso)s, %(proj_pa)s, %(method)s, NOW())
-                ON CONFLICT (player_id, season) DO UPDATE SET
+                ON CONFLICT (player_id, season, method) DO UPDATE SET
                     proj_xwoba=EXCLUDED.proj_xwoba, proj_k_rate=EXCLUDED.proj_k_rate,
                     proj_iso=EXCLUDED.proj_iso, proj_pa=EXCLUDED.proj_pa,
-                    method=EXCLUDED.method, updated_at=NOW()
+                    updated_at=NOW()
                 """,
                 row,
             )
+    return len(rows), unmatched
+
+
+def cmd_ingest_steamer(args: argparse.Namespace) -> None:
+    season: int = args.season
+    method: str = getattr(args, "method", "steamer")
+    path: str = args.csv
+
+    df = pd.read_csv(path)
+    conn = get_connection()
+    written, unmatched = ingest_prior_frame(conn, df, season, method)
     conn.commit()
     conn.close()
     print(
-        f"[ingest-steamer] Wrote {len(rows)} '{method}' priors for {season} "
-        f"({unmatched} rows unmatched/incomplete). They overlay the Marcel rows; "
-        f"re-running refresh-priors would overwrite them, so ingest Steamer last."
+        f"[ingest-steamer] Wrote {written} '{method}' priors for {season} "
+        f"({unmatched} rows unmatched/incomplete). Each method is its own row, so "
+        f"these coexist with the Marcel rows rather than overwriting them."
     )
