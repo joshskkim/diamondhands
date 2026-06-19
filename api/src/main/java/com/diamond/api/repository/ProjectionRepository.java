@@ -53,6 +53,28 @@ public class ProjectionRepository {
         return jdbc.query(BATTER_PROJECTIONS_SQL, this::mapRow, gameId);
     }
 
+    // A starter's season skill split vs LHB / RHB (one row per handedness present).
+    private static final String PITCHER_SKILL_SQL = """
+        SELECT vs_handedness, k_rate, bb_rate, xwoba_against, hr_per_pa, batters_faced
+        FROM pitcher_skill
+        WHERE player_id = ? AND season = ?
+        ORDER BY vs_handedness
+        """;
+
+    /** Season K%/BB%/xwOBA-against/HR-per-PA splits for one pitcher (empty when none). */
+    public List<PitcherSkillSplitDto> pitcherSkillSplits(int pitcherId, int season) {
+        return jdbc.query(
+            PITCHER_SKILL_SQL,
+            (rs, n) -> new PitcherSkillSplitDto(
+                rs.getString("vs_handedness"),
+                toDouble(rs.getBigDecimal("k_rate")),
+                toDouble(rs.getBigDecimal("bb_rate")),
+                toDouble(rs.getBigDecimal("xwoba_against")),
+                toDouble(rs.getBigDecimal("hr_per_pa")),
+                rs.getObject("batters_faced", Integer.class)),
+            pitcherId, season);
+    }
+
     private BatterRow mapRow(ResultSet rs, int rowNum) throws SQLException {
         PlayerDto player = new PlayerDto(
             rs.getInt("player_id"),

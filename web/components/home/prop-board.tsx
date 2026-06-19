@@ -1,14 +1,25 @@
 'use client'
 
 import Link from 'next/link'
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Target } from 'lucide-react'
+import { ChevronDown, ChevronRight, Target } from 'lucide-react'
 import { propBoardQueryOptions } from '@/lib/api'
-import type { PitcherPropPick, PropBoardPick } from '@/lib/types'
+import type { PitcherPropPick, PropBoardPick, PropBoardRunnerUp } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
+import { WhyDisclosure } from './why-disclosure'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
+
+const PITCH_NAMES: Record<string, string> = {
+  FF: '4-seam', SI: 'sinker', FC: 'cutter', SL: 'slider', CU: 'curve',
+  CH: 'changeup', FS: 'splitter', KC: 'knuckle-curve', ST: 'sweeper', SV: 'slurve',
+}
+
+function pitchName(code: string) {
+  return PITCH_NAMES[code] ?? code
+}
 
 // Park/weather multipliers within this band of 1.0 are noise, not narrative.
 const ADJ_NOTEWORTHY = 0.03
@@ -147,7 +158,8 @@ function buildReasons(p: PropBoardPick): string[] {
   return reasons
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+// A single compact factor, shown in the inline flex row both card types share.
+function Factor({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <div className={microLabel}>{label}</div>
@@ -156,10 +168,81 @@ function Stat({ label, value }: { label: string; value: string }) {
   )
 }
 
+// ── runners-up dropdown (shared by batter + pitcher cards) ──────────────────────
+
+interface RunnerUpItem {
+  id: number
+  name: string
+  team: string
+  href: string
+  value: string // the headline metric for this runner-up (e.g. "58%" or "5.2 K")
+  why: string // why it ranks behind the top pick
+}
+
+function RunnersUpDisclosure({
+  items,
+  accent,
+}: {
+  items: RunnerUpItem[]
+  accent: 'cyan' | 'amber'
+}) {
+  const [open, setOpen] = useState(false)
+  if (items.length === 0) return null
+  const hover = accent === 'amber' ? 'hover:text-amber-300' : 'hover:text-cyan-400'
+  return (
+    <div className="mt-auto pt-2 border-t border-white/5">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="inline-flex items-center gap-1 text-[11px] uppercase tracking-[0.12em] font-medium text-zinc-500 hover:text-zinc-300 transition-colors"
+      >
+        {open ? <ChevronRight size={12} className="rotate-90" /> : <ChevronRight size={12} />}
+        Runners-up ({items.length})
+      </button>
+      {open && (
+        <ul className="mt-2 space-y-2">
+          {items.map((it) => (
+            <li key={it.id}>
+              <div className="flex items-baseline justify-between gap-2 text-sm">
+                <Link href={it.href} className={`text-zinc-300 transition-colors ${hover}`}>
+                  {it.name} <span className="text-zinc-600 text-xs">{it.team}</span>
+                </Link>
+                <span className="shrink-0 font-mono tabular-nums text-zinc-400">{it.value}</span>
+              </div>
+              <div className="mt-0.5 text-xs text-zinc-500 leading-snug">{it.why}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// Why a batter runner-up ranks behind the top pick: the model ranks on a blended
+// probability, so the gap is the headline and we name the factual differentiator
+// (matchup xwOBA / expected PAs) that explains it when there is one.
+function batterRunnerWhy(ru: PropBoardRunnerUp, top: PropBoardPick): string {
+  const gap = Math.max(0, (top.prob - ru.prob) * 100)
+  const diffs: string[] = []
+  if (
+    ru.matchupXwoba != null &&
+    top.matchupXwoba != null &&
+    top.matchupXwoba - ru.matchupXwoba >= 0.008
+  ) {
+    diffs.push(`tougher matchup (xwOBA ${xwoba(ru.matchupXwoba)} vs ${xwoba(top.matchupXwoba)})`)
+  }
+  if (ru.expectedPa != null && top.expectedPa != null && top.expectedPa - ru.expectedPa >= 0.3) {
+    diffs.push(`fewer PAs (${ru.expectedPa.toFixed(1)} vs ${top.expectedPa.toFixed(1)})`)
+  }
+  const lead = `${gap.toFixed(1)} pts behind ${top.player}`
+  return diffs.length > 0 ? `${lead} — ${diffs.join(', ')}.` : `${lead} on the blended number.`
+}
+
 function PropCard({ pick }: { pick: PropBoardPick }) {
   const meta = MARKET_META[pick.market] ?? { chip: pick.market, verb: pick.market }
   return (
-    <div className="rounded-xl border border-white/10 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">
+    <div className="h-full rounded-xl border border-white/10 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-cyan-300 border-cyan-400/40 bg-cyan-500/10">
           {meta.chip}
@@ -177,20 +260,22 @@ function PropCard({ pick }: { pick: PropBoardPick }) {
           href={`/mlb/players/${pick.playerId}`}
           className="text-base font-bold tracking-tight text-zinc-100 hover:text-cyan-300 transition-colors"
         >
-          {pick.player} {meta.verb}
+          {pick.player}{' '}
+          <span className="text-sm font-normal text-zinc-500">{meta.verb}</span>
         </Link>
         <span className="shrink-0 font-mono tabular-nums text-lg text-cyan-300">
           {pct(pick.prob)}
         </span>
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
-        <Stat label="Team" value={pick.team} />
-        <Stat
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        <Factor label="xPA" value={pick.expectedPa != null ? pick.expectedPa.toFixed(1) : '—'} />
+        {pick.matchupXwoba != null && <Factor label="Matchup" value={xwoba(pick.matchupXwoba)} />}
+        <Factor
           label="Last 10"
           value={pick.rateL10 == null ? '—' : `${Math.round(pick.rateL10 * 10)}/10`}
         />
-        <Stat
+        <Factor
           label="Best price"
           value={
             pick.priceAmerican == null
@@ -200,63 +285,86 @@ function PropCard({ pick }: { pick: PropBoardPick }) {
         />
       </div>
 
-      <ul className="space-y-1.5 text-[13px] leading-relaxed text-zinc-400 list-disc pl-4 marker:text-zinc-600">
-        {buildReasons(pick).map((r, i) => (
-          <li key={i}>{r}</li>
-        ))}
-      </ul>
+      <WhyDisclosure reasons={buildReasons(pick)} />
 
-      {pick.runnersUp.length > 0 && (
-        <div className="pt-2 border-t border-white/5 text-xs text-zinc-500">
-          <span className={microLabel}>Also&nbsp;</span>
-          {pick.runnersUp.map((ru, i) => (
-            <span key={ru.playerId}>
-              {i > 0 && <span className="text-zinc-700"> · </span>}
-              <Link
-                href={`/mlb/players/${ru.playerId}`}
-                className="text-zinc-400 hover:text-cyan-400 transition-colors"
-              >
-                {ru.player}
-              </Link>{' '}
-              <span className="text-zinc-600">{ru.team}</span>{' '}
-              <span className="font-mono tabular-nums text-zinc-400">{pct(ru.prob)}</span>
-            </span>
-          ))}
-        </div>
-      )}
+      <RunnersUpDisclosure
+        accent="cyan"
+        items={pick.runnersUp.map((ru) => ({
+          id: ru.playerId,
+          name: ru.player,
+          team: ru.team,
+          href: `/mlb/players/${ru.playerId}`,
+          value: pct(ru.prob),
+          why: batterRunnerWhy(ru, pick),
+        }))}
+      />
     </div>
   )
 }
 
+// One-line summary of the pitcher's mix: his most-thrown pitch (usage/whiff/velo) and,
+// when different, his best swing-and-miss offering — the real K driver.
+function arsenalNote(pick: PitcherPropPick): string | null {
+  const arsenal = pick.arsenal ?? []
+  if (arsenal.length === 0) return null
+  const top = arsenal[0]
+  const bits: string[] = []
+  if (top.usageRate != null) bits.push(`${Math.round(top.usageRate * 100)}% usage`)
+  if (top.whiffRate != null) bits.push(`${Math.round(top.whiffRate * 100)}% whiff`)
+  if (top.avgVelocity != null) bits.push(`${top.avgVelocity.toFixed(0)} mph`)
+  let note = `Leans on his ${pitchName(top.pitchType)}${bits.length ? ` (${bits.join(', ')})` : ''}.`
+  const swing = [...arsenal]
+    .filter((p) => p.whiffRate != null)
+    .sort((a, b) => (b.whiffRate as number) - (a.whiffRate as number))[0]
+  if (swing && swing.pitchType !== top.pitchType && swing.whiffRate != null) {
+    note += ` Best whiff pitch: the ${pitchName(swing.pitchType)} at ${Math.round(
+      swing.whiffRate * 100,
+    )}%.`
+  }
+  return note
+}
+
 // The pitcher card's reasoning bullets — the actual DRIVERS of the line (the header
-// number + the over-distribution row already show the projection itself, so we don't
-// restate it). K/outs lean on strikeout rates; hits/ER lean on the lineup's offense.
+// number + the over-distribution row already show the projection itself). Built from the
+// pitcher's own profile (K/BB/xwOBA-against/HR), his arsenal, and the lineup he faces.
 function buildPitcherReasons(pick: PitcherPropPick): string[] {
   const reasons: string[] = []
   const kMarket = pick.market === 'pitcher_k' || pick.market === 'pitcher_outs'
 
+  // The pitcher's own season profile.
+  const profile: string[] = []
+  if (pick.pitcherKRate != null) profile.push(`${pct(pick.pitcherKRate)} K`)
+  if (pick.pitcherBbRate != null) profile.push(`${pct(pick.pitcherBbRate)} BB`)
+  if (pick.pitcherXwobaAgainst != null) {
+    profile.push(`${xwoba(pick.pitcherXwobaAgainst)} xwOBA against`)
+  }
+  if (profile.length > 0) {
+    const hr =
+      pick.pitcherHrPerPa != null
+        ? `, allows a homer on ${(pick.pitcherHrPerPa * 100).toFixed(1)}% of PAs`
+        : ''
+    reasons.push(`Season profile: ${profile.join(' · ')}${hr}.`)
+  }
+
+  // His mix — arsenal-led, the strongest signal for a strikeout line.
+  const arsenal = arsenalNote(pick)
+  if (arsenal) reasons.push(arsenal)
+
+  // The lineup he faces.
   if (kMarket) {
-    if (pick.pitcherKRate != null) {
-      reasons.push(`Strikes out ${pct(pick.pitcherKRate)} of the batters he faces.`)
-    }
     if (pick.opponentKRate != null) {
-      reasons.push(
-        `The ${pick.opponent} lineup strikes out ${pct(pick.opponentKRate)} of the time.`,
-      )
+      const xw =
+        pick.opponentXwoba != null ? ` (hitting ${xwoba(pick.opponentXwoba)} xwOBA)` : ''
+      reasons.push(`The ${pick.opponent} lineup strikes out ${pct(pick.opponentKRate)}${xw}.`)
     }
-  } else {
-    // hits allowed / earned runs: the lineup's offensive strength drives the line.
-    if (pick.opponentXwoba != null) {
-      const k =
-        pick.opponentKRate != null
-          ? ` and strikes out ${pct(pick.opponentKRate)} of the time`
-          : ''
-      reasons.push(`The ${pick.opponent} lineup is hitting ${xwoba(pick.opponentXwoba)} xwOBA${k}.`)
-    } else if (pick.opponentKRate != null) {
-      reasons.push(
-        `The ${pick.opponent} lineup strikes out ${pct(pick.opponentKRate)} of the time.`,
-      )
-    }
+  } else if (pick.opponentXwoba != null) {
+    const k =
+      pick.opponentKRate != null
+        ? ` and strikes out ${pct(pick.opponentKRate)} of the time`
+        : ''
+    reasons.push(`The ${pick.opponent} lineup is hitting ${xwoba(pick.opponentXwoba)} xwOBA${k}.`)
+  } else if (pick.opponentKRate != null) {
+    reasons.push(`The ${pick.opponent} lineup strikes out ${pct(pick.opponentKRate)} of the time.`)
   }
 
   // Early-season fallback when no skill rows exist yet: name the projection so the
@@ -293,7 +401,7 @@ function PitcherCard({ pick }: { pick: PitcherPropPick }) {
   const reasons = buildPitcherReasons(pick)
 
   return (
-    <div className="rounded-xl border border-amber-400/20 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">
+    <div className="h-full rounded-xl border border-amber-400/20 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-300 border-amber-400/40 bg-amber-500/10">
           {meta.chip}
@@ -323,39 +431,25 @@ function PitcherCard({ pick }: { pick: PitcherPropPick }) {
 
       <div className="flex flex-wrap gap-x-4 gap-y-1">
         {pick.distribution.map((t) => (
-          <div key={t.line}>
-            <div className={microLabel}>over {t.line}</div>
-            <div className="text-[13px] font-mono tabular-nums text-zinc-300">{pct(t.prob)}</div>
-          </div>
+          <Factor key={t.line} label={`over ${t.line}`} value={pct(t.prob)} />
         ))}
       </div>
 
-      <ul className="space-y-1.5 text-[13px] leading-relaxed text-zinc-400 list-disc pl-4 marker:text-zinc-600">
-        {reasons.map((r, i) => (
-          <li key={i}>{r}</li>
-        ))}
-      </ul>
+      <WhyDisclosure reasons={reasons} />
 
-      {pick.runnersUp.length > 0 && (
-        <div className="pt-2 border-t border-white/5 text-xs text-zinc-500">
-          <span className={microLabel}>Also&nbsp;</span>
-          {pick.runnersUp.map((ru, i) => (
-            <span key={ru.pitcherId}>
-              {i > 0 && <span className="text-zinc-700"> · </span>}
-              <Link
-                href={`/mlb/players/${ru.pitcherId}`}
-                className="text-zinc-400 hover:text-amber-300 transition-colors"
-              >
-                {ru.pitcher}
-              </Link>{' '}
-              <span className="text-zinc-600">{ru.team}</span>{' '}
-              <span className="font-mono tabular-nums text-zinc-400">
-                {ru.expectedValue.toFixed(1)}
-              </span>
-            </span>
-          ))}
-        </div>
-      )}
+      <RunnersUpDisclosure
+        accent="amber"
+        items={pick.runnersUp.map((ru) => ({
+          id: ru.pitcherId,
+          name: ru.pitcher,
+          team: ru.team,
+          href: `/mlb/players/${ru.pitcherId}`,
+          value: `${ru.expectedValue.toFixed(1)} ${meta.unit}`,
+          why: `${Math.max(0, pick.expectedValue - ru.expectedValue).toFixed(1)} fewer projected ${
+            meta.noun
+          } than ${pick.pitcher}.`,
+        }))}
+      />
     </div>
   )
 }

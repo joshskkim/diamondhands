@@ -167,7 +167,8 @@ public class PropBoardService {
                 .skip(1).limit(2)
                 .map(s -> new PropBoardPickDto.RunnerUp(
                     s.row().playerId(), s.row().player(), s.row().team(),
-                    round(s.blended(), 4)))
+                    round(s.blended(), 4),
+                    round(s.row().expectedPa(), 2), round(s.row().matchupXwoba(), 4)))
                 .toList();
             picks.add(toPick(m, top, runnersUp, date));
         }
@@ -251,7 +252,10 @@ public class PropBoardService {
             price == null ? null : price.bookmaker(),
             price == null ? null : price.priceAmerican(),
             evPct,
-            round(top.pitcherKRate(), 4), round(top.opponentKRate(), 4), round(top.opponentXwoba(), 4),
+            round(top.pitcherKRate(), 4), round(top.pitcherBbRate(), 4),
+            round(top.pitcherXwobaAgainst(), 4), round(top.pitcherHrPerPa(), 4),
+            round(top.opponentKRate(), 4), round(top.opponentXwoba(), 4),
+            top.arsenal(),
             runnersUp);
     }
 
