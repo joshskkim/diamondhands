@@ -115,7 +115,7 @@ docker compose -f compose.prod.yml run --rm ingester daily              # today'
 ```
 Install the schedule (edit paths/TZ first):
 ```bash
-crontab deploy/crontab.example     # morning daily + */30 12-18 quick loop + nightly backup
+crontab deploy/crontab.example     # morning daily + */30 quick loop + tennis + weekly prior refresh + nightly backup
 ```
 
 ## Ask Diamond AI (optional)

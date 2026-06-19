@@ -24,5 +24,11 @@ DIAMOND_DIR=/opt/diamond
 # prop calls.
 0 4-22 * * *     /opt/diamond/deploy/run-ingester.sh tennis-daily --quick
 
+# Weekly projection-prior refresh (Mon 8am ET, before the 9am daily run): pull the
+# external systems (Steamer/THE BAT X/ATC/ZiPS) from FanGraphs, bank a dated snapshot
+# for later leak-free backtesting, then re-blend. blend-priors only runs if the fetch
+# succeeds. The live model still uses the Marcel prior until the blend is validated.
+0 8 * * 1        /opt/diamond/deploy/run-ingester.sh refresh-projections && /opt/diamond/deploy/run-ingester.sh blend-priors
+
 # Nightly database backup.
 30 3 * * *       /opt/diamond/deploy/backup.sh

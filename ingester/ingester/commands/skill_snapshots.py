@@ -158,6 +158,7 @@ def cmd_refresh_skill_snapshots(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     force_rebuild: bool = getattr(args, "force_rebuild", False)
+    prior_method: str = getattr(args, "prior_method", "marcel")
 
     require_valid_season(season, cmd="refresh-skill-snapshots")
 
@@ -185,7 +186,9 @@ def cmd_refresh_skill_snapshots(args: argparse.Namespace) -> None:
             _delete_existing_snapshots(conn, mondays)
 
         for monday in mondays:
-            batter_rows = compute_batter_skill_rows(conn, season, cutoff_date=monday)
+            batter_rows = compute_batter_skill_rows(
+                conn, season, cutoff_date=monday, prior_method=prior_method
+            )
             _write_batter_snapshot(conn, monday, batter_rows)
             conn.commit()
 

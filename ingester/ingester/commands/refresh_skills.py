@@ -81,20 +81,21 @@ def _load_barrel_rates(conn: psycopg.Connection, prior_season: int) -> dict[int,
 
 
 def _load_priors(
-    conn: psycopg.Connection, season: int
+    conn: psycopg.Connection, season: int, method: str = "marcel"
 ) -> dict[int, ProjectionPrior]:
-    """Marcel true-talent priors for the target season, keyed by player_id.
+    """True-talent priors for the target season, keyed by player_id.
 
-    Empty when refresh-priors hasn't run for this season; callers then fall back
-    to the league mean (identical to pre-v2.4.0 behaviour).
+    `method` selects the prior source ('marcel' default, or 'blend'/'steamer'/…).
+    Empty when that source hasn't been built for this season; callers then fall
+    back to the league mean (identical to pre-v2.4.0 behaviour).
     """
     rows = conn.execute(
         """
         SELECT player_id, proj_xwoba, proj_k_rate, proj_iso, proj_pa
         FROM batter_projection_prior
-        WHERE season = %s
+        WHERE season = %s AND method = %s
         """,
-        (season,),
+        (season, method),
     ).fetchall()
     out: dict[int, ProjectionPrior] = {}
     for pid, xwoba, k_rate, iso, proj_pa in rows:
@@ -147,6 +148,7 @@ def compute_batter_skill_rows(
     conn: psycopg.Connection,
     season: int,
     cutoff_date: date,
+    prior_method: str = "marcel",
 ) -> list[dict]:
     """
     Compute batter skill rows using only game_date < cutoff_date (exclusive).
@@ -208,7 +210,7 @@ def compute_batter_skill_rows(
     # v2.4.0: regress each player's season rates toward their Marcel true-talent
     # prior rather than the flat league mean. Falls back to league per-metric
     # when no prior exists (debutants) or refresh-priors hasn't run this season.
-    priors = _load_priors(conn, season)
+    priors = _load_priors(conn, season, prior_method)
     barrel_rates = _load_barrel_rates(conn, season - 1)  # prior-season true-talent HR signal
 
     rows: list[dict] = []
@@ -378,10 +380,12 @@ def compute_batter_platoon_rows(
 # Live batter_skill upsert (refresh-skills writes to the non-snapshot table)
 # ---------------------------------------------------------------------------
 
-def _aggregate_batter_skill(conn: psycopg.Connection, season: int) -> int:
+def _aggregate_batter_skill(
+    conn: psycopg.Connection, season: int, prior_method: str = "marcel"
+) -> int:
     """Recompute batter_skill from player_game_stats as of today."""
     cutoff = eastern_today() + timedelta(days=1)  # include today's games
-    rows = compute_batter_skill_rows(conn, season, cutoff)
+    rows = compute_batter_skill_rows(conn, season, cutoff, prior_method)
 
     with conn.cursor() as cur:
         for row in rows:
@@ -509,6 +513,7 @@ def _aggregate_batter_platoon_skill(
 
 def cmd_refresh_skills(args: argparse.Namespace) -> None:
     season: int = getattr(args, "season", None) or eastern_today().year
+    prior_method: str = getattr(args, "prior_method", "marcel")
 
     require_valid_season(season, cmd="refresh-skills")
 
@@ -523,8 +528,8 @@ def cmd_refresh_skills(args: argparse.Namespace) -> None:
 
     conn = get_connection()
 
-    print(f"[refresh-skills] Aggregating batter_skill for {season}…")
-    n_batters = _aggregate_batter_skill(conn, season)
+    print(f"[refresh-skills] Aggregating batter_skill for {season} (prior={prior_method})…")
+    n_batters = _aggregate_batter_skill(conn, season, prior_method)
     conn.commit()
 
     with_l30 = conn.execute(
