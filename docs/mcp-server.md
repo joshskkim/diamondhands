@@ -127,6 +127,40 @@ curl localhost:8095/healthz                                   # 200
 curl -X POST localhost:8095/mcp -d '{}'                       # 401 (no key)
 ```
 
+## Going live
+
+The server is already wired into prod (`compose.prod.yml` starts it; Caddy routes `/mcp`;
+CD builds + health-checks it). To take it live:
+
+1. **Set `MCP_API_KEYS`** in the host `.env` (comma-separated; generate with `openssl rand -hex 32`).
+   This is mandatory — empty keys mean auth is **off** and the public `/mcp` is an open firehose.
+   Optionally tune `MCP_RATE_LIMIT_RPS` / `MCP_RATE_LIMIT_BURST` (defaults 5 / 20).
+2. **Deploy** (push to `main`, or `docker compose -f compose.prod.yml up -d` on the box).
+3. **Verify:** `scripts/verify-mcp.sh <domain> <key>` — asserts `/mcp` rejects an unauthenticated
+   request (401) and accepts an authenticated `initialize`.
+
+### Connecting from Claude Desktop
+Remote Streamable-HTTP servers connect via the [`mcp-remote`](https://github.com/geelen/mcp-remote)
+bridge. In `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "diamond": {
+      "command": "npx",
+      "args": [
+        "mcp-remote", "https://YOUR_DOMAIN/mcp",
+        "--header", "Authorization: Bearer YOUR_KEY"
+      ]
+    }
+  }
+}
+```
+
+Restart Claude Desktop; the Diamond tools (today's slate, projections, odds/EV, prop hit-rates,
+pitcher skill, tennis, the composite briefings) become available in chat. Clients that support
+remote MCP URLs natively can point straight at `https://YOUR_DOMAIN/mcp` with the same Bearer header.
+
 ## Load test
 
 `loadtest/driver.py` opens N concurrent real MCP sessions (full Streamable-HTTP + JSON-RPC
