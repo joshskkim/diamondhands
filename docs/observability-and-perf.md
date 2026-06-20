@@ -127,7 +127,13 @@ observable (it increments only on an actual heavy-query execution).
 | `HikariPoolExhausted` | `active >= max` for 1m | — (the leaderboard meltdown signature) |
 
 The two HikariCP rules would have paged on the leaderboard meltdown before users saw timeouts.
-Routing/paging would add an Alertmanager; the Prometheus Alerts tab is enough locally.
+An `ApiDown` rule (`up == 0`) is the keystone "is it up?" alert.
+
+**Delivery (prod).** `compose.prod.yml` runs **Alertmanager**, and `prometheus.prod.yml` routes
+firing alerts to it. Alertmanager emails them (SMTP) — its config is rendered from `ALERT_SMTP_*`
+env at startup (`monitoring/alertmanager-entrypoint.sh`) so no SMTP secrets are committed. It's
+opt-in: with `ALERT_SMTP_SMARTHOST` unset it starts with a null receiver and drops notifications,
+so the stack always comes up. Locally, the Prometheus Alerts tab is still enough.
 
 ## 5. CI
 

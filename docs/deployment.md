@@ -128,6 +128,15 @@ env var (`app.ai.api-key` in `application.yml`) and is never committed — with 
   `mvn spring-boot:run`, or keep it in a gitignored `api/.env.local` and source it:
   `set -a; source api/.env.local; set +a; mvn spring-boot:run`.
 
+## Alerting (optional)
+Prometheus alerts (`ApiDown`, 5xx>5%, latency, HikariCP saturation) are routed to **Alertmanager**,
+which emails them. It's opt-in and commits no secrets:
+- Set `ALERT_SMTP_SMARTHOST` (e.g. `smtp.gmail.com:587`), `ALERT_SMTP_FROM`, `ALERT_SMTP_TO`,
+  `ALERT_SMTP_USERNAME`, `ALERT_SMTP_PASSWORD` in the host `.env`. For Gmail use a 16-char App
+  Password. Leave `ALERT_SMTP_SMARTHOST` blank to disable (Alertmanager starts with a null receiver).
+- Reach the Alertmanager UI via SSH tunnel (`127.0.0.1:9093`), like Grafana/Prometheus/Jaeger.
+- Test it: `docker compose -f compose.prod.yml stop api`, wait ~2m → an `ApiDown` email; `start` to resolve.
+
 ## CD setup (GitHub)
 - Repo **variable** `DOMAIN` = your domain (baked into the web image at build time). The `deploy`
   job is **gated on `DOMAIN`** — unset → the job skips (CD stays green) instead of failing.

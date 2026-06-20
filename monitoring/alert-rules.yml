@@ -1,12 +1,26 @@
 # SLO-based alerting for the Diamond API. Prometheus evaluates these and surfaces firing
-# alerts at http://localhost:9090/alerts. (Routing/paging would add an Alertmanager; for
-# local dev the Prometheus Alerts tab is enough to demonstrate the rules.)
+# alerts at http://localhost:9090/alerts. In prod they're routed to Alertmanager, which emails
+# them (see compose.prod.yml + monitoring/alertmanager-entrypoint.sh); locally the Prometheus
+# Alerts tab is enough to demonstrate the rules.
 #
 # SLOs:
 #   - Availability: 5xx error ratio < 1% (page at > 5%).
 #   - Latency:      p95 of http.server.requests < 1s.
 #   - Saturation:   no sustained HikariCP connection waiting (the leaderboard meltdown).
 groups:
+  - name: diamond-availability
+    rules:
+      # The keystone "is it up?" alert: Prometheus can't scrape the API at all. Catches a
+      # crashed/OOM'd/unreachable API before the latency/error SLOs would even have data.
+      - alert: ApiDown
+        expr: up{job="diamond-api"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "diamond-api is down (unscrapable for 2m)"
+          description: "Prometheus cannot reach the API /actuator/prometheus endpoint — the service may be crashed or unreachable."
+
   - name: diamond-api-slo
     rules:
       - alert: HighErrorRate
