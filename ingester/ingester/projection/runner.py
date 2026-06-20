@@ -24,6 +24,7 @@ from ingester.projection.batter_model import (
     yrfi_probability,
 )
 from ingester.projection.game_sim import GameSim, simulate_game
+from ingester.projection.opener import SeasonRole, is_likely_opener
 from ingester.projection.workload import (
     WorkloadParams,
     compute_starter_workload,
@@ -84,6 +85,10 @@ class TeamSideProjection:
     # Workload-model innings for the OPPOSING starter this lineup faces (governs how
     # long these starter_projs are faced in the sim). None → sim uses its default.
     opp_starter_innings: int | None = None
+    # True when the OPPOSING probable was flagged as a likely opener and skipped (no
+    # pitcher_projections row written). _project_game reads this to also skip his sim
+    # props. See opener.is_likely_opener.
+    opp_starter_is_opener: bool = False
 
 # S3: optional per-market probability calibration, applied as a final post-process to
 # every projection. Set by cmd_project/cmd_backtest (--calibrate); None = no-op.
@@ -188,6 +193,7 @@ class ProjectSummary:
     games_projected: int = 0
     games_skipped: int = 0
     batter_rows: int = 0
+    pitchers_skipped_opener: int = 0
     skip_reasons: list[str] = field(default_factory=list)
 
 
@@ -828,6 +834,28 @@ def _load_pitcher_start_history(
     return outs, kbf
 
 
+def _load_pitcher_season_role(
+    conn: psycopg.Connection, pitcher_id: int, season: int
+) -> SeasonRole | None:
+    """Season role stats for the opener check, or None if not cached / no appearances."""
+    row = conn.execute(
+        """
+        SELECT games_started, games_pitched, innings_pitched, games_finished
+        FROM pitcher_season_role
+        WHERE player_id = %s AND season = %s
+        """,
+        (pitcher_id, season),
+    ).fetchone()
+    if row is None or row[1] in (None, 0):  # need games_pitched to compute ratios
+        return None
+    return SeasonRole(
+        games_started=int(row[0] or 0),
+        games_pitched=int(row[1]),
+        innings_pitched=float(row[2] or 0.0),
+        games_finished=int(row[3] or 0),
+    )
+
+
 def _project_team_side(
     conn: psycopg.Connection,
     *,
@@ -1030,18 +1058,40 @@ def _project_team_side(
         )
         return None
 
+    # Recorded-start history powers both the opener check and the workload model.
+    outs_hist, kbf_hist = _load_pitcher_start_history(
+        conn, opposing_pitcher_id, summary.game_date
+    )
+
+    # Skip likely openers: a reliever listed as the probable to open a bullpen game gets
+    # pulled after 1-2 IP, so projecting him as a starter invents a phantom line/pick.
+    role = _load_pitcher_season_role(conn, opposing_pitcher_id, season)
+    is_opener, opener_reason = is_likely_opener(outs_hist, role)
+    if is_opener:
+        log.info(
+            "game %s: SKIP pitcher %s — likely opener (%s)",
+            game.game_id,
+            opposing_pitcher_id,
+            opener_reason,
+        )
+        summary.pitchers_skipped_opener += 1
+        return TeamSideProjection(
+            expected_runs=expected_team_runs(starter_projs, bullpen_projs),
+            starter_projs=starter_projs,
+            bullpen_projs=bullpen_projs,
+            starter_player_ids=starter_player_ids,
+            opp_starter_innings=None,
+            opp_starter_is_opener=True,
+        )
+
     # Workload model for the opposing starter: how deep he goes + the K distribution
     # that rides on it (validated out-of-sample, PR #48). Drives the prop board and
     # the sim's depth for THIS lineup. Falls back silently when no prior starts exist.
     workload = None
     opp_starter_innings = None
-    if wl_params is not None:
-        outs_hist, kbf_hist = _load_pitcher_start_history(
-            conn, opposing_pitcher_id, summary.game_date
-        )
-        if outs_hist:
-            workload = compute_starter_workload(outs_hist, kbf_hist, wl_params)
-            opp_starter_innings = workload["innings"]
+    if wl_params is not None and outs_hist:
+        workload = compute_starter_workload(outs_hist, kbf_hist, wl_params)
+        opp_starter_innings = workload["innings"]
 
     # The opposing starter's projected line is the aggregate of this lineup vs him.
     # His team is the other side, so is_home flips.
@@ -1228,10 +1278,14 @@ def _project_game(
     _upsert_game_sim_batter_props(conn, game.game_id, sim.home_props, home.starter_player_ids)
     _upsert_game_sim_batter_props(conn, game.game_id, sim.away_props, away.starter_player_ids)
     # Each starter's hits/ER distribution (faced by the opposing lineup in the sim).
-    _upsert_game_sim_pitcher_props(
-        conn, game.game_id, game.home_probable_pitcher_id, sim.n_sims, sim.home_pitcher_props)
-    _upsert_game_sim_pitcher_props(
-        conn, game.game_id, game.away_probable_pitcher_id, sim.n_sims, sim.away_pitcher_props)
+    # Skip a starter flagged as a likely opener — the away lineup faces the home
+    # probable, so that side's opener flag gates the home probable's props (and vice versa).
+    if not away.opp_starter_is_opener:
+        _upsert_game_sim_pitcher_props(
+            conn, game.game_id, game.home_probable_pitcher_id, sim.n_sims, sim.home_pitcher_props)
+    if not home.opp_starter_is_opener:
+        _upsert_game_sim_pitcher_props(
+            conn, game.game_id, game.away_probable_pitcher_id, sim.n_sims, sim.away_pitcher_props)
 
     conn.execute(
         "UPDATE games SET projected_at = NOW() WHERE id = %s",
@@ -2123,7 +2177,8 @@ def cmd_project(args: argparse.Namespace) -> None:
         f"[project] Slate: {summary.games_seen} game(s) — "
         f"{summary.games_projected} projected, "
         f"{summary.games_skipped} skipped, "
-        f"{summary.batter_rows} batter row(s)"
+        f"{summary.batter_rows} batter row(s), "
+        f"{summary.pitchers_skipped_opener} opener(s) skipped"
     )
     for reason in summary.skip_reasons:
         print(f"  skip: {reason}")

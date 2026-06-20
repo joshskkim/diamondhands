@@ -28,7 +28,9 @@ import os
 # v2.11.0: per-batter walk rate (batter_skill.bb_rate) × pitcher walk-allowed
 # multiplier now drives a P(>=1 BB) projection (p_bb_1plus) for the walks prop —
 # previously bb_rate was used only as a flat league input to team runs.
-MODEL_VERSION: str = "v2.11.0"
+# v2.12.0: probable pitchers detected as likely openers (reliever in a bullpen game)
+# are skipped entirely — no pitcher_projections row, so no card/pick. See opener.py.
+MODEL_VERSION: str = "v2.12.0"
 
 # ---------------------------------------------------------------------------
 # League-average reference (2025 MLB approximations)
@@ -419,6 +421,22 @@ PLATOON_ENABLED: bool = os.environ.get("DIAMOND_PLATOON_ENABLED", "0") == "1"
 MIN_PLATOON_PA: int = 25            # ignore splits thinner than this
 PLATOON_FULL_WEIGHT_PA: int = 200   # PA at which the split reaches its max blend weight
 PLATOON_WEIGHT_CAP: float = 0.50    # split never more than half the blended skill
+
+# ---------------------------------------------------------------------------
+# Opener / bullpen-game detection (skip pitcher prop)
+# ---------------------------------------------------------------------------
+# A probable "starter" is sometimes a reliever opening a bullpen game (1-2 IP then
+# pulled). Detected from recorded-start history (pitcher_starts) + season role
+# (pitcher_season_role); flagged pitchers are skipped, not projected as starters.
+# Recency is steeper than the workload model's (0.9/10) so a reliever who has just
+# moved into the rotation is recognised as a starter fast and NOT flagged.
+OPENER_RECENCY_DECAY: float = float(os.environ.get("DIAMOND_OPENER_DECAY", "0.6"))
+OPENER_WINDOW: int = int(os.environ.get("DIAMOND_OPENER_WINDOW", "5"))
+OPENER_MAX_RECENT_IP: float = float(os.environ.get("DIAMOND_OPENER_MAX_RECENT_IP", "3.0"))
+OPENER_REAL_START_OUTS: int = 15            # 5.0 IP — an outing this deep is a "real" start
+OPENER_STARTED_SHARE_MIN: float = 0.5       # season GS/GP below this is reliever-ish
+OPENER_SEASON_IP_PER_APP_MIN: float = 4.0   # season IP/appearance below this is reliever-ish
+OPENER_RECENT_REAL_STARTS_OVERRIDE: int = 2  # this many real starts in-window vetoes the flag
 
 # ---------------------------------------------------------------------------
 # Probability output
