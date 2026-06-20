@@ -40,6 +40,8 @@ services:
       SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: "6379"
+      # MLB runs on US time — compute "today's slate" in Eastern, not the host's UTC.
+      TZ: ${TZ:-America/New_York}
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET}
       AUTH_COOKIE_SECURE: "true"
       OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
@@ -79,6 +81,7 @@ services:
     environment:
       DATABASE_URL: postgresql://diamond:${DB_PASSWORD}@postgres:5432/diamond
       ODDS_API_KEY: ${ODDS_API_KEY:-}
+      TZ: ${TZ:-America/New_York}
     volumes:
       - pybaseball_cache:/root/.pybaseball
     depends_on:

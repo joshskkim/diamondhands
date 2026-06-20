@@ -16,7 +16,9 @@
 
 	# Remote MCP endpoint (Streamable-HTTP). Auth is enforced by the MCP server itself
 	# (API key); /healthz + /metrics stay internal (not routed publicly).
-	handle /mcp /mcp/* {
+	# `handle` takes a single matcher, so match both /mcp and /mcp/* via a named matcher.
+	@mcp path /mcp /mcp/*
+	handle @mcp {
 		reverse_proxy mcp-server:8090
 	}
 
