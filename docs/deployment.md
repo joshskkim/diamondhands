@@ -142,6 +142,15 @@ until `STRIPE_SECRET_KEY` is set, so it's fully opt-in.
   `STRIPE_WEBHOOK_SECRET`). Subscribe with test card `4242 4242 4242 4242`; the webhook flips the
   user to Pro (`GET /api/auth/me` → `"pro": true`).
 
+## Alerting (optional)
+Prometheus alerts (`ApiDown`, 5xx>5%, latency, HikariCP saturation) are routed to **Alertmanager**,
+which emails them. It's opt-in and commits no secrets:
+- Set `ALERT_SMTP_SMARTHOST` (e.g. `smtp.gmail.com:587`), `ALERT_SMTP_FROM`, `ALERT_SMTP_TO`,
+  `ALERT_SMTP_USERNAME`, `ALERT_SMTP_PASSWORD` in the host `.env`. For Gmail use a 16-char App
+  Password. Leave `ALERT_SMTP_SMARTHOST` blank to disable (Alertmanager starts with a null receiver).
+- Reach the Alertmanager UI via SSH tunnel (`127.0.0.1:9093`), like Grafana/Prometheus/Jaeger.
+- Test it: `docker compose -f compose.prod.yml stop api`, wait ~2m → an `ApiDown` email; `start` to resolve.
+
 **External uptime check.** `.github/workflows/uptime.yml` probes `https://DOMAIN/` and
 `/api/games/today` every ~10 min from GitHub's infra — independent of the VPS, so it catches a
 fully-down box that on-box Alertmanager can't report. A failed run goes red and GitHub emails the
