@@ -150,3 +150,25 @@ docker exec diamond-redis redis-cli flushall   # between runs, cold cache
 ```
 Span counts: flush Redis, hit the endpoint once on the **default** profile (100% sampling),
 read the trace in Jaeger.
+
+## 6. Error tracking (Sentry)
+
+Metrics and traces answer *"is something wrong, and how bad?"*; Sentry answers *"what exactly
+broke, where, and on what input?"* — capturing the specific exception (stack trace, request,
+breadcrumbs, release) and grouping duplicates into one issue. It complements the stack rather
+than replacing it.
+
+- **API (Spring Boot)** — `sentry-spring-boot-starter-jakarta` + `sentry-logback`. Unhandled
+  exceptions and `ERROR` logs become issues, carrying the MDC `traceId` so an issue links back
+  to its Jaeger trace. Config is `sentry.*` in `application.yml`; **auto-disabled when `SENTRY_DSN`
+  is empty** (opt-in like AI/Stripe). `release` = the deployed image tag, so you can see which
+  build an error class started on. `send-default-pii: false`; performance tracing sampled
+  separately (`SENTRY_TRACES_SAMPLE_RATE`, default 0).
+- **Web (Next.js)** — `@sentry/nextjs` initialized via Next's native instrumentation hooks
+  (`instrumentation-client.ts`, `instrumentation.ts`) plus an `app/global-error.tsx` boundary.
+  Deliberately **without `withSentryConfig`** (the build plugin hooks Next internals — risky on
+  this non-standard Next 16; see `web/AGENTS.md`), so runtime error capture works while the build
+  stays vanilla. This catches client-side JS errors that never reach the API or its logs. The
+  browser DSN (`NEXT_PUBLIC_SENTRY_DSN`) is inlined at build time — set it as a CD build-arg/secret.
+- **Enabling:** create free Sentry projects, set `SENTRY_DSN` (API, host `.env`) and the
+  `NEXT_PUBLIC_SENTRY_DSN` GitHub Actions secret (web, baked at build). Both stay dark until set.

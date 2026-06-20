@@ -100,3 +100,18 @@ app:
     # Caps so a public endpoint can't run away: answer length + tool-call rounds.
     max-tokens: ${AI_MAX_TOKENS:3000}
     max-tool-iterations: ${AI_MAX_TOOL_ITERATIONS:6}
+
+# Sentry error tracking. Auto-disabled when SENTRY_DSN is empty (opt-in, like AI/Stripe),
+# so dev/CI never ship events. `release` tags issues with the deployed image so you can see
+# which build an error class started on. ERROR logs become issues (carrying the MDC traceId,
+# which links back to the Jaeger trace). PII is off by default — don't log secrets.
+sentry:
+  dsn: ${SENTRY_DSN:}
+  environment: ${SENTRY_ENVIRONMENT:local}
+  release: ${SENTRY_RELEASE:}
+  send-default-pii: false
+  # Performance tracing is sampled separately from errors; default off (errors are free-ish).
+  traces-sample-rate: ${SENTRY_TRACES_SAMPLE_RATE:0.0}
+  logging:
+    minimum-event-level: error
+    minimum-breadcrumb-level: info

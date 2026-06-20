@@ -58,6 +58,19 @@
       <version>29.5.0</version>
     </dependency>
 
+    <!-- Sentry error tracking (auto-disabled when no DSN is set) -->
+    <dependency>
+      <groupId>io.sentry</groupId>
+      <artifactId>sentry-spring-boot-starter-jakarta</artifactId>
+      <version>8.44.1</version>
+    </dependency>
+    <!-- Captures ERROR-level logback events as Sentry issues (with traceId from MDC) -->
+    <dependency>
+      <groupId>io.sentry</groupId>
+      <artifactId>sentry-logback</artifactId>
+      <version>8.44.1</version>
+    </dependency>
+
     <!-- Redis -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

@@ -47,6 +47,8 @@ jobs:
           context: ./web
           build-args: |
             NEXT_PUBLIC_API_URL=https://${{ vars.DOMAIN }}
+            NEXT_PUBLIC_SENTRY_DSN=${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+            NEXT_PUBLIC_SENTRY_RELEASE=${{ github.sha }}
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.OWNER }}/diamond-web:${{ github.sha }}
