@@ -30,5 +30,11 @@ DIAMOND_DIR=/opt/diamond
 # succeeds. The live model still uses the Marcel prior until the blend is validated.
 0 8 * * 1        /opt/diamond/deploy/run-ingester.sh refresh-projections && /opt/diamond/deploy/run-ingester.sh blend-priors
 
+# Model feature aggregates (pitch-matchup arsenals, batted-ball/barrel, bat-tracking).
+# These are NOT part of `daily`, so schedule them at 8:30am ET — just before the 9am
+# daily run — so today's projections use fresh inputs. They aggregate from the Statcast
+# cache (no big re-download), so each is quick.
+30 8 * * *       /opt/diamond/deploy/run-ingester.sh refresh-pitch-aggregations && /opt/diamond/deploy/run-ingester.sh refresh-batted-ball && /opt/diamond/deploy/run-ingester.sh refresh-bat-tracking
+
 # Nightly database backup.
 30 3 * * *       /opt/diamond/deploy/backup.sh
