@@ -3,11 +3,11 @@ name: API CI
 on:
   push:
     branches: [main]
+  # Run on every PR to main (no path filter) so this check always reports a status.
+  # Branch protection requires "API CI / build-test"; a path-filtered check that never
+  # runs would leave web-only / ingester-only PRs stuck "waiting for status" forever.
   pull_request:
-    paths:
-      - "api/**"
-      - "db/migrations/**"
-      - ".github/workflows/api-ci.yml"
+    branches: [main]
 
 jobs:
   build-test:
