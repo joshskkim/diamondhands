@@ -12,7 +12,8 @@ no tracing, plain-text logs, a static `/health`. Added:
 | Concern | Implementation |
 |---|---|
 | **Metrics** | Spring Boot Actuator + Micrometer + Prometheus registry. `http.server.requests` with server-side percentile histograms (true p50/p95/p99), HikariCP pool, JVM heap/GC, and per-service `@Observed` timers. Exposed at `/actuator/prometheus`. |
-| **Dashboards** | Prometheus + Grafana in `docker-compose`, with a provisioned dashboard (`monitoring/grafana/...`): request rate, latency percentiles by URI, error rate, **HikariCP active/idle/pending**, JVM. |
+| **Business metrics** | `BusinessMetrics` registers product gauges refreshed on a 60s timer (cheap COUNTs + cached Stripe price lookups): `diamond_users`, `diamond_subscriptions_active` (Pro), `diamond_subscriptions_customers`, `diamond_mrr_usd` (monthly-recurring revenue, derived from each active sub's Stripe price interval). |
+| **Dashboards** | Prometheus + Grafana in `docker-compose`, with provisioned dashboards (`monitoring/grafana/...`): **Diamond API — Observability** (request rate, latency percentiles by URI, error rate, **HikariCP active/idle/pending**, JVM) and **Diamond — Business** (users, Pro subscribers, MRR, free→paid conversion, signups). |
 | **Tracing** | Micrometer Tracing → OpenTelemetry → OTLP → **Jaeger** (`docker-compose`). `datasource-micrometer` emits a span per JDBC query, so a request's DB fan-out shows up as a trace waterfall. 100% sampling in dev. |
 | **Structured logging** | `logback-spring.xml` emits JSON (logstash encoder) with the active `traceId`/`spanId` from MDC, so a log line links to its trace. A `local` profile prints human-readable lines. |
 | **Health** | `/actuator/health` with DB + Redis indicators and liveness/readiness groups (the legacy `/health` is kept for the frontend). |
