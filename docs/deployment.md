@@ -128,6 +128,20 @@ env var (`app.ai.api-key` in `application.yml`) and is never committed — with 
   `mvn spring-boot:run`, or keep it in a gitignored `api/.env.local` and source it:
   `set -a; source api/.env.local; set +a; mvn spring-boot:run`.
 
+## Stripe billing (optional)
+Subscriptions use Stripe Checkout + Customer Portal; the API stores only the subscription
+*state* (keyed by `users.id`), never card data. All billing endpoints stay disabled (503)
+until `STRIPE_SECRET_KEY` is set, so it's fully opt-in.
+- **Prod:** in the host `.env` set `STRIPE_SECRET_KEY` (live `sk_live_…`), `STRIPE_PRICE_MONTHLY`
+  + `STRIPE_PRICE_ANNUAL` (the Pro Price ids), and `STRIPE_WEBHOOK_SECRET`. Create a Stripe
+  **webhook endpoint** in the dashboard pointing at `https://DOMAIN/api/billing/webhook` for
+  `checkout.session.completed`, `customer.subscription.updated`, and `customer.subscription.deleted`;
+  its signing secret is `STRIPE_WEBHOOK_SECRET`. `WEB_BASE_URL` is derived from `DOMAIN` in compose.
+- **Local dev / testing:** use **test** keys (`sk_test_…`) and the Stripe CLI to forward webhooks:
+  `stripe listen --forward-to localhost:8080/api/billing/webhook` (prints the `whsec_…` to use as
+  `STRIPE_WEBHOOK_SECRET`). Subscribe with test card `4242 4242 4242 4242`; the webhook flips the
+  user to Pro (`GET /api/auth/me` → `"pro": true`).
+
 ## CD setup (GitHub)
 - Repo **variable** `DOMAIN` = your domain (baked into the web image at build time). The `deploy`
   job is **gated on `DOMAIN`** — unset → the job skips (CD stays green) instead of failing.

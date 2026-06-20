@@ -7,7 +7,7 @@ Full how-to lives in [`deployment.md`](./deployment.md); this is the gate.
 - [ ] **VPS** reachable; Docker Engine + Compose plugin installed (`docker compose version`).
 - [ ] **DNS** `A` record resolves to the VPS IP (`dig +short your-domain.com`). Cloudflare proxy **off** (grey cloud).
 - [ ] **Deploy key** authorized on the box; you can `ssh -i diamond_deploy user@VPS_IP` non-interactively.
-- [ ] **`/opt/diamond/.env`** filled: `DOMAIN`, `DB_PASSWORD`, `AUTH_JWT_SECRET` (≥32 bytes), `GRAFANA_ADMIN_PASSWORD`, `ODDS_API_KEY` (optional), `ACME_EMAIL` (optional).
+- [ ] **`/opt/diamond/.env`** filled: `DOMAIN`, `DB_PASSWORD`, `AUTH_JWT_SECRET` (≥32 bytes), `GRAFANA_ADMIN_PASSWORD`, `ODDS_API_KEY` (optional), `ACME_EMAIL` (optional), Stripe keys (optional: `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` + `STRIPE_PRICE_MONTHLY`/`_ANNUAL`).
 - [ ] **GHCR access**: the three `diamond-*` packages are public, or the box has `docker login ghcr.io`.
 - [ ] **CI green on `main`** — `API CI` passing (Flyway-from-scratch + tests). Branch protection on `main` requires it.
 
