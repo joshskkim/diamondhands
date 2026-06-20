@@ -34,7 +34,7 @@ public class OddsController {
         return plays.size() > safeLimit ? plays.subList(0, safeLimit) : plays;
     }
 
-    /** Batter prop over-prices for the slate (BetRivers-first), for Best Bets. */
+    /** Batter prop over-prices for the slate (best price across books), for Best Bets. */
     @GetMapping("/props")
     public List<BatterPropOddsDto> props(
         @RequestParam(required = false)

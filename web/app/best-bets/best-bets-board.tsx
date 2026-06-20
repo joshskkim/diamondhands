@@ -363,7 +363,7 @@ export function BestBetsBoard() {
       )}
 
       <p className="mt-6 text-[11px] text-zinc-600">
-        Prop prices shown are {bookLabel('betrivers')} (best available where it has no line). Edges
+        Prop prices shown are the best available across FanDuel, DraftKings, and Fanatics. Edges
         are model probability vs the book&apos;s implied price.
       </p>
     </main>
