@@ -44,6 +44,12 @@ services:
       TZ: ${TZ:-America/New_York}
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET}
       AUTH_COOKIE_SECURE: "true"
+      # Stripe billing (optional — endpoints 503 without a secret key). Use LIVE keys here.
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_MONTHLY: ${STRIPE_PRICE_MONTHLY:-}
+      STRIPE_PRICE_ANNUAL: ${STRIPE_PRICE_ANNUAL:-}
+      WEB_BASE_URL: https://${DOMAIN}
       OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
       MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "0.1"
     depends_on:

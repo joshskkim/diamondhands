@@ -81,6 +81,16 @@ app:
     session-ttl: ${AUTH_SESSION_TTL:7d}
     # Secure cookie requires HTTPS; false for local http dev, true in prod.
     cookie-secure: ${AUTH_COOKIE_SECURE:false}
+  stripe:
+    # Billing is disabled (endpoints 503) unless a secret key is present. Test keys (sk_test_…)
+    # in dev; live keys only in prod. The webhook secret comes from `stripe listen` (dev) or the
+    # dashboard endpoint (prod). Price ids are the Stripe Price objects for the Pro tier.
+    secret-key: ${STRIPE_SECRET_KEY:}
+    webhook-secret: ${STRIPE_WEBHOOK_SECRET:}
+    price-monthly: ${STRIPE_PRICE_MONTHLY:}
+    price-annual: ${STRIPE_PRICE_ANNUAL:}
+    # Where Checkout/Portal redirect the user back to (the web app's base URL).
+    web-base-url: ${WEB_BASE_URL:http://localhost:3000}
   ai:
     # "Ask Diamond" natural-language query. Disabled unless a key is present so the
     # endpoint degrades gracefully (503) rather than erroring when no key is configured.

@@ -75,6 +75,10 @@ public class SecurityConfig {
                 // "Ask Diamond" AI query is a public read-like endpoint (POST only because it
                 // takes a question body). Gate to .authenticated() later if it needs sign-in.
                 .requestMatchers(HttpMethod.POST, "/api/ask").permitAll()
+                // Stripe webhook is public but authenticated by its signature, not the
+                // session cookie (it's a server-to-server callback). Checkout/portal POSTs
+                // are not GET, so they fall through to .authenticated() below.
+                .requestMatchers(HttpMethod.POST, "/api/billing/webhook").permitAll()
                 .requestMatchers("/health").permitAll()
                 // Health probes + Prometheus scrape are unauthenticated on the local
                 // network; other actuator endpoints stay behind auth.

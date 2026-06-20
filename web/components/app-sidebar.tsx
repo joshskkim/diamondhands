@@ -185,8 +185,13 @@ export function AppSidebar({
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-cyan-400/15 text-sm font-semibold text-cyan-300">
                 {user.handle.charAt(0).toUpperCase()}
               </div>
-              <div className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-200">
-                {user.handle}
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-sm font-medium text-zinc-200">
+                <span className="truncate">{user.handle}</span>
+                {user.pro && (
+                  <span className="shrink-0 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
+                    Pro
+                  </span>
+                )}
               </div>
               <button
                 type="button"

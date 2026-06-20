@@ -51,6 +51,13 @@
       <artifactId>spring-security-oauth2-jose</artifactId>
     </dependency>
 
+    <!-- Stripe (billing: Checkout + Customer Portal + webhooks) -->
+    <dependency>
+      <groupId>com.stripe</groupId>
+      <artifactId>stripe-java</artifactId>
+      <version>29.5.0</version>
+    </dependency>
+
     <!-- Redis -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
