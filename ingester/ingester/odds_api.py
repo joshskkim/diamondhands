@@ -22,7 +22,11 @@ import requests
 
 ODDS_BASE = "https://api.the-odds-api.com/v4"
 SPORT_KEY = "baseball_mlb"
-REGIONS = "us"
+# We only care about these books. The Odds API `bookmakers` param supersedes `regions`
+# and returns just these, trimming payload + the credit cost of books we never display.
+# (Fanatics/FanDuel may serve game markets only, not batter props — the prop board picks
+# the best price across whichever of these posted a line, so coverage degrades gracefully.)
+BOOKMAKERS = "fanduel,draftkings,fanatics"
 ODDS_FORMAT = "american"
 
 # Provider game-market key -> canonical market key.
@@ -91,7 +95,7 @@ def fetch_game_odds(api_key: str) -> list[dict]:
         f"{ODDS_BASE}/sports/{SPORT_KEY}/odds",
         params={
             "apiKey": api_key,
-            "regions": REGIONS,
+            "bookmakers": BOOKMAKERS,
             "markets": ",".join(FEATURED_MARKETS),
             "oddsFormat": ODDS_FORMAT,
         },
@@ -112,7 +116,7 @@ def fetch_event_props(api_key: str, event_id: str) -> dict:
         f"{ODDS_BASE}/sports/{SPORT_KEY}/events/{event_id}/odds",
         params={
             "apiKey": api_key,
-            "regions": REGIONS,
+            "bookmakers": BOOKMAKERS,
             "markets": ",".join([*PROP_MARKETS, *PERIOD_MARKETS]),
             "oddsFormat": ODDS_FORMAT,
         },
