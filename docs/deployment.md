@@ -142,6 +142,12 @@ until `STRIPE_SECRET_KEY` is set, so it's fully opt-in.
   `STRIPE_WEBHOOK_SECRET`). Subscribe with test card `4242 4242 4242 4242`; the webhook flips the
   user to Pro (`GET /api/auth/me` → `"pro": true`).
 
+**External uptime check.** `.github/workflows/uptime.yml` probes `https://DOMAIN/` and
+`/api/games/today` every ~10 min from GitHub's infra — independent of the VPS, so it catches a
+fully-down box that on-box Alertmanager can't report. A failed run goes red and GitHub emails the
+repo owner (ensure **Settings → Notifications → Actions** email is on). Gated on the `DOMAIN` repo
+variable, like the deploy job.
+
 ## CD setup (GitHub)
 - Repo **variable** `DOMAIN` = your domain (baked into the web image at build time). The `deploy`
   job is **gated on `DOMAIN`** — unset → the job skips (CD stays green) instead of failing.
