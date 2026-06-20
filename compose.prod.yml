@@ -25,6 +25,9 @@ services:
       context: ./web
       args:
         NEXT_PUBLIC_API_URL: https://${DOMAIN}
+        # Browser Sentry DSN (optional) — inlined at build time. Empty => disabled.
+        NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+        NEXT_PUBLIC_SENTRY_RELEASE: ${IMAGE_TAG:-}
     restart: unless-stopped
     expose: ["3000"]
 
@@ -50,6 +53,11 @@ services:
       STRIPE_PRICE_MONTHLY: ${STRIPE_PRICE_MONTHLY:-}
       STRIPE_PRICE_ANNUAL: ${STRIPE_PRICE_ANNUAL:-}
       WEB_BASE_URL: https://${DOMAIN}
+      # Sentry error tracking (optional — disabled without a DSN). Release = deployed image tag.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: production
+      SENTRY_RELEASE: ${IMAGE_TAG:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.0}
       OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
       MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "0.1"
     depends_on:
