@@ -1,5 +1,6 @@
 package com.diamond.api.auth;
 
+import com.diamond.api.billing.SubscriptionRepository;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
@@ -25,11 +26,14 @@ public class AuthController {
     private final AuthService auth;
     private final JwtService jwt;
     private final AuthProperties props;
+    private final SubscriptionRepository subscriptions;
 
-    public AuthController(AuthService auth, JwtService jwt, AuthProperties props) {
+    public AuthController(AuthService auth, JwtService jwt, AuthProperties props,
+                          SubscriptionRepository subscriptions) {
         this.auth = auth;
         this.jwt = jwt;
         this.props = props;
+        this.subscriptions = subscriptions;
     }
 
     public record SignupRequest(
@@ -40,11 +44,7 @@ public class AuthController {
 
     public record SigninRequest(@Email @NotBlank String email, @NotBlank String password) {}
 
-    public record UserResponse(long id, String email, String handle) {
-        static UserResponse of(AuthUser u) {
-            return new UserResponse(u.id(), u.email(), u.handle());
-        }
-    }
+    public record UserResponse(long id, String email, String handle, boolean pro) {}
 
     @PostMapping("/signup")
     public ResponseEntity<UserResponse> signup(@Valid @RequestBody SignupRequest req) {
@@ -65,12 +65,16 @@ public class AuthController {
     @GetMapping("/me")
     public UserResponse me(@AuthenticationPrincipal AuthUser user) {
         if (user == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
-        return UserResponse.of(user);
+        return userResponse(user);
     }
 
     private ResponseEntity<UserResponse> withSession(AuthUser user) {
         String cookie = baseCookie(jwt.issue(user)).maxAge(props.sessionTtl()).build().toString();
-        return ResponseEntity.ok().header(HttpHeaders.SET_COOKIE, cookie).body(UserResponse.of(user));
+        return ResponseEntity.ok().header(HttpHeaders.SET_COOKIE, cookie).body(userResponse(user));
+    }
+
+    private UserResponse userResponse(AuthUser u) {
+        return new UserResponse(u.id(), u.email(), u.handle(), subscriptions.isPro(u.id()));
     }
 
     private ResponseCookie.ResponseCookieBuilder baseCookie(String value) {

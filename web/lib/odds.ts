@@ -23,6 +23,7 @@ export function expectedValue(modelProb: number, price: number): number {
 const BOOK_LABELS: Record<string, string> = {
   fanduel: 'FanDuel',
   draftkings: 'DraftKings',
+  fanatics: 'Fanatics',
   betrivers: 'BetRivers',
   betmgm: 'BetMGM',
   bovada: 'Bovada',
