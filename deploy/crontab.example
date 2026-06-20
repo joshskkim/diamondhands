@@ -2,6 +2,9 @@
 # (or paste into `crontab -e`). CRON_TZ requires Vixie/cronie (Debian/Ubuntu default).
 CRON_TZ=America/New_York
 DIAMOND_DIR=/opt/diamond
+# Optional offsite backup target (rclone remote:bucket). When set, backup.sh mirrors each
+# nightly dump there. Configure the rclone remote on the host first (e.g. `rclone config`).
+# DIAMOND_B2_REMOTE=diamond-b2:diamond-backups
 
 # Morning full run: build today's slate + close out the prior day
 # (final scores, stats, picks scoring, accuracy snapshot).

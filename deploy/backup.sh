@@ -19,6 +19,18 @@ rc=$?
 if [ "$rc" -eq 0 ] && [ -s "$out" ]; then
   echo "[$(date -Is)] backup ok: $out ($(du -h "$out" | cut -f1))"
   find "$BACKUP_DIR" -name 'diamond-*.sql.gz' -mtime +"$RETAIN_DAYS" -delete
+
+  # Offsite copy (best-effort): mirror the dump to an rclone remote if one is configured,
+  # e.g. DIAMOND_B2_REMOTE=diamond-b2:diamond-backups. A failure here is logged but does
+  # NOT fail the local backup. Old remote dumps are pruned to the same retention window.
+  if [ -n "${DIAMOND_B2_REMOTE:-}" ] && command -v rclone >/dev/null 2>&1; then
+    if rclone copy "$out" "$DIAMOND_B2_REMOTE"; then
+      echo "[$(date -Is)] offsite copy ok: $DIAMOND_B2_REMOTE"
+      rclone delete --min-age "${RETAIN_DAYS}d" "$DIAMOND_B2_REMOTE" 2>/dev/null || true
+    else
+      echo "[$(date -Is)] offsite copy FAILED: $DIAMOND_B2_REMOTE"
+    fi
+  fi
 else
   echo "[$(date -Is)] backup FAILED (exit $rc)"
   rm -f "$out"
