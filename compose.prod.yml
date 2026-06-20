@@ -139,6 +139,26 @@ services:
       - ./monitoring/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro
       - ./monitoring/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
       - prometheus_data:/prometheus
+    depends_on: [alertmanager]
+
+  # Routes firing Prometheus alerts to email (SMTP). Opt-in: with no ALERT_SMTP_SMARTHOST
+  # it starts with a null receiver and drops notifications. Config is rendered from env at
+  # startup (see monitoring/alertmanager-entrypoint.sh) so no SMTP secrets are committed.
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    ports: ["127.0.0.1:9093:9093"]
+    entrypoint: ["/bin/sh", "/etc/alertmanager/entrypoint.sh"]
+    environment:
+      ALERT_SMTP_SMARTHOST: ${ALERT_SMTP_SMARTHOST:-}
+      ALERT_SMTP_FROM: ${ALERT_SMTP_FROM:-}
+      ALERT_SMTP_TO: ${ALERT_SMTP_TO:-}
+      ALERT_SMTP_USERNAME: ${ALERT_SMTP_USERNAME:-}
+      ALERT_SMTP_PASSWORD: ${ALERT_SMTP_PASSWORD:-}
+      ALERT_SMTP_REQUIRE_TLS: ${ALERT_SMTP_REQUIRE_TLS:-true}
+    volumes:
+      - ./monitoring/alertmanager-entrypoint.sh:/etc/alertmanager/entrypoint.sh:ro
+      - alertmanager_data:/alertmanager
 
   grafana:
     image: grafana/grafana:11.2.0
@@ -165,4 +185,5 @@ volumes:
   caddy_config:
   prometheus_data:
   grafana_data:
+  alertmanager_data:
   pybaseball_cache:

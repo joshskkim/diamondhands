@@ -1,0 +1,51 @@
+name: Uptime
+
+# External uptime check. Runs on GitHub's infrastructure — deliberately OFF our VPS — so it
+# catches a fully-down box that the on-box Prometheus/Alertmanager could never report (they're
+# down too). The complement to the internal SLO alerts: this answers "can the outside world
+# reach the site at all?". On failure the run goes red and GitHub emails the repo owner
+# (Settings → Notifications → Actions). Gated on the DOMAIN repo variable, like the deploy job,
+# so it stays green/skipped until prod is wired up.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *" # every ~10 min (GitHub may delay scheduled runs under load)
+  workflow_dispatch: {}
+
+concurrency:
+  group: uptime
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    if: ${{ vars.DOMAIN != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe the public site
+        env:
+          DOMAIN: ${{ vars.DOMAIN }}
+        run: |
+          set -uo pipefail
+
+          # 2xx/3xx within timeout = up. Retry a few times so one transient blip
+          # (a deploy restart, a network hiccup) doesn't page falsely.
+          check() {
+            url="$1"; name="$2"
+            for i in 1 2 3 4 5; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$url") || code=000
+              if [ "$code" -ge 200 ] && [ "$code" -lt 400 ]; then
+                echo "OK   $name -> $code  ($url)"
+                return 0
+              fi
+              echo "..   $name attempt $i -> $code  ($url)"
+              sleep 15
+            done
+            echo "DOWN $name  ($url)"
+            return 1
+          }
+
+          fail=0
+          # / exercises the web app; /api/games/today exercises the API + DB through Caddy.
+          check "https://$DOMAIN/" "web" || fail=1
+          check "https://$DOMAIN/api/games/today" "api" || fail=1
+          exit "$fail"
