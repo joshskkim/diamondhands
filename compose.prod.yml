@@ -72,8 +72,18 @@ services:
       MCP_PORT: "8090"
       # Must be set in .env — without keys auth is OFF, and /mcp is publicly routed.
       MCP_API_KEYS: ${MCP_API_KEYS}
+      # Per-client token-bucket limits for the public endpoint (defaults shown; tune in .env).
+      MCP_RATE_LIMIT_RPS: ${MCP_RATE_LIMIT_RPS:-5}
+      MCP_RATE_LIMIT_BURST: ${MCP_RATE_LIMIT_BURST:-20}
       OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
       OTEL_SERVICE_NAME: diamond-mcp
+    # The image has no curl; probe /healthz with Python (matches the deploy smoke test).
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8090/healthz').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     depends_on:
       api:
         condition: service_started
