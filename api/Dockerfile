@@ -8,10 +8,15 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B -ntp -q dependency:go-offline
 COPY src ./src
 # SENTRY_AUTH_TOKEN (optional BuildKit secret) activates the sentry-maven-plugin source-bundle
 # upload during packaging. Absent (local/CI) → empty → the profile stays off, nothing uploads.
+# The upload is best-effort: a Sentry/network hiccup (or a bad token) must never fail the image
+# build, so if `package` fails with the profile active we retry once with it explicitly off.
+# No `-q`, so the real Sentry error is visible in the build log when an upload does fail.
 RUN --mount=type=cache,target=/root/.m2 \
     --mount=type=secret,id=sentry_auth_token,required=false \
     SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token 2>/dev/null || true)" \
-    mvn -B -ntp -q -DskipTests package
+    sh -c 'mvn -B -ntp -DskipTests package \
+      || { echo "WARN: build with Sentry source-bundle upload failed; retrying with upload disabled (non-fatal)"; \
+           mvn -B -ntp -DskipTests -P "!sentry-source-context" package; }'
 
 # ── runtime ────────────────────────────────────────────────────────────────────
 FROM eclipse-temurin:21-jre AS runtime
