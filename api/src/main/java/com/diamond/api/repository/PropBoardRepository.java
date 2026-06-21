@@ -64,7 +64,8 @@ public class PropBoardRepository {
                ON bb.player_id = bp.player_id
               AND bb.season = EXTRACT(YEAR FROM g.game_date)::int
         WHERE g.game_date = ?
-        """;
+          AND %s
+        """.formatted(GameStatus.livePredicate("g"));
 
     // How often the player has cleared each 0.5 line recently and on the season.
     // L10 spans seasons on purpose (recent form early in the year); season is the
@@ -204,7 +205,8 @@ public class PropBoardRepository {
             WHERE bp2.game_id = pp.game_id AND bp2.is_home <> pp.is_home
         ) ol ON TRUE
         WHERE g.game_date = ?
-        """;
+          AND %s
+        """.formatted(GameStatus.livePredicate("g"));
 
     // Consensus line for a starter's prop on a given side: most-quoted line, best price
     // there. Side ('over'/'under') is parameterized so the board can price whichever side

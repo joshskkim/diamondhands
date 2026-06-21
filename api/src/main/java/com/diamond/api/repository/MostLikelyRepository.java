@@ -46,8 +46,9 @@ public class MostLikelyRepository {
         JOIN teams ht ON ht.id = g.home_team_id
         JOIN teams at2 ON at2.id = g.away_team_id
         WHERE g.game_date = ?
+          AND %s
         ORDER BY gsp.game_id
-        """;
+        """.formatted(GameStatus.livePredicate("g"));
 
     // Per-batter model probabilities across the slate (for prop leaderboards).
     private static final String PROPS_SQL = """
@@ -61,7 +62,8 @@ public class MostLikelyRepository {
         JOIN teams ht  ON ht.id = g.home_team_id
         JOIN teams at2 ON at2.id = g.away_team_id
         WHERE g.game_date = ?
-        """;
+          AND %s
+        """.formatted(GameStatus.livePredicate("g"));
 
     public List<SimRow> findSimRows(LocalDate date) {
         return jdbc.query(SIM_SQL, this::mapSim, date);

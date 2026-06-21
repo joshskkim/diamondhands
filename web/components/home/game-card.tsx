@@ -11,6 +11,11 @@ import { OutcomeBadge } from './outcome-badge'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
+// MLB detailedState values for a game that won't be played as scheduled — mirrors the
+// ingester's _DEAD_GAME_STATUSES. We keep the card (badged) but drop projections/picks;
+// a replayed game returns on its new date under a fresh gamePk.
+const DEAD_STATUSES = new Set(['Postponed', 'Suspended', 'Cancelled'])
+
 /** FanDuel total + moneyline strip. Renders nothing when no odds are posted yet. */
 function OddsRow({
   odds,
@@ -90,6 +95,7 @@ export function GameCard({ game }: { game: TodayGame }) {
   // Once final, did the projected favorite win? (proj favorite = higher expected runs)
   const isFinal = game.finalHomeScore != null && game.finalAwayScore != null
   const outcome = favoriteOutcome(homeRuns >= awayRuns, game.finalHomeScore, game.finalAwayScore)
+  const dead = game.detailedStatus != null && DEAD_STATUSES.has(game.detailedStatus)
 
   return (
     <Link
@@ -100,7 +106,11 @@ export function GameCard({ game }: { game: TodayGame }) {
         <span className="text-xl font-bold tracking-tight text-zinc-100">
           {game.away.abbr} <span className="text-zinc-600 font-normal">@</span> {game.home.abbr}
         </span>
-        {isFinal ? (
+        {dead ? (
+          <span className="text-[11px] uppercase tracking-[0.12em] font-semibold rounded px-1.5 py-0.5 text-amber-300 border border-amber-400/40 bg-amber-400/10">
+            {game.detailedStatus}
+          </span>
+        ) : isFinal ? (
           <span className="flex items-center gap-2">
             <span className="text-sm font-mono tabular-nums text-zinc-300">
               {game.away.abbr} {game.finalAwayScore}–{game.finalHomeScore} {game.home.abbr}
@@ -120,7 +130,12 @@ export function GameCard({ game }: { game: TodayGame }) {
         <WeatherChip weather={game.weather} isDome={game.stadium.isDome} />
       </div>
 
-      {proj ? (
+      {dead ? (
+        <p className="text-xs text-amber-300 bg-amber-400/10 border border-amber-400/30 rounded px-2 py-1.5">
+          {game.detailedStatus} — projections and picks are off the board. If it&apos;s
+          replayed on a later date, it&apos;s projected fresh then.
+        </p>
+      ) : proj ? (
         <>
           <div className="flex items-end justify-between mb-2">
             <div>
@@ -151,7 +166,7 @@ export function GameCard({ game }: { game: TodayGame }) {
         </p>
       )}
 
-      {game.odds && (
+      {!dead && game.odds && (
         <OddsRow odds={game.odds} homeAbbr={game.home.abbr} awayAbbr={game.away.abbr} />
       )}
     </Link>

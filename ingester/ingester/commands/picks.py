@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta, timezone
 import requests
 
 from ingester.db import eastern_today, get_connection
-from ingester.projection.constants import MODEL_VERSION
+from ingester.projection.constants import DEAD_GAME_STATUSES, MODEL_VERSION
 
 # ── the bar (mirror of model-picks.tsx) ──────────────────────────────────────
 # Interim tightening (Jun 2026), pending evidence-based recalibration once the
@@ -235,7 +235,7 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
         rows = conn.execute(
             """
             SELECT mp.slate_date, mp.rank, mp.game_id, mp.market, mp.side, mp.line,
-                   mp.player_id, g.home_score, g.away_score,
+                   mp.player_id, g.home_score, g.away_score, g.detailed_status,
                    CASE mp.market WHEN 'hit' THEN pgs.hits WHEN 'hr' THEN pgs.home_runs END
             FROM model_picks mp
             JOIN games g ON g.id = mp.game_id
@@ -247,9 +247,23 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
             (slate,),
         ).fetchall()
 
-        scored = pending = 0
+        scored = pending = voided = 0
         record: list[str] = []
-        for slate_date, rank, game_id, market, side, line, player_id, home, away, prop_val in rows:
+        for (slate_date, rank, game_id, market, side, line, player_id,
+             home, away, detailed_status, prop_val) in rows:
+            if detailed_status in DEAD_GAME_STATUSES:
+                # The game won't be played — settle the pick as voided (no win/loss)
+                # rather than leaving it pending forever. record-picks normally rebuilds
+                # the slate off a board that already excludes dead games, so this only
+                # catches a pick recorded before the postponement landed.
+                conn.execute(
+                    "UPDATE model_picks SET result_value=NULL, won=NULL, scored_at=NOW() "
+                    "WHERE slate_date=%s AND rank=%s",
+                    (slate_date, rank),
+                )
+                voided += 1
+                record.append(f"  #{rank} {market} {side} {line}: VOID ({detailed_status.lower()})")
+                continue
             if home is None or away is None:
                 pending += 1
                 continue  # final score not ingested yet (run backfill-scores first)
@@ -275,7 +289,8 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
     finally:
         conn.close()
 
-    print(f"[score-picks] {slate}: scored {scored}, pending {pending} "
-          f"(pending = missing final score or player stats; re-run after backfills).")
+    print(f"[score-picks] {slate}: scored {scored}, voided {voided}, pending {pending} "
+          f"(voided = game postponed/cancelled; "
+          f"pending = missing final score or player stats; re-run after backfills).")
     for line_ in record:
         print(line_)

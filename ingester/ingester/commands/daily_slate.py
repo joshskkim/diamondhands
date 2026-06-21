@@ -14,6 +14,42 @@ from ingester.mlb_api import (
 )
 
 
+def parse_schedule_status(g: dict) -> tuple[str, str | None, datetime]:
+    """Pull (status, detailed_status, start_time_utc) out of a raw MLB schedule game.
+
+    Single source of truth for how the Stats API payload maps to those columns, shared
+    by daily-slate (full upsert) and refresh-lineups (in-day status refresh):
+      · status          — abstractGameState: Scheduled / Live / Final
+      · detailed_status — detailedState (Postponed / Suspended / Cancelled / Delayed …),
+                          which abstractGameState never reports; the projector reads this
+                          to skip games that won't be played as scheduled.
+      · start_time_utc  — gameDate, ISO 8601 (e.g. "2025-05-28T17:10:00Z").
+    """
+    status: str = g.get("status", {}).get("abstractGameState", "Scheduled")
+    detailed_status: str | None = g.get("status", {}).get("detailedState")
+    start_utc = datetime.fromisoformat(g["gameDate"].replace("Z", "+00:00"))
+    return status, detailed_status, start_utc
+
+
+def update_game_status(conn: psycopg.Connection, game_pk: int, g: dict) -> None:
+    """Refresh status/detailed_status/start_time_utc for an already-tracked game.
+
+    Used by the afternoon quick loop (via refresh-lineups) so a game postponed after the
+    morning slate build is detected the same day — the projector then skips it and clears
+    its rows. No-ops if the game row doesn't exist yet (daily-slate inserts it first)."""
+    status, detailed_status, start_utc = parse_schedule_status(g)
+    conn.execute(
+        """
+        UPDATE games
+           SET status          = %s,
+               detailed_status = %s,
+               start_time_utc  = %s
+         WHERE id = %s
+        """,
+        (status, detailed_status, start_utc, game_pk),
+    )
+
+
 def _ensure_player(conn: psycopg.Connection, player: dict) -> int:
     """Stub-insert a player if they don't exist in players yet; return their MLBAM ID."""
     pid = player["id"]
@@ -93,15 +129,8 @@ def cmd_daily_slate(args: argparse.Namespace) -> None:
             g.get("officialDate") or g["gameDate"][:10]
         )
 
-        # UTC start time — gameDate is ISO 8601, e.g. "2025-05-28T17:10:00Z"
-        start_utc = datetime.fromisoformat(g["gameDate"].replace("Z", "+00:00"))
-
-        # MLB uses 'abstractGameState': Scheduled / Live / Final
-        status: str = g.get("status", {}).get("abstractGameState", "Scheduled")
-        # detailedState is finer-grained (e.g. Postponed / Suspended / Cancelled /
-        # Delayed), which abstractGameState never reports. The projector reads this to
-        # skip games that won't be played as scheduled.
-        detailed_status: str | None = g.get("status", {}).get("detailedState")
+        # status / detailed_status / UTC start time — see parse_schedule_status.
+        status, detailed_status, start_utc = parse_schedule_status(g)
 
         home_team_id: int = g["teams"]["home"]["team"]["id"]
         away_team_id: int = g["teams"]["away"]["team"]["id"]
