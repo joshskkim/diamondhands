@@ -10,7 +10,6 @@ import com.diamond.api.service.MostLikelyService;
 import com.diamond.api.service.OddsService;
 import com.diamond.api.service.ProjectionService;
 import com.diamond.api.service.PropBoardService;
-import com.diamond.api.service.TennisService;
 import com.diamond.api.repository.PlayerStatRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
@@ -40,13 +39,12 @@ public class AskToolRegistry {
     private final PropBoardService propBoard;
     private final MostLikelyService mostLikely;
     private final AccuracyService accuracy;
-    private final TennisService tennis;
     private final PlayerStatRepository players;
     private final ObjectMapper mapper;
 
     public AskToolRegistry(GameService games, ProjectionService projections, OddsService odds,
                            PropBoardService propBoard, MostLikelyService mostLikely,
-                           AccuracyService accuracy, TennisService tennis,
+                           AccuracyService accuracy,
                            PlayerStatRepository players, ObjectMapper mapper) {
         this.games = games;
         this.projections = projections;
@@ -54,7 +52,6 @@ public class AskToolRegistry {
         this.propBoard = propBoard;
         this.mostLikely = mostLikely;
         this.accuracy = accuracy;
-        this.tennis = tennis;
         this.players = players;
         this.mapper = mapper;
     }
@@ -95,15 +92,6 @@ public class AskToolRegistry {
                 + "Needs a playerId from search_player.",
                 Map.of("playerId", strProp("The player's numeric id (as a string).")),
                 List.of("playerId")),
-            tool("get_tennis_matches_today",
-                "Today's scheduled ATP matches with surface-blended win probabilities and "
-                + "best-line EV.",
-                Map.of(), List.of()),
-            tool("get_tennis_match",
-                "One tennis match's detail: players, surface, win probabilities, total-games and "
-                + "ace/double-fault markets. Needs a matchId from get_tennis_matches_today.",
-                Map.of("matchId", strProp("The match's numeric id (as a string).")),
-                List.of("matchId")),
             tool("get_model_accuracy",
                 "How the projection model has performed lately: per-market Brier vs baseline and "
                 + "calibration over a recent window.",
@@ -121,8 +109,6 @@ public class AskToolRegistry {
             case "get_most_likely" -> "Running the game-simulator board…";
             case "search_player" -> "Finding the player…";
             case "get_player" -> "Pulling the player's recent form…";
-            case "get_tennis_matches_today" -> "Checking today's tennis slate…";
-            case "get_tennis_match" -> "Reading the match detail…";
             case "get_model_accuracy" -> "Checking how the model's been doing…";
             default -> "Looking that up…";
         };
@@ -158,12 +144,10 @@ public class AskToolRegistry {
                 yield Optional.empty();
             }
             case "get_game_projections" -> idLink(args, "gameId", "Game projections", "/mlb/games/");
-            case "get_tennis_match" -> idLink(args, "matchId", "Match detail", "/tennis/matches/");
             case "get_best_plays" -> Optional.of(new LinkRef("Best Lines", "/mlb/odds"));
             case "get_most_likely" -> Optional.of(new LinkRef("Most Likely board", "/mlb/most-likely"));
             case "get_prop_board", "get_today_games" -> Optional.of(new LinkRef("Today's Board", "/"));
             case "get_model_accuracy" -> Optional.of(new LinkRef("Model accuracy", "/mlb/accuracy"));
-            case "get_tennis_matches_today" -> Optional.of(new LinkRef("Tennis matches", "/tennis/matches"));
             default -> Optional.empty();
         };
     }
@@ -202,8 +186,6 @@ public class AskToolRegistry {
                 case "get_most_likely" -> json(mostLikely.board(date(args)));
                 case "search_player" -> json(players.searchByName(reqStr(args, "name"), PLAYER_SEARCH_CAP));
                 case "get_player" -> json(player(reqInt(args, "playerId")));
-                case "get_tennis_matches_today" -> json(tennis.scheduledMatches());
-                case "get_tennis_match" -> json(tennis.matchDetail(reqLong(args, "matchId")));
                 case "get_model_accuracy" -> json(accuracy.accuracy(days(args)));
                 default -> error("unknown tool: " + name);
             };

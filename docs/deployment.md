@@ -115,7 +115,7 @@ docker compose -f compose.prod.yml run --rm ingester daily              # today'
 ```
 Install the schedule (edit paths/TZ first):
 ```bash
-crontab deploy/crontab.example     # morning daily + */30 quick loop + tennis + weekly prior refresh + nightly backup
+crontab deploy/crontab.example     # morning daily + */30 quick loop + weekly prior refresh + nightly backup
 ```
 The morning `daily` run records the day's Model's Picks and closes out the prior slate
 (scores → stats → score-picks → accuracy). The `*/30` quick loop additionally grades

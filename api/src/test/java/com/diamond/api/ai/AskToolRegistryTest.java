@@ -10,7 +10,6 @@ import com.diamond.api.service.MostLikelyService;
 import com.diamond.api.service.OddsService;
 import com.diamond.api.service.ProjectionService;
 import com.diamond.api.service.PropBoardService;
-import com.diamond.api.service.TennisService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
@@ -56,7 +55,7 @@ class AskToolRegistryTest {
         return new AskToolRegistry(
             new GameService(null), new ProjectionService(null, null), new OddsService(null),
             new PropBoardService(null), new MostLikelyService(null), accuracy,
-            new TennisService(null), players, new ObjectMapper());
+            players, new ObjectMapper());
     }
 
     private static Map<String, Object> input(Map<String, Object> fields) {
@@ -70,8 +69,7 @@ class AskToolRegistryTest {
             .toList();
         assertThat(names).containsExactlyInAnyOrder(
             "get_today_games", "get_game_projections", "get_best_plays", "get_prop_board",
-            "get_most_likely", "search_player", "get_player", "get_tennis_matches_today",
-            "get_tennis_match", "get_model_accuracy");
+            "get_most_likely", "search_player", "get_player", "get_model_accuracy");
     }
 
     @Test
@@ -117,8 +115,6 @@ class AskToolRegistryTest {
         AskToolRegistry r = registry();
         assertThat(r.linkFor("get_best_plays", input(Map.of()), "[]").orElseThrow().href())
             .isEqualTo("/mlb/odds");
-        assertThat(r.linkFor("get_tennis_matches_today", input(Map.of()), "[]").orElseThrow().href())
-            .isEqualTo("/tennis/matches");
         assertThat(r.linkFor("search_player", input(Map.of("name", "x")), "[]")).isEmpty();
     }
 

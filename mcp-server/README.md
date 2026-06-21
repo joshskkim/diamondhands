@@ -6,7 +6,7 @@ HTTP wrapper over the Diamond REST API — the API stays the single source of tr
 
 The tool surface mirrors the in-app "Ask Diamond" tools (`AskToolRegistry`) and adds the
 richer read endpoints the REST API already serves (line shopping, hit rates, spray, pitcher
-skill, pitch-type leaderboard, tennis rankings, …).
+skill, pitch-type leaderboard, …).
 
 ## Prerequisites
 
@@ -86,11 +86,9 @@ calibrated lately?"* and Claude will call the `diamond` tools.
 ## Tools
 
 Mirror of the Ask Diamond set: `get_today_games`, `get_game_projections`, `get_best_plays`,
-`get_prop_board`, `get_most_likely`, `search_player`, `get_player`, `get_model_accuracy`,
-`get_tennis_matches_today`, `get_tennis_match`.
+`get_prop_board`, `get_most_likely`, `search_player`, `get_player`, `get_model_accuracy`.
 
 Richer surface: `get_game_odds`, `get_prop_odds`, `get_hit_rates`, `get_line_shop`,
-`get_player_spray`, `get_pitcher_skill`, `list_pitch_types`, `get_pitch_type_leaderboard`,
-`get_tennis_rankings`, `get_tennis_accuracy`.
+`get_player_spray`, `get_pitcher_skill`, `list_pitch_types`, `get_pitch_type_leaderboard`.
 
 Composite (concurrent fan-out): `get_game_briefing`, `get_slate_summary`.

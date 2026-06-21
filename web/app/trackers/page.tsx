@@ -8,7 +8,7 @@ export default function TrackersPage() {
     <ComingSoon
       icon={<LineChart size={26} strokeWidth={1.75} />}
       title="Bet Trackers"
-      description="Track your bets, ROI, and CLV across MLB and tennis — coming soon."
+      description="Track your bets, ROI, and CLV across MLB — coming soon."
     />
   )
 }
