@@ -55,6 +55,10 @@ export interface TodayGame {
   projection: ProjectionSummary | null
   odds: GameOddsSummary | null
   status: string
+  /** MLB detailedState (Postponed / Suspended / Cancelled / Delayed …) when it differs
+   *  from the coarse `status`; null for a normal game. A dead game keeps its slate card
+   *  (badged) but its projections/picks are pulled off every board. */
+  detailedStatus: string | null
   /** Final score once the game is over (null while scheduled / in progress). */
   finalHomeScore: number | null
   finalAwayScore: number | null

@@ -21,6 +21,7 @@ public class GameRepository {
             g.id                            AS game_id,
             g.start_time_utc,
             g.status,
+            g.detailed_status,
             g.projected_at,
             g.home_score,
             g.away_score,
@@ -122,6 +123,7 @@ public class GameRepository {
             rs.getString("start_time_utc"),
             home, away, stadium, weather, probables, projection, odds,
             rs.getString("status"),
+            rs.getString("detailed_status"),
             nullableInt(rs, "home_score"),
             nullableInt(rs, "away_score"));
     }

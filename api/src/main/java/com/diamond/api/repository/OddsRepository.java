@@ -60,10 +60,11 @@ public class OddsRepository {
         """;
 
     private static final String GAME_IDS_SQL = """
-        SELECT id FROM games
+        SELECT id FROM games g
         WHERE game_date = ? AND odds_event_id IS NOT NULL
+          AND %s
         ORDER BY start_time_utc
-        """;
+        """.formatted(GameStatus.livePredicate("g"));
 
     public List<GameOddRow> findGameOdds(long gameId) {
         return jdbc.query(GAME_ODDS_SQL, this::mapGameOdd, gameId);

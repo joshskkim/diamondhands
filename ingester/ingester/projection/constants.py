@@ -9,6 +9,15 @@ from __future__ import annotations
 import os
 
 # ---------------------------------------------------------------------------
+# Game status
+# ---------------------------------------------------------------------------
+# MLB detailedState values for a game that won't be played as scheduled. The projector
+# skips these (no projections), the API board queries filter them out, and score-picks
+# voids any recorded pick on such a game. A replayed game returns under a new gamePk on
+# its new date and is projected normally there.
+DEAD_GAME_STATUSES: frozenset[str] = frozenset({"Postponed", "Suspended", "Cancelled"})
+
+# ---------------------------------------------------------------------------
 # Model identity (increment on any constants or logic change)
 # ---------------------------------------------------------------------------
 
