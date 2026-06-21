@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useState } from 'react'
 import { CircleUserRound, LogIn, LogOut, Trophy, X } from 'lucide-react'
-import { navLinksForPath } from '@/components/app-sidebar'
+import { NAV_LINKS } from '@/components/app-sidebar'
 import { useAuth } from '@/components/auth-provider'
 import { DiamondMark } from '@/components/diamond-mark'
 import { cn } from '@/lib/utils'
@@ -16,9 +16,6 @@ const SHORT_LABEL: Record<string, string> = {
   '/mlb/odds': 'Lines',
   '/mlb/leaderboards/pitch-types': 'Matchups',
   '/mlb/accuracy': 'Accuracy',
-  '/tennis/matches': 'Matches',
-  '/tennis/rankings': 'Rankings',
-  '/tennis/accuracy': 'Accuracy',
 }
 
 // Secondary destinations that don't earn a bottom-bar tab live in the account sheet.
@@ -42,8 +39,6 @@ export function MobileNav() {
   const [sheetOpen, setSheetOpen] = useState(false)
   const { user, signOut } = useAuth()
 
-  const navLinks = navLinksForPath(pathname)
-
   const isActive = (href: string) =>
     href === '/' ? pathname === '/' : pathname.startsWith(href)
 
@@ -53,7 +48,7 @@ export function MobileNav() {
         className="fixed inset-x-0 bottom-0 z-40 flex border-t border-white/10 bg-[#0e1015]/95 backdrop-blur md:hidden"
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
-        {navLinks.map((link) => {
+        {NAV_LINKS.map((link) => {
           const Icon = link.icon
           const active = isActive(link.href)
           return (

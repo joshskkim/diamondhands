@@ -124,24 +124,6 @@ async def get_model_accuracy(days: int | None = None) -> Any:
     return await client.get("/api/accuracy", {"days": days})
 
 
-# ── Tennis ──────────────────────────────────────────────────────────────────────
-
-
-@mcp.tool()
-@instrument_tool
-async def get_tennis_matches_today() -> Any:
-    """Today's scheduled ATP matches with surface-blended win probabilities and best-line EV."""
-    return await client.get("/api/tennis/matches/today")
-
-
-@mcp.tool()
-@instrument_tool
-async def get_tennis_match(match_id: int) -> Any:
-    """One tennis match's detail: players, surface, win probabilities, total-games and
-    ace/double-fault markets. Needs a matchId from get_tennis_matches_today."""
-    return await client.get(f"/api/tennis/matches/{match_id}")
-
-
 # ── Richer read surface (beyond the Ask Diamond set) ────────────────────────────
 
 
@@ -215,23 +197,6 @@ async def get_pitch_type_leaderboard(
     return await client.get(
         "/api/leaderboards/pitch-type", {"pitch": pitch, "date": date, "limit": limit}
     )
-
-
-@mcp.tool()
-@instrument_tool
-async def get_tennis_rankings(surface: str | None = None, limit: int | None = None) -> Any:
-    """Tennis (ATP) Elo rankings, optionally by surface.
-
-    surface: one of all / hard / clay / grass (default all).
-    limit: max rows (capped at 200 server-side)."""
-    return await client.get("/api/tennis/rankings", {"surface": surface, "limit": limit})
-
-
-@mcp.tool()
-@instrument_tool
-async def get_tennis_accuracy() -> Any:
-    """Tennis model accuracy broken down by surface."""
-    return await client.get("/api/tennis/accuracy")
 
 
 # ── Composite tools (concurrent fan-out, one call) ──────────────────────────────

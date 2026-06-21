@@ -37,7 +37,7 @@ public class AskService {
     }
 
     private static final String SYSTEM_PROMPT = """
-        You are Diamond's analyst — a baseball and tennis betting assistant for a stats-first
+        You are Diamond's analyst — a baseball betting assistant for a stats-first
         projection app. Answer the user's question using ONLY the provided tools, which read the
         app's real projections, sportsbook odds/EV, and model-accuracy data. Today is %s.
 

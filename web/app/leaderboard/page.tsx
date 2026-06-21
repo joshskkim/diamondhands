@@ -20,7 +20,7 @@ export default function LeaderboardPage() {
           Leaderboards
         </h1>
         <p className="text-zinc-500 text-sm mt-1">
-          Jump into the day&apos;s sharpest edges, ranked across sports.
+          Jump into the day&apos;s sharpest edges.
         </p>
       </div>
 
@@ -49,29 +49,6 @@ export default function LeaderboardPage() {
             </p>
           </div>
         </Link>
-
-        {/* Tennis — coming soon */}
-        <div
-          className={cn(cardBase, 'flex flex-col gap-3 opacity-60')}
-          aria-disabled="true"
-        >
-          <div className="flex items-center justify-between">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white/5 text-zinc-500">
-              <Target className="h-5 w-5" aria-hidden="true" />
-            </div>
-            <span className="text-[10px] uppercase tracking-[0.12em] font-medium rounded-full border border-white/10 px-2 py-0.5 text-zinc-500">
-              Coming soon
-            </span>
-          </div>
-          <div>
-            <h2 className="text-base font-semibold tracking-tight text-zinc-400">
-              Tennis
-            </h2>
-            <p className="text-zinc-600 text-sm mt-1">
-              Player-vs-surface and serve edges. Not yet available.
-            </p>
-          </div>
-        </div>
       </div>
     </main>
   )

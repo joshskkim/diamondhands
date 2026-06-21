@@ -10,7 +10,6 @@ const EXAMPLES = [
   'Aaron Judge',
   'Best EV bet today?',
   "Model's top hit pick tonight",
-  'Top tennis pick today',
 ]
 
 /**

@@ -49,9 +49,9 @@ Two transports, selected by `MCP_TRANSPORT`:
 
 ## Tools
 
-22 read tools. The first 10 mirror the in-app "Ask Diamond" surface (names + descriptions ported
-from `AskToolRegistry`); the next 10 expose the richer read endpoints (game/prop odds, hit-rates,
-line-shop, spray, pitcher skill, pitch-type leaderboard, tennis rankings/accuracy). Most are thin
+18 read tools. The first 8 mirror the in-app "Ask Diamond" surface (names + descriptions ported
+from `AskToolRegistry`); the next 8 expose the richer read endpoints (game/prop odds, hit-rates,
+line-shop, spray, pitcher skill, pitch-type leaderboard). Most are thin
 async wrappers over one REST endpoint; `client.get()` returns parsed JSON or an `{"error": ...}`
 payload on failure (never raises), so the model can recover gracefully.
 
@@ -158,7 +158,7 @@ bridge. In `claude_desktop_config.json`:
 ```
 
 Restart Claude Desktop; the Diamond tools (today's slate, projections, odds/EV, prop hit-rates,
-pitcher skill, tennis, the composite briefings) become available in chat. Clients that support
+pitcher skill, the composite briefings) become available in chat. Clients that support
 remote MCP URLs natively can point straight at `https://YOUR_DOMAIN/mcp` with the same Bearer header.
 
 ## Load test

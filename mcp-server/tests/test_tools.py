@@ -104,9 +104,9 @@ async def test_slate_summary_fans_out_three():
 
 
 async def test_all_tools_registered():
-    # 10 Ask-Diamond mirror + 10 richer + 2 composite = 22
+    # 8 Ask-Diamond mirror + 8 richer + 2 composite = 18
     tools = await server.mcp.list_tools()
-    assert len(tools) == 22
+    assert len(tools) == 18
     names = {t.name for t in tools}
     assert "search_player" in names
     assert "get_pitch_type_leaderboard" in names

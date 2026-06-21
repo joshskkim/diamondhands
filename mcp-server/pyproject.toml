@@ -1,7 +1,7 @@
 [project]
 name = "diamond-mcp"
 version = "0.1.0"
-description = "MCP server exposing Diamond's MLB/tennis projection, odds, and accuracy data to Claude Desktop"
+description = "MCP server exposing Diamond's MLB projection, odds, and accuracy data to Claude Desktop"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
