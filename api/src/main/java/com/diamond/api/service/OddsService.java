@@ -28,6 +28,14 @@ public class OddsService {
 
     private static final List<String> GAME_MARKET_ORDER = List.of("moneyline", "run_line", "total");
 
+    // A model probability of (effectively) 0 or 1 is not a confident edge — it's the
+    // "not really projected" sentinel. A batter with expected_pa = 0 (no confirmed lineup
+    // slot) gives p_hit_1plus = 0, and a 0-run game projection gives pTotalOver = 0; either
+    // way the *opposite* side reads as a phantom 100% and floats to the top of the board
+    // (the under-at-100% bug). Real projections never land within EPS of 0/1, so we drop
+    // such degenerate probabilities to null (no EV, no edge, no model% shown).
+    private static final double PROB_EPS = 1e-6;
+
     private final OddsRepository repo;
 
     public OddsService(OddsRepository repo) {
@@ -177,7 +185,7 @@ public class OddsService {
 
     private Double gameModelProb(OddsModel model, String market, String side, Double line) {
         if (model == null) return null;
-        return switch (market) {
+        Double prob = switch (market) {
             case "moneyline" -> side.equals("home") ? model.pHomeWin() : 1.0 - model.pHomeWin();
             case "total" -> {
                 double over = model.pTotalOver(line);
@@ -186,6 +194,7 @@ public class OddsService {
             case "run_line" -> side.equals("home") ? model.pHomeCover(line) : model.pAwayCover(line);
             default -> null;
         };
+        return sane(prob);
     }
 
     // ── Player props ─────────────────────────────────────────────────────────
@@ -202,7 +211,9 @@ public class OddsService {
         for (Map<String, List<PropOddRow>> sides : grouped.values()) {
             PropOddRow any = firstRow(sides);
             PlayerDto player = new PlayerDto(any.playerId(), any.playerName(), any.bats(), any.position());
-            Double overProb = propOverProb(any.market(), any.line(), any);
+            // sane() drops a degenerate p (e.g. p_hit_1plus = 0 for a 0-PA batter); without
+            // it the under reads 1.0 - 0 = 100%. When over is sane, 1 - over is sane too.
+            Double overProb = sane(propOverProb(any.market(), any.line(), any));
             Double underProb = overProb == null ? null : 1.0 - overProb;
             List<PropOddRow> overBooks = sides.get("over");
             List<PropOddRow> underBooks = sides.get("under");
@@ -247,6 +258,12 @@ public class OddsService {
 
     private static Double ev(Double modelProb, double decimal) {
         return modelProb == null ? null : modelProb * decimal - 1.0;
+    }
+
+    /** A model probability is usable only if it's strictly inside (0, 1); 0/1 means the
+     *  projection is degenerate (not really projected), not a confident edge. See PROB_EPS. */
+    private static Double sane(Double p) {
+        return (p == null || p <= PROB_EPS || p >= 1.0 - PROB_EPS) ? null : p;
     }
 
     /** No-vig fair probability for one side: its implied divided by the two-sided implied sum. */
