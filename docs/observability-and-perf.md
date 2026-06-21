@@ -170,7 +170,10 @@ than replacing it.
   to its Jaeger trace. Config is `sentry.*` in `application.yml`; **auto-disabled when `SENTRY_DSN`
   is empty** (opt-in like AI/Stripe). `release` = the deployed image tag, so you can see which
   build an error class started on. `send-default-pii: false`; performance tracing sampled
-  separately (`SENTRY_TRACES_SAMPLE_RATE`, default 0).
+  separately (`SENTRY_TRACES_SAMPLE_RATE`, default 0). **Source context** (source lines shown
+  in stack traces) is uploaded by the `sentry-maven-plugin` in a Maven profile gated on
+  `SENTRY_AUTH_TOKEN` — active only in the CD image build (token passed as a BuildKit secret),
+  inactive for `mvn verify`/local so nothing uploads there.
 - **Web (Next.js)** — `@sentry/nextjs` initialized via Next's native instrumentation hooks
   (`instrumentation-client.ts`, `instrumentation.ts`) plus an `app/global-error.tsx` boundary.
   Deliberately **without `withSentryConfig`** (the build plugin hooks Next internals — risky on
