@@ -1,4 +1,4 @@
-import type { ModelPickResult } from './types'
+import type { BestPlay, ModelPickResult, TodayGame } from './types'
 import { MARKET_LABEL, teamForSide } from './odds'
 
 /** The minimal shape a pick title needs — satisfied by both BestPlay (live board)
@@ -65,6 +65,107 @@ export function pickOutcome(p: Pick<ModelPickResult, 'scored' | 'won'>): PickOut
   if (!p.scored) return 'pending'
   if (p.won == null) return 'push'
   return p.won ? 'won' : 'lost'
+}
+
+// ── live, same-day grading from actual results (mirrors favoriteOutcome) ─────────
+// These power the ✓/✗ badges on the Prop Board, Sim Signals, and Model's Picks. Each
+// returns undefined while the relevant game (or stat) hasn't landed, so nothing shows
+// pre-final — exactly like the projected-favorites marker.
+
+/** A generic over/under line graded against an actual value (push on the line). */
+export function overUnderOutcome(
+  side: 'over' | 'under' | null,
+  line: number | null,
+  actual: number | null | undefined,
+): PickOutcome | undefined {
+  if (side == null || line == null || actual == null) return undefined
+  if (actual === line) return 'push'
+  return (side === 'over') === (actual > line) ? 'won' : 'lost'
+}
+
+/** A ≥1 batter prop (hit/HR/K/BB, 0.5 line, always the "over"): did the player clear it. */
+export function propOutcome(
+  actual: number | null | undefined,
+  line = 0.5,
+): PickOutcome | undefined {
+  if (actual == null) return undefined
+  return actual > line ? 'won' : 'lost'
+}
+
+/** A sim totals lean (over/under the book line) graded against the final total. */
+export function totalLeanOutcome(
+  lean: 'over' | 'under' | 'even' | null,
+  bookLine: number | null,
+  finalHome: number | null,
+  finalAway: number | null,
+): PickOutcome | undefined {
+  if (bookLine == null || finalHome == null || finalAway == null) return undefined
+  if (lean !== 'over' && lean !== 'under') return undefined
+  const actual = finalHome + finalAway
+  if (actual === bookLine) return 'push'
+  return (lean === 'over') === (actual > bookLine) ? 'won' : 'lost'
+}
+
+/** A run-line lean (favorite covers -1.5): did the favorite win by 2+ (no push on a half-run). */
+export function runLineOutcome(
+  favHome: boolean,
+  finalHome: number | null,
+  finalAway: number | null,
+): PickOutcome | undefined {
+  if (finalHome == null || finalAway == null) return undefined
+  const margin = favHome ? finalHome - finalAway : finalAway - finalHome
+  return margin >= 2 ? 'won' : 'lost'
+}
+
+/** An NRFI/YRFI lean graded against actual first-inning runs. */
+export function nrfiOutcome(
+  lean: 'NRFI' | 'YRFI',
+  homeFirst: number | null,
+  awayFirst: number | null,
+): PickOutcome | undefined {
+  if (homeFirst == null || awayFirst == null) return undefined
+  const yrfi = homeFirst + awayFirst > 0
+  return (lean === 'YRFI') === yrfi ? 'won' : 'lost'
+}
+
+/** A Model's Pick graded live: game markets from final scores, HR from batter results.
+ *  `hrByKey` is keyed `${playerId}:${gameId}` → the player's home-run count. */
+export function modelPlayOutcome(
+  play: BestPlay,
+  game: Pick<TodayGame, 'finalHomeScore' | 'finalAwayScore'> | undefined,
+  hrByKey: Map<string, number | null>,
+): PickOutcome | undefined {
+  const home = game?.finalHomeScore
+  const away = game?.finalAwayScore
+  switch (play.market) {
+    case 'total':
+      return overUnderOutcome(
+        play.side as 'over' | 'under',
+        play.line,
+        home == null || away == null ? null : home + away,
+      )
+    case 'moneyline': {
+      if (home == null || away == null) return undefined
+      if (home === away) return 'push'
+      return (play.side === 'home') === (home > away) ? 'won' : 'lost'
+    }
+    case 'run_line': {
+      if (home == null || away == null || play.line == null) return undefined
+      const margin = play.side === 'home' ? home - away : away - home
+      const adj = margin + play.line
+      if (adj === 0) return 'push'
+      return adj > 0 ? 'won' : 'lost'
+    }
+    case 'hr':
+      if (play.playerId == null) return undefined
+      return overUnderOutcome(
+        play.side as 'over' | 'under',
+        play.line,
+        hrByKey.get(`${play.playerId}:${play.gameId}`),
+      )
+    default:
+      return undefined
+  }
 }
 
 /** A YYYY-MM-DD date string in US Eastern (the league/slate timezone), offset by

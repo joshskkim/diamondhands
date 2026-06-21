@@ -70,6 +70,26 @@ def parse_game_score(game: dict) -> tuple[int, int] | None:
     return int(h), int(a)
 
 
+def parse_game_first_inning(game: dict) -> tuple[int, int] | None:
+    """Return (home_score_1st, away_score_1st) from a game hydrated with ``linescore``,
+    or None until the first inning has completed.
+
+    The linescore exposes per-inning runs:
+        linescore.innings = [{"num": 1, "home": {"runs": 0}, "away": {"runs": 1}}, ...]
+    We only trust the 1st once both halves are present (runs not None on each side),
+    so an in-progress top-of-the-1st doesn't grade NRFI prematurely.
+    """
+    innings = ((game.get("linescore") or {}).get("innings")) or []
+    first = next((i for i in innings if i.get("num") == 1), None)
+    if first is None:
+        return None
+    h = (first.get("home") or {}).get("runs")
+    a = (first.get("away") or {}).get("runs")
+    if h is None or a is None:
+        return None
+    return int(h), int(a)
+
+
 def parse_home_plate_umpire(game: dict) -> tuple[int, str] | None:
     """
     Extract the home-plate umpire from a schedule game hydrated with ``officials``.

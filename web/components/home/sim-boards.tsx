@@ -2,10 +2,22 @@
 
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
-import { mostLikelyQueryOptions } from '@/lib/api'
+import { mostLikelyQueryOptions, todayGamesQueryOptions } from '@/lib/api'
 import type { MostLikely } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { nrfiOutcome, runLineOutcome, totalLeanOutcome, type PickOutcome } from '@/lib/picks'
 import { BoardCard, Rank } from './pick-boards'
+import { OutcomeBadge } from './outcome-badge'
+
+// Final scores + first-inning runs per game, for live ✓/✗ grading of the sim leans.
+interface GameResult {
+  finalHome: number | null
+  finalAway: number | null
+  home1st: number | null
+  away1st: number | null
+  homeAbbr: string
+  awayAbbr: string
+}
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
@@ -38,7 +50,25 @@ function Empty() {
   return <div className="px-4 py-6 text-xs text-zinc-600">Nothing simulated for this slate yet.</div>
 }
 
-function TotalsCard({ data }: { data: MostLikely['totals'] }) {
+// The matchup link with a ✓/✗ badge alongside once the lean is graded.
+function RowMatchup({
+  gameId,
+  label,
+  outcome,
+}: {
+  gameId: number
+  label: string
+  outcome?: PickOutcome
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <Matchup gameId={gameId} label={label} />
+      {outcome && <OutcomeBadge outcome={outcome} iconOnly />}
+    </div>
+  )
+}
+
+function TotalsCard({ data, games }: { data: MostLikely['totals']; games: Map<number, GameResult> }) {
   const rows = [...data]
     .sort((a, b) => Math.abs(b.edge ?? 0) - Math.abs(a.edge ?? 0))
     .slice(0, N)
@@ -48,11 +78,14 @@ function TotalsCard({ data }: { data: MostLikely['totals'] }) {
       blurb="Sim expected total vs the consensus book line — strongest leans first"
     >
       {rows.length === 0 && <Empty />}
-      {rows.map((t, i) => (
+      {rows.map((t, i) => {
+        const g = games.get(t.gameId)
+        const outcome = totalLeanOutcome(t.lean, t.bookLine, g?.finalHome ?? null, g?.finalAway ?? null)
+        return (
         <div key={t.gameId} className="flex items-center gap-3 px-4 py-2 hover:bg-white/[0.03] transition-colors">
           <Rank n={i + 1} />
           <div className="min-w-0 flex-1">
-            <Matchup gameId={t.gameId} label={t.matchup} />
+            <RowMatchup gameId={t.gameId} label={t.matchup} outcome={outcome} />
             <div className="text-[11px] text-zinc-500 mt-0.5">
               sim <span className="text-zinc-300 font-mono">{t.simTotal.toFixed(1)}</span>
               {t.bookLine != null && (
@@ -76,12 +109,13 @@ function TotalsCard({ data }: { data: MostLikely['totals'] }) {
             <div className="text-[13px] font-mono tabular-nums text-zinc-300">{pct(t.pOver)}</div>
           </div>
         </div>
-      ))}
+        )
+      })}
     </BoardCard>
   )
 }
 
-function RunLineCard({ data }: { data: MostLikely['runLine'] }) {
+function RunLineCard({ data, games }: { data: MostLikely['runLine']; games: Map<number, GameResult> }) {
   const rows = data.slice(0, N)
   return (
     <BoardCard
@@ -89,11 +123,16 @@ function RunLineCard({ data }: { data: MostLikely['runLine'] }) {
       blurb="Sim ±1.5 cover lean vs the de-vigged book price — strongest edges first"
     >
       {rows.length === 0 && <Empty />}
-      {rows.map((r, i) => (
+      {rows.map((r, i) => {
+        const g = games.get(r.gameId)
+        const outcome = g
+          ? runLineOutcome(r.favorite === g.homeAbbr, g.finalHome, g.finalAway)
+          : undefined
+        return (
         <div key={r.gameId} className="flex items-center gap-3 px-4 py-2 hover:bg-white/[0.03] transition-colors">
           <Rank n={i + 1} />
           <div className="min-w-0 flex-1">
-            <Matchup gameId={r.gameId} label={r.matchup} />
+            <RowMatchup gameId={r.gameId} label={r.matchup} outcome={outcome} />
             <div className="text-[11px] text-zinc-500 mt-0.5">
               cover <span className="text-zinc-300 font-semibold">{r.favorite}</span> -1.5{' '}
               {pct(r.coverProb)}
@@ -115,21 +154,25 @@ function RunLineCard({ data }: { data: MostLikely['runLine'] }) {
             </div>
           </div>
         </div>
-      ))}
+        )
+      })}
     </BoardCard>
   )
 }
 
-function NrfiCard({ data }: { data: MostLikely['nrfi'] }) {
+function NrfiCard({ data, games }: { data: MostLikely['nrfi']; games: Map<number, GameResult> }) {
   const rows = data.slice(0, N)
   return (
     <BoardCard title="NRFI / YRFI" blurb="First-inning run lean by simulated confidence">
       {rows.length === 0 && <Empty />}
-      {rows.map((n, i) => (
+      {rows.map((n, i) => {
+        const g = games.get(n.gameId)
+        const outcome = nrfiOutcome(n.lean, g?.home1st ?? null, g?.away1st ?? null)
+        return (
         <div key={n.gameId} className="flex items-center gap-3 px-4 py-2 hover:bg-white/[0.03] transition-colors">
           <Rank n={i + 1} />
           <div className="min-w-0 flex-1">
-            <Matchup gameId={n.gameId} label={n.matchup} />
+            <RowMatchup gameId={n.gameId} label={n.matchup} outcome={outcome} />
             <div className="text-[11px] text-zinc-500 mt-0.5">
               YRFI {pct(n.pYrfi)} · NRFI {pct(n.pNrfi)}
             </div>
@@ -146,7 +189,8 @@ function NrfiCard({ data }: { data: MostLikely['nrfi'] }) {
             </div>
           </div>
         </div>
-      ))}
+        )
+      })}
     </BoardCard>
   )
 }
@@ -158,6 +202,22 @@ function NrfiCard({ data }: { data: MostLikely['nrfi'] }) {
  */
 export function SimBoards() {
   const { data } = useQuery(mostLikelyQueryOptions())
+  // Reuse the home page's today-games query (final scores + first-inning runs) to grade
+  // each lean ✓/✗ once its game is final — same source the projected-favorites badge uses.
+  const { data: games } = useQuery(todayGamesQueryOptions())
+  const gamesById = new Map<number, GameResult>(
+    (games ?? []).map((g) => [
+      g.gameId,
+      {
+        finalHome: g.finalHomeScore,
+        finalAway: g.finalAwayScore,
+        home1st: g.finalHomeFirstInningRuns,
+        away1st: g.finalAwayFirstInningRuns,
+        homeAbbr: g.home.abbr,
+        awayAbbr: g.away.abbr,
+      },
+    ]),
+  )
 
   if (!data) return null
   if (data.totals.length === 0 && data.runLine.length === 0 && data.nrfi.length === 0) return null
@@ -172,9 +232,9 @@ export function SimBoards() {
         first-inning runs. Top {N} per market.
       </p>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        <TotalsCard data={data.totals} />
-        <RunLineCard data={data.runLine} />
-        <NrfiCard data={data.nrfi} />
+        <TotalsCard data={data.totals} games={gamesById} />
+        <RunLineCard data={data.runLine} games={gamesById} />
+        <NrfiCard data={data.nrfi} games={gamesById} />
       </div>
     </section>
   )

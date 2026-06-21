@@ -6,13 +6,14 @@ import { Flame } from 'lucide-react'
 import {
   bestPlaysQueryOptions,
   hitRatesQueryOptions,
-  modelPicksQueryOptions,
   mostLikelyQueryOptions,
+  playerResultsQueryOptions,
+  todayGamesQueryOptions,
 } from '@/lib/api'
-import type { BestPlay, HitRate, ModelPickResult, MostLikely } from '@/lib/types'
+import type { BestPlay, HitRate, MostLikely, TodayGame } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
-import { easternDateStr, pickKey, pickOutcome, pickTitle, type PickOutcome } from '@/lib/picks'
+import { modelPlayOutcome, pickTitle, type PickOutcome } from '@/lib/picks'
 import { OutcomeBadge } from './outcome-badge'
 import { WhyDisclosure } from './why-disclosure'
 
@@ -34,12 +35,20 @@ const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-m
 //   · an HR prop must not contradict the hit-rate traffic light (season clear
 //     rate, n ≥ 15): no overs on red, no unders on green
 // One pick per game, MAX_PICKS at most. When nothing qualifies, we say so.
+//
+// A pick reads "Strong" (vs "Lean") on conviction in the *value*, not on
+// absolute likelihood: a meaningful absolute edge AND a meaningful proportional
+// overlay (model ÷ fair). There is no absolute-probability floor — that floor
+// used to quietly reserve Strong for totals (whose model prob hugs the coinflip
+// line) and lock every longshot prop to Lean. The overlay rule is scale-free, so
+// a 53% total and a 12% HR-over are judged on the same footing.
 const MIN_EDGE = 0.04
 const MAX_EDGE = 0.15
 const MIN_EV = 0.05
 const MIN_MODEL_PROB = 0.4
 const LONGSHOT_EDGE = 0.08
 const STRONG_EDGE = 0.06
+const STRONG_OVERLAY = 1.15
 const MAX_PICKS = 3
 const EXCLUDED_MARKETS = new Set(['pitcher_k', 'pitcher_outs', 'hit'])
 const HIT_RATE_VETO_MIN_N = 15
@@ -144,7 +153,8 @@ function buildPicks(
     candidates.push({
       play: p,
       edge,
-      strong: edge >= STRONG_EDGE && p.modelProb >= 0.5,
+      // fairProb is non-null here (guarded above), so the overlay is safe.
+      strong: edge >= STRONG_EDGE && p.modelProb / p.fairProb >= STRONG_OVERLAY,
       // Edge is the primary signal; EV breaks ties toward better prices, and
       // independent sim agreement nudges a pick up the board.
       score: edge + 0.5 * p.evPct + (corroboration ? 0.02 : 0),
@@ -289,15 +299,18 @@ export function ModelPicks() {
   const { data: plays, isPending, isError } = useQuery(bestPlaysQueryOptions(undefined, 100))
   const { data: sim } = useQuery(mostLikelyQueryOptions())
   const { data: hitRateData } = useQuery(hitRatesQueryOptions())
-  // Today's recorded picks, graded as games finish — overlays ✓/✗ on the live board.
-  const { data: graded } = useQuery(modelPicksQueryOptions(easternDateStr()))
+  // Grade live as games finish — final scores from today-games, HR from player results —
+  // the same source the projected-favorites badge uses, so ✓/✗ lands same-day.
+  const { data: games } = useQuery(todayGamesQueryOptions())
+  const { data: results } = useQuery(playerResultsQueryOptions())
 
   const rows = plays ?? []
   const hitRates = new Map<string, HitRate>(
     (hitRateData ?? []).map((h) => [`${h.playerId}:${h.market}`, h]),
   )
-  const gradedByKey = new Map<string, ModelPickResult>(
-    (graded ?? []).map((g) => [pickKey(g), g]),
+  const gamesById = new Map<number, TodayGame>((games ?? []).map((g) => [g.gameId, g]))
+  const hrByKey = new Map<string, number | null>(
+    (results?.batters ?? []).map((b) => [`${b.playerId}:${b.gameId}`, b.homeRuns]),
   )
   const picks = buildPicks(rows, sim, hitRates)
 
@@ -337,17 +350,14 @@ export function ModelPicks() {
             picks.length >= 3 && 'lg:grid-cols-3',
           )}
         >
-          {picks.map((pick, i) => {
-            const g = gradedByKey.get(pickKey(pick.play))
-            return (
-              <PickCard
-                key={`${pick.play.gameId}-${pick.play.market}-${pick.play.selection}`}
-                pick={pick}
-                rank={i + 1}
-                outcome={g ? pickOutcome(g) : undefined}
-              />
-            )
-          })}
+          {picks.map((pick, i) => (
+            <PickCard
+              key={`${pick.play.gameId}-${pick.play.market}-${pick.play.selection}`}
+              pick={pick}
+              rank={i + 1}
+              outcome={modelPlayOutcome(pick.play, gamesById.get(pick.play.gameId), hrByKey)}
+            />
+          ))}
         </div>
       )}
     </section>
