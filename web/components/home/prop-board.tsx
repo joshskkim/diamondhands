@@ -333,13 +333,23 @@ function buildPitcherReasons(pick: PitcherPropPick): string[] {
     )
   }
 
+  // The full over-ladder, for the curious — the headline is the single best pick.
+  if (pick.distribution.length > 0) {
+    const meta = PITCHER_MARKET_META[pick.market]
+    const ladder = pick.distribution
+      .map((t) => `over ${t.line} → ${pct(t.prob)}`)
+      .join(', ')
+    reasons.push(`Full distribution (${meta?.noun ?? pick.market}): ${ladder}.`)
+  }
+
   if (pick.priceAmerican != null && pick.bookLine != null) {
+    const side = pick.bestSide ?? 'over'
     const ev =
       pick.evPct != null
         ? ` — ${pick.evPct > 0 ? '+' : ''}${(pick.evPct * 100).toFixed(1)}% EV at the model's number`
         : ''
     reasons.push(
-      `Book line ${pick.bookLine} at ${formatAmerican(pick.priceAmerican)} (${bookLabel(
+      `Best ${side} price on the ${pick.bookLine} line: ${formatAmerican(pick.priceAmerican)} (${bookLabel(
         pick.bestBook,
       )})${ev}. Cached lines can be stale; treat as context.`,
     )
@@ -347,8 +357,36 @@ function buildPitcherReasons(pick: PitcherPropPick): string[] {
   return reasons
 }
 
+// The single recommended pick: the side the model leans (over/under) at the most
+// relevant line, with model probability and — when odds exist — the best price + EV
+// for that side. Replaces the old over-only ladder (which buried the actual pick).
+function BestPick({ pick, unit }: { pick: PitcherPropPick; unit: string }) {
+  if (pick.bestSide == null || pick.bestLine == null || pick.bestProb == null) return null
+  const side = pick.bestSide === 'over' ? 'Over' : 'Under'
+  const hasEv = pick.evPct != null && pick.priceAmerican != null
+  return (
+    <div className="rounded-lg border border-amber-400/20 bg-amber-500/[0.06] px-3 py-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <span className={microLabel}>Best pick</span>
+      <span className="text-sm font-semibold text-amber-100">
+        {side} {pick.bestLine} {unit}
+      </span>
+      <span className="font-mono tabular-nums text-amber-300">{pct(pick.bestProb)}</span>
+      {hasEv && (
+        <span className="ml-auto text-xs text-zinc-500">
+          {formatAmerican(pick.priceAmerican as number)} {bookLabel(pick.bestBook)} ·{' '}
+          <span className={(pick.evPct as number) > 0 ? 'text-emerald-400' : 'text-zinc-500'}>
+            {(pick.evPct as number) > 0 ? '+' : ''}
+            {((pick.evPct as number) * 100).toFixed(1)}% EV
+          </span>
+        </span>
+      )}
+    </div>
+  )
+}
+
 // Pitcher cards are AMBER (batter cards are cyan) so "whose prop is this" is never
-// ambiguous — these are the starter's line, ranked by expected volume, not P(clear).
+// ambiguous — these are the starter's line, ranked by expected volume; the headline
+// number is the projection, the Best pick row is the model's lean (over or under).
 function PitcherCard({ pick }: { pick: PitcherPropPick }) {
   const meta =
     PITCHER_MARKET_META[pick.market] ?? { chip: pick.market, unit: '', noun: pick.market }
@@ -384,11 +422,7 @@ function PitcherCard({ pick }: { pick: PitcherPropPick }) {
         </span>
       </div>
 
-      <div className="flex flex-wrap gap-x-4 gap-y-1">
-        {pick.distribution.map((t) => (
-          <Factor key={t.line} label={`over ${t.line}`} value={pct(t.prob)} />
-        ))}
-      </div>
+      <BestPick pick={pick} unit={meta.unit} />
 
       <WhyDisclosure reasons={reasons} />
 
@@ -466,7 +500,7 @@ export function PropBoard() {
       {!isPending && !isError && data.pitcherPicks.length > 0 && (
         <div className="mt-6">
           <p className={cn(microLabel, 'mb-2')}>
-            Pitcher props — ranked by projected volume, not clear-rate
+            Pitcher props — top starter by projected volume, with the model&apos;s best pick (over/under)
           </p>
           <div
             className={cn(

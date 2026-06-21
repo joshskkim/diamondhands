@@ -117,6 +117,10 @@ Install the schedule (edit paths/TZ first):
 ```bash
 crontab deploy/crontab.example     # morning daily + */30 quick loop + tennis + weekly prior refresh + nightly backup
 ```
+The morning `daily` run records the day's Model's Picks and closes out the prior slate
+(scores → stats → score-picks → accuracy). The `*/30` quick loop additionally grades
+**today's** picks against final scores/stats as games end, so the home board's ✓/✗ pick
+and game markers update live through the evening (no extra cron entry needed).
 
 ## Ask Diamond AI (optional)
 The ⌘K "Ask Diamond" search needs a Gemini key. It's read **only** from the `GEMINI_API_KEY`

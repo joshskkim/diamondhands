@@ -221,20 +221,41 @@ public class PropBoardService {
 
     private PitcherPropPickDto toPitcherPick(PitcherMarket m, PitcherRow top, List<PitcherRow> next) {
         List<Double> lines = m.lines();
-        List<Double> probs = m.probs().apply(top);
+        List<Double> probs = m.probs().apply(top);   // P(over) aligned to lines
         List<PitcherPropPickDto.Threshold> dist = new ArrayList<>();
         for (int i = 0; i < lines.size(); i++) {
             dist.add(new PitcherPropPickDto.Threshold(lines.get(i), round(probs.get(i), 4)));
         }
+        double expected = m.volume().apply(top);
 
-        PitcherPrice price = repo.findPitcherOverPrice(top.gameId(), top.pitcherId(), m.key());
-        // EV only when the book line matches a modeled threshold (so we have P(over)).
-        Double evPct = null;
-        if (price != null && price.line() != null) {
-            int idx = lines.indexOf(price.line());
-            if (idx >= 0) {
-                evPct = round(probs.get(idx) * price.priceDecimal() - 1.0, 4);
-            }
+        // Best cached price each side (over/under share lines at a book).
+        PitcherPrice overPrice = repo.findPitcherPrice(top.gameId(), top.pitcherId(), m.key(), "over");
+        PitcherPrice underPrice = repo.findPitcherPrice(top.gameId(), top.pitcherId(), m.key(), "under");
+        Double bookConsensus = overPrice != null && overPrice.line() != null ? overPrice.line()
+            : (underPrice != null ? underPrice.line() : null);
+
+        // Anchor line = the book's consensus line when it matches a modeled threshold,
+        // else the modeled line closest to the expected value (the meaningful line —
+        // not the trivially-high lowest one). The recommended SIDE is the model's lean
+        // there: over when P(over) ≥ 0.5, else under. bestProb is that side's probability.
+        int anchorIdx = (bookConsensus != null && indexOfLine(lines, bookConsensus) >= 0)
+            ? indexOfLine(lines, bookConsensus)
+            : nearestLineIdx(lines, expected);
+        double anchorLine = lines.get(anchorIdx);
+        double pOver = probs.get(anchorIdx);
+        String bestSide = pOver >= 0.5 ? "over" : "under";
+        double bestProb = "over".equals(bestSide) ? pOver : 1.0 - pOver;
+
+        // Price + EV for the RECOMMENDED side at the anchor line (context only).
+        PitcherPrice chosen = "over".equals(bestSide) ? overPrice : underPrice;
+        Double bookLine = null, evPct = null;
+        String bestBook = null;
+        Integer priceAmerican = null;
+        if (chosen != null && chosen.line() != null && sameLine(chosen.line(), anchorLine)) {
+            bookLine = chosen.line();
+            bestBook = chosen.bookmaker();
+            priceAmerican = chosen.priceAmerican();
+            evPct = round(bestProb * chosen.priceDecimal() - 1.0, 4);
         }
 
         List<PitcherPropPickDto.RunnerUp> runnersUp = next.stream()
@@ -245,17 +266,41 @@ public class PropBoardService {
         return new PitcherPropPickDto(
             m.key(), top.gameId(), top.matchup(), top.pitcherId(), top.pitcher(),
             top.team(), top.opponent(),
-            round(m.volume().apply(top), 2), round(top.expectedIp(), 2),
+            round(expected, 2), round(top.expectedIp(), 2),
             dist,
-            price == null ? null : price.line(),
-            price == null ? null : price.bookmaker(),
-            price == null ? null : price.priceAmerican(),
-            evPct,
+            anchorLine, bestSide, round(bestProb, 4),
+            bookLine, bestBook, priceAmerican, evPct,
             round(top.pitcherKRate(), 4), round(top.pitcherBbRate(), 4),
             round(top.pitcherXwobaAgainst(), 4), round(top.pitcherHrPerPa(), 4),
             round(top.opponentKRate(), 4), round(top.opponentXwoba(), 4),
             top.arsenal(),
             runnersUp);
+    }
+
+    private static boolean sameLine(double a, double b) {
+        return Math.abs(a - b) < 1e-9;
+    }
+
+    /** Index of {@code target} in {@code lines}, or -1 (epsilon match for half-lines). */
+    private static int indexOfLine(List<Double> lines, double target) {
+        for (int i = 0; i < lines.size(); i++) {
+            if (sameLine(lines.get(i), target)) return i;
+        }
+        return -1;
+    }
+
+    /** Index of the modeled line closest to {@code value} (ties → lower line). */
+    private static int nearestLineIdx(List<Double> lines, double value) {
+        int best = 0;
+        double bestDist = Math.abs(lines.get(0) - value);
+        for (int i = 1; i < lines.size(); i++) {
+            double d = Math.abs(lines.get(i) - value);
+            if (d < bestDist) {
+                bestDist = d;
+                best = i;
+            }
+        }
+        return best;
     }
 
     private static double nz(Double v) {

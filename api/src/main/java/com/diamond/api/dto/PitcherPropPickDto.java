@@ -24,6 +24,13 @@ public record PitcherPropPickDto(
     double expectedValue,
     Double expectedIp,
     List<Threshold> distribution,
+    // The single recommended pick: the side (over/under) the model leans at the most
+    // relevant line — the book's consensus line when quoted, else the modeled line
+    // closest to expectedValue. bestProb is that side's model probability.
+    Double bestLine,
+    String bestSide,         // "over" | "under"
+    Double bestProb,
+    // Best cached price + EV for the RECOMMENDED side at bestLine (null when no odds).
     Double bookLine,
     String bestBook,
     Integer priceAmerican,
