@@ -102,8 +102,17 @@ jobs:
             set -e
             cd /opt/diamond
             git pull --ff-only
-            # Pin this deploy to the exact images just built.
+            # Pin this deploy to the exact images just built. Persist IMAGE_TAG to .env so
+            # the one-shot ingester jobs and host cron — which run `compose run ingester`
+            # without exporting IMAGE_TAG — use the SAME images as the long-running services
+            # instead of a stale local :latest that this deploy never refreshes. (Compose
+            # reads .env from the project dir for ${IMAGE_TAG} substitution.)
             export IMAGE_TAG=${{ github.sha }}
+            if grep -q '^IMAGE_TAG=' .env 2>/dev/null; then
+              sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${IMAGE_TAG}/" .env
+            else
+              echo "IMAGE_TAG=${IMAGE_TAG}" >> .env
+            fi
             docker compose -f compose.prod.yml pull
             docker compose -f compose.prod.yml up -d   # flyway migrates before api starts
             docker image prune -f
