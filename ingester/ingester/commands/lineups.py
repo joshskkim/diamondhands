@@ -21,6 +21,7 @@ from datetime import date, timedelta
 
 import psycopg
 
+from ingester.commands.daily_slate import update_game_status
 from ingester.db import eastern_today, get_connection
 from ingester.mlb_api import fetch_schedule, parse_game_lineups
 
@@ -96,6 +97,11 @@ def _process_date(
         game_pk = g.get("gamePk")
         if game_pk not in tracked:
             continue
+        # Refresh game status first, for every tracked game — a game postponed after the
+        # morning slate build won't have a lineup, so this must run before the lineup
+        # check below. Fresh detailed_status lets the next project tick skip the dead game
+        # and clear its rows (the quick loop never re-runs daily-slate).
+        update_game_status(conn, game_pk, g)
         by_side = parse_game_lineups(g)
         if not by_side:
             continue

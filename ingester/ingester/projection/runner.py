@@ -32,6 +32,7 @@ from ingester.projection.workload import (
     walk_forward_residuals,
 )
 from ingester.projection.constants import (
+    DEAD_GAME_STATUSES,
     EXPECTED_PA_PER_STARTER,
     LEAGUE_BB_PER_PA,
     LINEUP_SIZE_HITTERS,
@@ -637,10 +638,9 @@ def _platoon_adjust(
     return _blend(xwoba, p_xwoba), _blend(k_rate, p_k), _blend(iso, p_iso)
 
 
-# detailedState values that mean the game won't be played as scheduled — drop them
-# entirely. Transient "Delayed"/"Delayed Start" (e.g. a short rain delay) is NOT here:
-# those games still play, so they stay projectable.
-_DEAD_GAME_STATUSES = frozenset({"Postponed", "Suspended", "Cancelled"})
+# detailedState values that mean the game won't be played as scheduled (DEAD_GAME_STATUSES,
+# in projection.constants) are dropped entirely. Transient "Delayed"/"Delayed Start" (e.g. a
+# short rain delay) is NOT among them: those games still play, so they stay projectable.
 
 # Lineups post ~2-3 h before first pitch, so don't even attempt a game until then —
 # before that there's nothing to project and a later cron tick will retry.
@@ -651,7 +651,7 @@ def _game_ready(game: SlateGame) -> str | None:
     if game.home_probable_pitcher_id is None or game.away_probable_pitcher_id is None:
         return "missing probable pitcher"
     # Drop games that won't be played as scheduled (postponed/suspended/cancelled).
-    if game.detailed_status in _DEAD_GAME_STATUSES:
+    if game.detailed_status in DEAD_GAME_STATUSES:
         return f"{game.detailed_status.lower()}"
     # Per-game defer: skip until ~2 h before first pitch (lineups aren't out earlier).
     # A later cron tick re-attempts the game once it enters the window.
