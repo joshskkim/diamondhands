@@ -302,7 +302,10 @@ export function OddsBoard() {
         use the batter projections. By default we only show{' '}
         <span className="text-zinc-200">what we like</span>: sides the model makes at least{' '}
         {MIN_MODEL_PROB * 100}% likely with a positive edge, capped at the top{' '}
-        {LIKED_PER_MARKET} per market.
+        {LIKED_PER_MARKET} per market.{' '}
+        <Link href="/faq" className="text-cyan-400 hover:text-cyan-300">
+          What do Fair / Model / Edge / EV mean?
+        </Link>
       </p>
 
       <div className="flex items-center gap-2 mb-4">

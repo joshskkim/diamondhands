@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutGrid, TrendingUp, Target, LineChart, Search, LogIn, LogOut, Menu, type LucideIcon } from 'lucide-react'
+import { LayoutGrid, TrendingUp, Target, LineChart, Search, LogIn, LogOut, Menu, HelpCircle, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { DiamondMark } from '@/components/diamond-mark'
 import { GamesBadge } from '@/components/games-badge'
@@ -18,6 +18,13 @@ export const NAV_LINKS: NavLink[] = [
   { label: 'Best Lines', href: '/mlb/odds', icon: TrendingUp },
   { label: 'Pitch Matchups', href: '/mlb/leaderboards/pitch-types', icon: Target },
   { label: 'Accuracy', href: '/mlb/accuracy', icon: LineChart },
+]
+
+// Secondary/help destinations shown on the desktop rail only. The mobile bottom
+// bar stays at the four primary tabs; these live in its account sheet instead
+// (see mobile-nav.tsx). Keep FAQ out of NAV_LINKS so it doesn't crowd that bar.
+export const SECONDARY_LINKS: NavLink[] = [
+  { label: 'FAQ', href: '/faq', icon: HelpCircle },
 ]
 
 /**
@@ -110,6 +117,31 @@ export function AppSidebar({
       {/* nav */}
       <nav className="flex-1 px-2 py-3 space-y-1">
         {NAV_LINKS.map((link) => {
+          const Icon = link.icon
+          const active = isActive(link.href)
+          return (
+            <Link
+              key={link.href}
+              href={link.href}
+              onClick={onNavigate}
+              title={collapsed ? link.label : undefined}
+              className={cn(
+                'flex items-center gap-3 rounded-lg py-2 text-sm font-medium transition-colors',
+                collapsed ? 'justify-center px-0' : 'px-3',
+                active
+                  ? 'bg-cyan-400/10 text-cyan-400'
+                  : 'text-zinc-400 hover:text-zinc-100 hover:bg-white/5',
+              )}
+            >
+              <Icon className="h-4 w-4 shrink-0" />
+              {!collapsed && link.label}
+            </Link>
+          )
+        })}
+
+        <div className="my-2 border-t border-white/10" />
+
+        {SECONDARY_LINKS.map((link) => {
           const Icon = link.icon
           const active = isActive(link.href)
           return (

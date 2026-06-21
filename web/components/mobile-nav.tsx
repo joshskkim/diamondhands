@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useState } from 'react'
-import { CircleUserRound, LogIn, LogOut, Trophy, X } from 'lucide-react'
+import { CircleUserRound, HelpCircle, LogIn, LogOut, Trophy, X, type LucideIcon } from 'lucide-react'
 import { NAV_LINKS } from '@/components/app-sidebar'
 import { useAuth } from '@/components/auth-provider'
 import { DiamondMark } from '@/components/diamond-mark'
@@ -19,8 +19,9 @@ const SHORT_LABEL: Record<string, string> = {
 }
 
 // Secondary destinations that don't earn a bottom-bar tab live in the account sheet.
-const SHEET_LINKS: { label: string; href: string }[] = [
-  { label: 'Leaderboards', href: '/leaderboard' },
+const SHEET_LINKS: { label: string; href: string; icon: LucideIcon }[] = [
+  { label: 'Leaderboards', href: '/leaderboard', icon: Trophy },
+  { label: 'FAQ', href: '/faq', icon: HelpCircle },
 ]
 
 const tabClass = (active: boolean) =>
@@ -129,17 +130,20 @@ export function MobileNav() {
 
             {/* secondary links */}
             <div className="mt-3 space-y-1">
-              {SHEET_LINKS.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  onClick={() => setSheetOpen(false)}
-                  className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-300 transition-colors hover:bg-white/5 hover:text-zinc-100"
-                >
-                  <Trophy className="h-4 w-4 text-zinc-500" />
-                  {link.label}
-                </Link>
-              ))}
+              {SHEET_LINKS.map((link) => {
+                const Icon = link.icon
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    onClick={() => setSheetOpen(false)}
+                    className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-300 transition-colors hover:bg-white/5 hover:text-zinc-100"
+                  >
+                    <Icon className="h-4 w-4 text-zinc-500" />
+                    {link.label}
+                  </Link>
+                )
+              })}
             </div>
           </div>
         </div>
