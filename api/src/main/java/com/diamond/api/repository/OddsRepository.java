@@ -20,9 +20,6 @@ import java.util.Map;
 @Repository
 public class OddsRepository {
 
-    /** Preferred single book for batter props (only US book covering hit + hr + tb). */
-    public static final String MAIN_PROP_BOOK = "betrivers";
-
     private final JdbcTemplate jdbc;
 
     public OddsRepository(JdbcTemplate jdbc) {
@@ -176,7 +173,8 @@ public class OddsRepository {
     }
 
     // ── slate-wide batter prop over-prices, one row per game+player+market ──
-    // Prefer the main prop book; otherwise fall back to the best (highest) price.
+    // Best (highest decimal = best for the bettor) price across the books we ingest
+    // (FanDuel / DraftKings / Fanatics). We no longer pin a single preferred book.
     private static final String BATTER_PROPS_SQL = """
         SELECT DISTINCT ON (po.game_id, po.player_id, po.market)
             po.game_id, po.player_id, po.market, po.line,
@@ -184,8 +182,7 @@ public class OddsRepository {
         FROM player_prop_odds po
         JOIN games g ON g.id = po.game_id AND g.game_date = ?
         WHERE po.side = 'over' AND po.market IN ('hit', 'hr') AND po.line = 0.5
-        ORDER BY po.game_id, po.player_id, po.market,
-                 (po.bookmaker = ?) DESC, po.price_decimal DESC
+        ORDER BY po.game_id, po.player_id, po.market, po.price_decimal DESC
         """;
 
     // ── Multi-book line shopping (props) ──
@@ -269,7 +266,7 @@ public class OddsRepository {
             date, date, seasonStart, seasonStart);
     }
 
-    public List<BatterPropRow> findBatterProps(LocalDate date, String preferredBook) {
+    public List<BatterPropRow> findBatterProps(LocalDate date) {
         return jdbc.query(BATTER_PROPS_SQL, (rs, n) -> new BatterPropRow(
             rs.getLong("game_id"),
             rs.getInt("player_id"),
@@ -278,7 +275,7 @@ public class OddsRepository {
             rs.getString("bookmaker"),
             rs.getInt("price_american"),
             rs.getBigDecimal("price_decimal").doubleValue()),
-            date, preferredBook);
+            date);
     }
 
     private GameOddRow mapGameOdd(ResultSet rs, int n) throws SQLException {

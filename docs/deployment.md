@@ -132,6 +132,35 @@ env var (`app.ai.api-key` in `application.yml`) and is never committed — with 
   `mvn spring-boot:run`, or keep it in a gitignored `api/.env.local` and source it:
   `set -a; source api/.env.local; set +a; mvn spring-boot:run`.
 
+## Stripe billing (optional)
+Subscriptions use Stripe Checkout + Customer Portal; the API stores only the subscription
+*state* (keyed by `users.id`), never card data. All billing endpoints stay disabled (503)
+until `STRIPE_SECRET_KEY` is set, so it's fully opt-in.
+- **Prod:** in the host `.env` set `STRIPE_SECRET_KEY` (live `sk_live_…`), `STRIPE_PRICE_MONTHLY`
+  + `STRIPE_PRICE_ANNUAL` (the Pro Price ids), and `STRIPE_WEBHOOK_SECRET`. Create a Stripe
+  **webhook endpoint** in the dashboard pointing at `https://DOMAIN/api/billing/webhook` for
+  `checkout.session.completed`, `customer.subscription.updated`, and `customer.subscription.deleted`;
+  its signing secret is `STRIPE_WEBHOOK_SECRET`. `WEB_BASE_URL` is derived from `DOMAIN` in compose.
+- **Local dev / testing:** use **test** keys (`sk_test_…`) and the Stripe CLI to forward webhooks:
+  `stripe listen --forward-to localhost:8080/api/billing/webhook` (prints the `whsec_…` to use as
+  `STRIPE_WEBHOOK_SECRET`). Subscribe with test card `4242 4242 4242 4242`; the webhook flips the
+  user to Pro (`GET /api/auth/me` → `"pro": true`).
+
+## Alerting (optional)
+Prometheus alerts (`ApiDown`, 5xx>5%, latency, HikariCP saturation) are routed to **Alertmanager**,
+which emails them. It's opt-in and commits no secrets:
+- Set `ALERT_SMTP_SMARTHOST` (e.g. `smtp.gmail.com:587`), `ALERT_SMTP_FROM`, `ALERT_SMTP_TO`,
+  `ALERT_SMTP_USERNAME`, `ALERT_SMTP_PASSWORD` in the host `.env`. For Gmail use a 16-char App
+  Password. Leave `ALERT_SMTP_SMARTHOST` blank to disable (Alertmanager starts with a null receiver).
+- Reach the Alertmanager UI via SSH tunnel (`127.0.0.1:9093`), like Grafana/Prometheus/Jaeger.
+- Test it: `docker compose -f compose.prod.yml stop api`, wait ~2m → an `ApiDown` email; `start` to resolve.
+
+**External uptime check.** `.github/workflows/uptime.yml` probes `https://DOMAIN/` and
+`/api/games/today` every ~10 min from GitHub's infra — independent of the VPS, so it catches a
+fully-down box that on-box Alertmanager can't report. A failed run goes red and GitHub emails the
+repo owner (ensure **Settings → Notifications → Actions** email is on). Gated on the `DOMAIN` repo
+variable, like the deploy job.
+
 ## CD setup (GitHub)
 - Repo **variable** `DOMAIN` = your domain (baked into the web image at build time). The `deploy`
   job is **gated on `DOMAIN`** — unset → the job skips (CD stays green) instead of failing.

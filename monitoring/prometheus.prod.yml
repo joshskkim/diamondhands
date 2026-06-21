@@ -5,6 +5,13 @@ global:
 rule_files:
   - /etc/prometheus/alert-rules.yml
 
+# Deliver firing alerts to Alertmanager (email receiver — see monitoring/alertmanager-entrypoint.sh).
+# If Alertmanager isn't running, Prometheus just logs a delivery warning; nothing else breaks.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 scrape_configs:
   - job_name: diamond-api
     metrics_path: /actuator/prometheus

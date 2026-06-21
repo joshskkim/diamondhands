@@ -51,6 +51,26 @@
       <artifactId>spring-security-oauth2-jose</artifactId>
     </dependency>
 
+    <!-- Stripe (billing: Checkout + Customer Portal + webhooks) -->
+    <dependency>
+      <groupId>com.stripe</groupId>
+      <artifactId>stripe-java</artifactId>
+      <version>29.5.0</version>
+    </dependency>
+
+    <!-- Sentry error tracking (auto-disabled when no DSN is set) -->
+    <dependency>
+      <groupId>io.sentry</groupId>
+      <artifactId>sentry-spring-boot-starter-jakarta</artifactId>
+      <version>8.44.1</version>
+    </dependency>
+    <!-- Captures ERROR-level logback events as Sentry issues (with traceId from MDC) -->
+    <dependency>
+      <groupId>io.sentry</groupId>
+      <artifactId>sentry-logback</artifactId>
+      <version>8.44.1</version>
+    </dependency>
+
     <!-- Redis -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -161,4 +181,42 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!-- Uploads a source bundle to Sentry so stack traces show source lines. Active ONLY when
+         SENTRY_AUTH_TOKEN is set (e.g. the CD image build, which passes it as a BuildKit secret);
+         a normal `mvn verify`/local build without the token leaves it inactive, so api-ci is
+         unaffected. skipAutoInstall keeps our explicit Sentry deps authoritative (no injection). -->
+    <profile>
+      <id>sentry-source-context</id>
+      <activation>
+        <property>
+          <name>env.SENTRY_AUTH_TOKEN</name>
+        </property>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>io.sentry</groupId>
+            <artifactId>sentry-maven-plugin</artifactId>
+            <version>0.11.0</version>
+            <extensions>true</extensions>
+            <configuration>
+              <org>joshua-kim-m4</org>
+              <project>java-spring-boot</project>
+              <authToken>${env.SENTRY_AUTH_TOKEN}</authToken>
+              <skipAutoInstall>true</skipAutoInstall>
+            </configuration>
+            <executions>
+              <execution>
+                <goals>
+                  <goal>uploadSourceBundle</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

@@ -146,7 +146,7 @@ export async function askDiamond(
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
-export type AuthUser = { id: number; email: string; handle: string }
+export type AuthUser = { id: number; email: string; handle: string; pro: boolean }
 
 /** Current user, or null when not signed in (API returns 401). */
 export async function fetchMe(): Promise<AuthUser | null> {
@@ -170,6 +170,18 @@ export function signIn(input: { email: string; password: string }): Promise<Auth
 
 export function signOut(): Promise<void> {
   return apiPost<void>('/api/auth/signout', {})
+}
+
+// ── Billing (Stripe Checkout + Customer Portal) ───────────────────────────────
+
+/** Start a Pro subscription Checkout; returns the Stripe-hosted URL to redirect to. */
+export function createCheckout(interval: 'monthly' | 'annual'): Promise<{ url: string }> {
+  return apiPost<{ url: string }>('/api/billing/checkout', { interval })
+}
+
+/** Open the Stripe Customer Portal (manage/cancel); returns the URL to redirect to. */
+export function createPortal(): Promise<{ url: string }> {
+  return apiPost<{ url: string }>('/api/billing/portal', {})
 }
 
 // ── Fetchers (usable from Server Components and queryFn) ─────────────────────

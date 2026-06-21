@@ -25,6 +25,9 @@ services:
       context: ./web
       args:
         NEXT_PUBLIC_API_URL: https://${DOMAIN}
+        # Browser Sentry DSN (optional) — inlined at build time. Empty => disabled.
+        NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+        NEXT_PUBLIC_SENTRY_RELEASE: ${IMAGE_TAG:-}
     restart: unless-stopped
     expose: ["3000"]
 
@@ -44,6 +47,17 @@ services:
       TZ: ${TZ:-America/New_York}
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET}
       AUTH_COOKIE_SECURE: "true"
+      # Stripe billing (optional — endpoints 503 without a secret key). Use LIVE keys here.
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_MONTHLY: ${STRIPE_PRICE_MONTHLY:-}
+      STRIPE_PRICE_ANNUAL: ${STRIPE_PRICE_ANNUAL:-}
+      WEB_BASE_URL: https://${DOMAIN}
+      # Sentry error tracking (optional — disabled without a DSN). Release = deployed image tag.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: production
+      SENTRY_RELEASE: ${IMAGE_TAG:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.0}
       OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
       MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "0.1"
     depends_on:
@@ -66,8 +80,18 @@ services:
       MCP_PORT: "8090"
       # Must be set in .env — without keys auth is OFF, and /mcp is publicly routed.
       MCP_API_KEYS: ${MCP_API_KEYS}
+      # Per-client token-bucket limits for the public endpoint (defaults shown; tune in .env).
+      MCP_RATE_LIMIT_RPS: ${MCP_RATE_LIMIT_RPS:-5}
+      MCP_RATE_LIMIT_BURST: ${MCP_RATE_LIMIT_BURST:-20}
       OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
       OTEL_SERVICE_NAME: diamond-mcp
+    # The image has no curl; probe /healthz with Python (matches the deploy smoke test).
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8090/healthz').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     depends_on:
       api:
         condition: service_started
@@ -133,6 +157,26 @@ services:
       - ./monitoring/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro
       - ./monitoring/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
       - prometheus_data:/prometheus
+    depends_on: [alertmanager]
+
+  # Routes firing Prometheus alerts to email (SMTP). Opt-in: with no ALERT_SMTP_SMARTHOST
+  # it starts with a null receiver and drops notifications. Config is rendered from env at
+  # startup (see monitoring/alertmanager-entrypoint.sh) so no SMTP secrets are committed.
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    ports: ["127.0.0.1:9093:9093"]
+    entrypoint: ["/bin/sh", "/etc/alertmanager/entrypoint.sh"]
+    environment:
+      ALERT_SMTP_SMARTHOST: ${ALERT_SMTP_SMARTHOST:-}
+      ALERT_SMTP_FROM: ${ALERT_SMTP_FROM:-}
+      ALERT_SMTP_TO: ${ALERT_SMTP_TO:-}
+      ALERT_SMTP_USERNAME: ${ALERT_SMTP_USERNAME:-}
+      ALERT_SMTP_PASSWORD: ${ALERT_SMTP_PASSWORD:-}
+      ALERT_SMTP_REQUIRE_TLS: ${ALERT_SMTP_REQUIRE_TLS:-true}
+    volumes:
+      - ./monitoring/alertmanager-entrypoint.sh:/etc/alertmanager/entrypoint.sh:ro
+      - alertmanager_data:/alertmanager
 
   grafana:
     image: grafana/grafana:11.2.0
@@ -159,4 +203,5 @@ volumes:
   caddy_config:
   prometheus_data:
   grafana_data:
+  alertmanager_data:
   pybaseball_cache:

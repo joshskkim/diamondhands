@@ -12,7 +12,8 @@ no tracing, plain-text logs, a static `/health`. Added:
 | Concern | Implementation |
 |---|---|
 | **Metrics** | Spring Boot Actuator + Micrometer + Prometheus registry. `http.server.requests` with server-side percentile histograms (true p50/p95/p99), HikariCP pool, JVM heap/GC, and per-service `@Observed` timers. Exposed at `/actuator/prometheus`. |
-| **Dashboards** | Prometheus + Grafana in `docker-compose`, with a provisioned dashboard (`monitoring/grafana/...`): request rate, latency percentiles by URI, error rate, **HikariCP active/idle/pending**, JVM. |
+| **Business metrics** | `BusinessMetrics` registers product gauges refreshed on a 60s timer (cheap COUNTs + cached Stripe price lookups): `diamond_users`, `diamond_subscriptions_active` (Pro), `diamond_subscriptions_customers`, `diamond_mrr_usd` (monthly-recurring revenue, derived from each active sub's Stripe price interval). |
+| **Dashboards** | Prometheus + Grafana in `docker-compose`, with provisioned dashboards (`monitoring/grafana/...`): **Diamond API — Observability** (request rate, latency percentiles by URI, error rate, **HikariCP active/idle/pending**, JVM) and **Diamond — Business** (users, Pro subscribers, MRR, free→paid conversion, signups). |
 | **Tracing** | Micrometer Tracing → OpenTelemetry → OTLP → **Jaeger** (`docker-compose`). `datasource-micrometer` emits a span per JDBC query, so a request's DB fan-out shows up as a trace waterfall. 100% sampling in dev. |
 | **Structured logging** | `logback-spring.xml` emits JSON (logstash encoder) with the active `traceId`/`spanId` from MDC, so a log line links to its trace. A `local` profile prints human-readable lines. |
 | **Health** | `/actuator/health` with DB + Redis indicators and liveness/readiness groups (the legacy `/health` is kept for the frontend). |
@@ -127,7 +128,13 @@ observable (it increments only on an actual heavy-query execution).
 | `HikariPoolExhausted` | `active >= max` for 1m | — (the leaderboard meltdown signature) |
 
 The two HikariCP rules would have paged on the leaderboard meltdown before users saw timeouts.
-Routing/paging would add an Alertmanager; the Prometheus Alerts tab is enough locally.
+An `ApiDown` rule (`up == 0`) is the keystone "is it up?" alert.
+
+**Delivery (prod).** `compose.prod.yml` runs **Alertmanager**, and `prometheus.prod.yml` routes
+firing alerts to it. Alertmanager emails them (SMTP) — its config is rendered from `ALERT_SMTP_*`
+env at startup (`monitoring/alertmanager-entrypoint.sh`) so no SMTP secrets are committed. It's
+opt-in: with `ALERT_SMTP_SMARTHOST` unset it starts with a null receiver and drops notifications,
+so the stack always comes up. Locally, the Prometheus Alerts tab is still enough.
 
 ## 5. CI
 
@@ -150,3 +157,28 @@ docker exec diamond-redis redis-cli flushall   # between runs, cold cache
 ```
 Span counts: flush Redis, hit the endpoint once on the **default** profile (100% sampling),
 read the trace in Jaeger.
+
+## 6. Error tracking (Sentry)
+
+Metrics and traces answer *"is something wrong, and how bad?"*; Sentry answers *"what exactly
+broke, where, and on what input?"* — capturing the specific exception (stack trace, request,
+breadcrumbs, release) and grouping duplicates into one issue. It complements the stack rather
+than replacing it.
+
+- **API (Spring Boot)** — `sentry-spring-boot-starter-jakarta` + `sentry-logback`. Unhandled
+  exceptions and `ERROR` logs become issues, carrying the MDC `traceId` so an issue links back
+  to its Jaeger trace. Config is `sentry.*` in `application.yml`; **auto-disabled when `SENTRY_DSN`
+  is empty** (opt-in like AI/Stripe). `release` = the deployed image tag, so you can see which
+  build an error class started on. `send-default-pii: false`; performance tracing sampled
+  separately (`SENTRY_TRACES_SAMPLE_RATE`, default 0). **Source context** (source lines shown
+  in stack traces) is uploaded by the `sentry-maven-plugin` in a Maven profile gated on
+  `SENTRY_AUTH_TOKEN` — active only in the CD image build (token passed as a BuildKit secret),
+  inactive for `mvn verify`/local so nothing uploads there.
+- **Web (Next.js)** — `@sentry/nextjs` initialized via Next's native instrumentation hooks
+  (`instrumentation-client.ts`, `instrumentation.ts`) plus an `app/global-error.tsx` boundary.
+  Deliberately **without `withSentryConfig`** (the build plugin hooks Next internals — risky on
+  this non-standard Next 16; see `web/AGENTS.md`), so runtime error capture works while the build
+  stays vanilla. This catches client-side JS errors that never reach the API or its logs. The
+  browser DSN (`NEXT_PUBLIC_SENTRY_DSN`) is inlined at build time — set it as a CD build-arg/secret.
+- **Enabling:** create free Sentry projects, set `SENTRY_DSN` (API, host `.env`) and the
+  `NEXT_PUBLIC_SENTRY_DSN` GitHub Actions secret (web, baked at build). Both stay dark until set.

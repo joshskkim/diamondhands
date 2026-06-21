@@ -6,7 +6,12 @@ WORKDIR /build
 COPY pom.xml .
 RUN --mount=type=cache,target=/root/.m2 mvn -B -ntp -q dependency:go-offline
 COPY src ./src
-RUN --mount=type=cache,target=/root/.m2 mvn -B -ntp -q -DskipTests package
+# SENTRY_AUTH_TOKEN (optional BuildKit secret) activates the sentry-maven-plugin source-bundle
+# upload during packaging. Absent (local/CI) → empty → the profile stays off, nothing uploads.
+RUN --mount=type=cache,target=/root/.m2 \
+    --mount=type=secret,id=sentry_auth_token,required=false \
+    SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token 2>/dev/null || true)" \
+    mvn -B -ntp -q -DskipTests package
 
 # ── runtime ────────────────────────────────────────────────────────────────────
 FROM eclipse-temurin:21-jre AS runtime
