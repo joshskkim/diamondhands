@@ -14,7 +14,8 @@ DIAMOND_DIR=/opt/diamond
 # as lineups post. Runs through late starts: each game is only projected once its lineup
 # is up (~2-3 h before first pitch), so a 10pm ET game (lineup ~8pm ET) needs ticks past
 # 6pm. The projector defers a game until ~2 h before its first pitch and skips it if it's
-# postponed/suspended/cancelled.
+# postponed/suspended/cancelled. Each tick also grades TODAY's recorded picks against
+# final scores/stats as games finish, so the home board's ✓/✗ markers update live.
 */30 12-23 * * *  /opt/diamond/deploy/run-ingester.sh daily --quick
 
 # Tennis full run — EARLY (3am ET): tennis sessions start overnight (AUS/Asia)

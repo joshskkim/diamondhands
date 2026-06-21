@@ -6,6 +6,8 @@ import Link from 'next/link'
 import type { GameOddsSummary, TodayGame, Weather } from '@/lib/types'
 import { cn, parseApiDate } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
+import { favoriteOutcome } from '@/lib/picks'
+import { OutcomeBadge } from './outcome-badge'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
@@ -85,6 +87,9 @@ export function GameCard({ game }: { game: TodayGame }) {
   const awayRuns = proj?.expectedAwayRuns ?? 0
   const total = homeRuns + awayRuns
   const homePct = total > 0 ? (homeRuns / total) * 100 : 50
+  // Once final, did the projected favorite win? (proj favorite = higher expected runs)
+  const isFinal = game.finalHomeScore != null && game.finalAwayScore != null
+  const outcome = favoriteOutcome(homeRuns >= awayRuns, game.finalHomeScore, game.finalAwayScore)
 
   return (
     <Link
@@ -95,7 +100,16 @@ export function GameCard({ game }: { game: TodayGame }) {
         <span className="text-xl font-bold tracking-tight text-zinc-100">
           {game.away.abbr} <span className="text-zinc-600 font-normal">@</span> {game.home.abbr}
         </span>
-        <span className="text-sm text-zinc-500 font-mono tabular-nums">{localTime}</span>
+        {isFinal ? (
+          <span className="flex items-center gap-2">
+            <span className="text-sm font-mono tabular-nums text-zinc-300">
+              {game.away.abbr} {game.finalAwayScore}–{game.finalHomeScore} {game.home.abbr}
+            </span>
+            {outcome && <OutcomeBadge outcome={outcome} iconOnly />}
+          </span>
+        ) : (
+          <span className="text-sm text-zinc-500 font-mono tabular-nums">{localTime}</span>
+        )}
       </div>
       <div className="text-xs text-zinc-500 mb-3 truncate">
         {game.away.name} @ {game.home.name}

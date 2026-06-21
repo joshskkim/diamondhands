@@ -3,10 +3,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { format } from 'date-fns'
 import { ModelPicks } from '@/components/home/model-picks'
+import { RecentResults } from '@/components/home/recent-results'
 import { PropBoard } from '@/components/home/prop-board'
 import { SimBoards } from '@/components/home/sim-boards'
 import { SlateProjectionsChart } from '@/components/home/slate-projections-chart'
 import { GameSelectorBar } from '@/components/game/game-selector-bar'
+import { GamesBadge } from '@/components/games-badge'
 import { todayGamesQueryOptions } from '@/lib/api'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -28,14 +30,9 @@ export default function SlatePage() {
       <div className="mb-8">
         <div className={microLabel}>Today&apos;s Board</div>
         <h1 className="text-3xl font-bold tracking-tight text-zinc-100 mt-1">MLB Projections</h1>
-        <p className="text-zinc-500 text-sm mt-1">
-          {today}
-          {games.length > 0 && (
-            <>
-              {' · '}
-              <span className="font-mono tabular-nums">{games.length}</span> games
-            </>
-          )}
+        <p className="text-zinc-500 text-sm mt-1 flex items-center gap-2">
+          <span>{today}</span>
+          <GamesBadge />
         </p>
       </div>
 
@@ -49,6 +46,9 @@ export default function SlatePage() {
         <>
           {/* the model's curated 1–3 lines (or an honest pass) */}
           <ModelPicks />
+
+          {/* yesterday's picks, graded ✓/✗ — the running track record */}
+          <RecentResults />
 
           {/* odds-independent: the most likely batter per prop market, with reasons */}
           <PropBoard />

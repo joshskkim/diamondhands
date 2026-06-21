@@ -3,10 +3,17 @@
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { Flame } from 'lucide-react'
-import { bestPlaysQueryOptions, hitRatesQueryOptions, mostLikelyQueryOptions } from '@/lib/api'
-import type { BestPlay, HitRate, MostLikely } from '@/lib/types'
+import {
+  bestPlaysQueryOptions,
+  hitRatesQueryOptions,
+  modelPicksQueryOptions,
+  mostLikelyQueryOptions,
+} from '@/lib/api'
+import type { BestPlay, HitRate, ModelPickResult, MostLikely } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { bookLabel, formatAmerican, MARKET_LABEL, teamForSide } from '@/lib/odds'
+import { bookLabel, formatAmerican } from '@/lib/odds'
+import { easternDateStr, pickKey, pickOutcome, pickTitle, type PickOutcome } from '@/lib/picks'
+import { OutcomeBadge } from './outcome-badge'
 import { WhyDisclosure } from './why-disclosure'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -160,24 +167,6 @@ function buildPicks(
 
 // ── presentation ──────────────────────────────────────────────────────────────
 
-function pickTitle(p: BestPlay): string {
-  const sideWord = p.side === 'over' ? 'Over' : p.side === 'under' ? 'Under' : null
-  switch (p.market) {
-    case 'moneyline':
-      return `${teamForSide(p.matchup, p.side)} moneyline`
-    case 'run_line':
-      return `${teamForSide(p.matchup, p.side)} ${p.line != null && p.line > 0 ? `+${p.line}` : p.line} run line`
-    case 'total':
-      return `${sideWord} ${p.line} total runs`
-    case 'hit':
-      return `${p.playerName} ${sideWord?.toLowerCase()} ${p.line} hits`
-    case 'hr':
-      return `${p.playerName} ${sideWord?.toLowerCase()} ${p.line} home runs`
-    default:
-      return `${p.playerName ?? p.matchup} ${sideWord ?? p.side} ${p.line ?? ''} ${MARKET_LABEL[p.market] ?? p.market}`.trim()
-  }
-}
-
 function Stat({
   label,
   value,
@@ -195,7 +184,15 @@ function Stat({
   )
 }
 
-function PickCard({ pick, rank }: { pick: ModelPick; rank: number }) {
+function PickCard({
+  pick,
+  rank,
+  outcome,
+}: {
+  pick: ModelPick
+  rank: number
+  outcome?: PickOutcome
+}) {
   const p = pick.play
   return (
     <div
@@ -218,6 +215,7 @@ function PickCard({ pick, rank }: { pick: ModelPick; rank: number }) {
         >
           {pick.strong ? 'Strong' : 'Lean'}
         </span>
+        {outcome && <OutcomeBadge outcome={outcome} />}
         <Link
           href={`/mlb/games/${p.gameId}`}
           className="ml-auto font-mono text-xs text-zinc-500 hover:text-cyan-400 transition-colors"
@@ -291,10 +289,15 @@ export function ModelPicks() {
   const { data: plays, isPending, isError } = useQuery(bestPlaysQueryOptions(undefined, 100))
   const { data: sim } = useQuery(mostLikelyQueryOptions())
   const { data: hitRateData } = useQuery(hitRatesQueryOptions())
+  // Today's recorded picks, graded as games finish — overlays ✓/✗ on the live board.
+  const { data: graded } = useQuery(modelPicksQueryOptions(easternDateStr()))
 
   const rows = plays ?? []
   const hitRates = new Map<string, HitRate>(
     (hitRateData ?? []).map((h) => [`${h.playerId}:${h.market}`, h]),
+  )
+  const gradedByKey = new Map<string, ModelPickResult>(
+    (graded ?? []).map((g) => [pickKey(g), g]),
   )
   const picks = buildPicks(rows, sim, hitRates)
 
@@ -334,9 +337,17 @@ export function ModelPicks() {
             picks.length >= 3 && 'lg:grid-cols-3',
           )}
         >
-          {picks.map((pick, i) => (
-            <PickCard key={`${pick.play.gameId}-${pick.play.market}-${pick.play.selection}`} pick={pick} rank={i + 1} />
-          ))}
+          {picks.map((pick, i) => {
+            const g = gradedByKey.get(pickKey(pick.play))
+            return (
+              <PickCard
+                key={`${pick.play.gameId}-${pick.play.market}-${pick.play.selection}`}
+                pick={pick}
+                rank={i + 1}
+                outcome={g ? pickOutcome(g) : undefined}
+              />
+            )
+          })}
         </div>
       )}
     </section>

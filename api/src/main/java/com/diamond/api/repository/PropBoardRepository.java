@@ -206,13 +206,15 @@ public class PropBoardRepository {
         WHERE g.game_date = ?
         """;
 
-    // Consensus over-line for a starter's prop: most-quoted line, best over price there.
+    // Consensus line for a starter's prop on a given side: most-quoted line, best price
+    // there. Side ('over'/'under') is parameterized so the board can price whichever side
+    // the model recommends.
     private static final String PITCHER_PRICE_SQL = """
         WITH quotes AS (
             SELECT line, bookmaker, price_american, price_decimal,
                    COUNT(*) OVER (PARTITION BY line) AS books_at_line
             FROM player_prop_odds
-            WHERE game_id = ? AND player_id = ? AND market = ? AND side = 'over'
+            WHERE game_id = ? AND player_id = ? AND market = ? AND side = ?
         )
         SELECT line, bookmaker, price_american, price_decimal
         FROM quotes
@@ -300,13 +302,13 @@ public class PropBoardRepository {
         }
     }
 
-    /** Consensus over-line + best price for a starter's prop; null when no odds. */
-    public PitcherPrice findPitcherOverPrice(long gameId, int pitcherId, String market) {
+    /** Consensus line + best price for a starter's prop on the given side; null when no odds. */
+    public PitcherPrice findPitcherPrice(long gameId, int pitcherId, String market, String side) {
         List<PitcherPrice> rows = jdbc.query(PITCHER_PRICE_SQL,
             (rs, n) -> new PitcherPrice(
                 dbl(rs, "line"), rs.getString("bookmaker"),
                 rs.getInt("price_american"), rs.getDouble("price_decimal")),
-            gameId, pitcherId, market);
+            gameId, pitcherId, market, side);
         return rows.isEmpty() ? null : rows.get(0);
     }
 

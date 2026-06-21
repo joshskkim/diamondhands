@@ -2,6 +2,8 @@
 
 import Link from 'next/link'
 import type { TodayGame } from '@/lib/types'
+import { favoriteOutcome, type PickOutcome } from '@/lib/picks'
+import { OutcomeBadge } from './outcome-badge'
 
 /**
  * Ranked "most likely projections" chart for the slate: each game as a horizontal
@@ -17,6 +19,8 @@ type Row = {
   dog: string
   margin: number
   total: number
+  // Did the projected favorite win, once the game is final? (undefined while unplayed)
+  outcome?: PickOutcome
 }
 
 export function SlateProjectionsChart({ games }: { games: TodayGame[] }) {
@@ -32,6 +36,7 @@ export function SlateProjectionsChart({ games }: { games: TodayGame[] }) {
         dog: favHome ? g.away.abbr : g.home.abbr,
         margin: Math.abs(hr - ar),
         total: g.projection?.expectedTotal ?? hr + ar,
+        outcome: favoriteOutcome(favHome, g.finalHomeScore, g.finalAwayScore),
       }
     })
     .filter((r): r is Row => r !== null)
@@ -74,6 +79,9 @@ export function SlateProjectionsChart({ games }: { games: TodayGame[] }) {
             <div className="w-16 shrink-0 text-xs text-zinc-500">vs {r.dog}</div>
             <div className="w-16 shrink-0 text-right font-mono text-[11px] text-zinc-500">
               {r.total.toFixed(1)} tot
+            </div>
+            <div className="w-6 shrink-0">
+              {r.outcome && <OutcomeBadge outcome={r.outcome} iconOnly />}
             </div>
           </Link>
         )

@@ -10,5 +10,9 @@ public record TodayGameDto(
     ProbablesDto probables,
     ProjectionSummaryDto projection,
     GameOddsSummaryDto odds,
-    String status
+    String status,
+    // Final score once the game is over (null while scheduled / in progress) — drives
+    // the projected-winner hit/miss marker on the slate.
+    Integer finalHomeScore,
+    Integer finalAwayScore
 ) {}

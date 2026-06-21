@@ -7,6 +7,7 @@ import { AppSidebar } from '@/components/app-sidebar'
 import { AskSearch } from '@/components/ask-search'
 import { MobileNav } from '@/components/mobile-nav'
 import { DiamondMark } from '@/components/diamond-mark'
+import { GamesBadge } from '@/components/games-badge'
 import { cn } from '@/lib/utils'
 
 const COLLAPSE_KEY = 'diamond:sidebar-collapsed'
@@ -78,6 +79,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <DiamondMark />
             <span className="text-base">Diamond</span>
           </Link>
+          <GamesBadge className="ml-2" />
           <button
             type="button"
             onClick={() => setSearchOpen(true)}

@@ -70,6 +70,27 @@ def cmd_daily(args: argparse.Namespace) -> None:
             except Exception as exc:  # noqa: BLE001
                 print(f"[daily]   ⚠ close-prior-slate/{name} failed: {exc} — continuing")
 
+    def _grade_today(_args: argparse.Namespace) -> None:
+        """Grade TODAY's recorded picks against actuals as games finish — the
+        intra-day pass that makes the home board's ✓/✗ markers live. Pulls final
+        scores + player stats for today, then scores today's picks (which
+        record-picks just (re)wrote). score-picks defaults to yesterday, so today
+        must be passed explicitly. Games not yet final simply stay pending."""
+        cur = copy.copy(_args)
+        cur.date = target
+        cur.start = target
+        cur.end = target
+        cur.season = target.year
+        for name, fn in (
+            ("backfill-scores", cmd_backfill_scores),
+            ("backfill-stats", cmd_backfill_stats),
+            ("score-picks", cmd_score_picks),
+        ):
+            try:
+                fn(cur)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[daily]   ⚠ grade-today/{name} failed: {exc} — continuing")
+
     # Build the ordered step list. --quick is the afternoon re-projection loop
     # (lineups trickle in, project clears+recomputes the slate); --skip-skills
     # drops the slow ~1.5 min skills recompute when it isn't needed yet.
@@ -82,6 +103,8 @@ def cmd_daily(args: argparse.Namespace) -> None:
             ("project", cmd_project, True),
             ("refresh-odds", cmd_refresh_odds, False),
             ("record-picks", cmd_record_picks, False),
+            # Grade today's picks live as games finish (after record-picks rewrites them).
+            ("grade today (scores+stats+picks)", _grade_today, False),
         ]
     else:
         steps = [

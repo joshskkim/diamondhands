@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { LayoutGrid, TrendingUp, Target, LineChart, Calendar, BarChart3, Search, LogIn, LogOut, Menu, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { DiamondMark } from '@/components/diamond-mark'
+import { GamesBadge } from '@/components/games-badge'
 import { SportSwitcher } from '@/components/sport-switcher'
 import { useAuth } from '@/components/auth-provider'
 
@@ -84,6 +85,7 @@ export function AppSidebar({
             <span className="text-base">Diamond</span>
           </Link>
         )}
+        {!collapsed && !isTennis && <GamesBadge />}
         {onToggleCollapse && (
           <button
             type="button"
