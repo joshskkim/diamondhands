@@ -9,6 +9,7 @@ import { SimBoards } from '@/components/home/sim-boards'
 import { SlateProjectionsChart } from '@/components/home/slate-projections-chart'
 import { GameSelectorBar } from '@/components/game/game-selector-bar'
 import { GamesBadge } from '@/components/games-badge'
+import { ProjectedBadge } from '@/components/projected-badge'
 import { todayGamesQueryOptions } from '@/lib/api'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -33,6 +34,7 @@ export default function SlatePage() {
         <p className="text-zinc-500 text-sm mt-1 flex items-center gap-2">
           <span>{today}</span>
           <GamesBadge />
+          <ProjectedBadge />
         </p>
       </div>
 
