@@ -35,6 +35,9 @@ jobs:
         with:
           context: ./api
           push: true
+          # Optional: enables the Sentry source-bundle upload during the Maven build.
+          secrets: |
+            sentry_auth_token=${{ secrets.SENTRY_AUTH_TOKEN }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.OWNER }}/diamond-api:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ env.OWNER }}/diamond-api:latest
