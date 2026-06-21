@@ -92,7 +92,7 @@ class PropBoardServiceTest {
         when(repo.findSlateRows(date)).thenReturn(List.of());
         when(repo.findClearRatesBatch(any(), any())).thenReturn(Map.of());
         when(repo.findPitcherRows(date)).thenReturn(List.of(pitcherRow()));
-        when(repo.findPitcherOverPrice(anyLong(), anyInt(), anyString())).thenReturn(null);
+        when(repo.findPitcherPrice(anyLong(), anyInt(), anyString(), anyString())).thenReturn(null);
 
         PropBoardResponse resp = new PropBoardService(repo).board(date);
 
@@ -107,6 +107,32 @@ class PropBoardServiceTest {
         assertThat(k.opponentXwoba()).isEqualTo(0.31);
         assertThat(k.arsenal()).singleElement()
             .extracting(PitcherPropPickDto.ArsenalPitch::pitchType).isEqualTo("SL");
+        // Best pick with no odds: anchor = modeled line nearest expectedK (6.0 → 5.5),
+        // and P(over 5.5)=0.52 ≥ 0.5 so the lean is the over at that line.
+        assertThat(k.bestSide()).isEqualTo("over");
+        assertThat(k.bestLine()).isEqualTo(5.5);
+        assertThat(k.bestProb()).isEqualTo(0.52);
+        assertThat(k.evPct()).isNull();   // no odds mocked
+    }
+
+    @Test
+    void board_pitcherBestPick_leansUnderForSoftTosser() {
+        LocalDate date = LocalDate.of(2026, 6, 18);
+        PropBoardRepository repo = mock(PropBoardRepository.class);
+        when(repo.findSlateRows(date)).thenReturn(List.of());
+        when(repo.findClearRatesBatch(any(), any())).thenReturn(Map.of());
+        when(repo.findPitcherRows(date)).thenReturn(List.of(softTosserRow()));
+        when(repo.findPitcherPrice(anyLong(), anyInt(), anyString(), anyString())).thenReturn(null);
+
+        PropBoardResponse resp = new PropBoardService(repo).board(date);
+
+        PitcherPropPickDto k = resp.pitcherPicks().stream()
+            .filter(p -> p.market().equals("pitcher_k")).findFirst().orElseThrow();
+        // expectedK 4.0 → anchor 4.5; P(over 4.5)=0.40 < 0.5 so the lean is the under,
+        // with bestProb = 1 - 0.40 = 0.60.
+        assertThat(k.bestSide()).isEqualTo("under");
+        assertThat(k.bestLine()).isEqualTo(4.5);
+        assertThat(k.bestProb()).isEqualTo(0.60);
     }
 
     /** A slate row with only the walk probability populated (other markets null). */
@@ -136,5 +162,18 @@ class PropBoardServiceTest {
             null, null, null, new int[0], new int[0],
             0.28, 0.07, 0.30, 0.03, 0.24, 0.31,
             List.of(new PitcherPropPickDto.ArsenalPitch("SL", 0.38, 0.33, 86.2)));
+    }
+
+    /** A back-end starter projected under the low K line — used to exercise the under lean. */
+    private static PitcherRow softTosserRow() {
+        return new PitcherRow(
+            2L, "AWY @ HOM",
+            56, "Soft Toss", "HOM", "AWY",
+            4.0, 14.0, 4.5,
+            0.40, 0.20, 0.08,
+            0.45, 0.20,
+            null, null, null, new int[0], new int[0],
+            0.18, 0.09, 0.34, 0.04, 0.20, 0.33,
+            List.of(new PitcherPropPickDto.ArsenalPitch("CH", 0.30, 0.22, 82.0)));
     }
 }

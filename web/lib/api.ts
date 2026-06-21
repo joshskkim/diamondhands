@@ -8,6 +8,7 @@ import type {
   GameProjections,
   HitRate,
   LineShop,
+  ModelPickResult,
   MostLikely,
   PitcherSkillSplit,
   PitchTypeLeaderboardEntry,
@@ -248,6 +249,13 @@ export function fetchPropBoard(date?: string): Promise<PropBoard> {
   return apiGet<PropBoard>(`/api/props/board${qs ? `?${qs}` : ''}`)
 }
 
+export function fetchModelPicks(date?: string): Promise<ModelPickResult[]> {
+  const params = new URLSearchParams()
+  if (date) params.set('date', date)
+  const qs = params.toString()
+  return apiGet<ModelPickResult[]>(`/api/model-picks${qs ? `?${qs}` : ''}`)
+}
+
 export function fetchMostLikely(date?: string): Promise<MostLikely> {
   const params = new URLSearchParams()
   if (date) params.set('date', date)
@@ -323,6 +331,7 @@ export const queryKeys = {
     lineShop: (date?: string) => ['odds', 'line-shop', date ?? 'today'] as const,
   },
   mostLikely: (date?: string) => ['most-likely', date ?? 'today'] as const,
+  modelPicks: (date?: string) => ['model-picks', date ?? 'today'] as const,
   propBoard: (date?: string) => ['prop-board', date ?? 'today'] as const,
   players: {
     detail: (playerId: number) => ['player', 'detail', playerId] as const,
@@ -436,6 +445,13 @@ export function propBoardQueryOptions(date?: string) {
   return queryOptions({
     queryKey: queryKeys.propBoard(date),
     queryFn: () => fetchPropBoard(date),
+  })
+}
+
+export function modelPicksQueryOptions(date?: string) {
+  return queryOptions({
+    queryKey: queryKeys.modelPicks(date),
+    queryFn: () => fetchModelPicks(date),
   })
 }
 

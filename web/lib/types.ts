@@ -55,6 +55,34 @@ export interface TodayGame {
   projection: ProjectionSummary | null
   odds: GameOddsSummary | null
   status: string
+  /** Final score once the game is over (null while scheduled / in progress). */
+  finalHomeScore: number | null
+  finalAwayScore: number | null
+}
+
+/** GET /api/model-picks — a persisted Model's Pick with its graded outcome. */
+export interface ModelPickResult {
+  slateDate: string
+  rank: number
+  gameId: number
+  market: string
+  side: string
+  line: number | null
+  playerId: number | null
+  playerName: string | null
+  matchup: string
+  modelProb: number
+  fairProb: number
+  edge: number
+  evPct: number
+  priceAmerican: number
+  book: string | null
+  strong: boolean
+  resultValue: number | null
+  /** true = hit, false = miss, null = push/void or not yet graded. */
+  won: boolean | null
+  /** true once score-picks has settled it (won may still be null on a push). */
+  scored: boolean
 }
 
 export interface BatterPlayer {
@@ -423,6 +451,11 @@ export interface PitcherPropPick {
   expectedValue: number
   expectedIp: number | null
   distribution: PitcherThreshold[]
+  /** The single recommended pick: side the model leans at the most relevant line. */
+  bestLine: number | null
+  bestSide: 'over' | 'under' | null
+  bestProb: number | null
+  /** Best cached price + EV for the recommended side at bestLine (null when no odds). */
   bookLine: number | null
   bestBook: string | null
   priceAmerican: number | null
