@@ -135,6 +135,36 @@ class PropBoardServiceTest {
         assertThat(k.bestProb()).isEqualTo(0.60);
     }
 
+    @Test
+    void board_omitsPitcherCards_whenWorkloadDistributionAbsent() {
+        // No pitcher_starts history → the workload model never ran → p_k/p_outs cols are
+        // null and there's no sim histogram. A missing distribution must NOT surface as a
+        // confident 100%-under pick: the card is dropped entirely.
+        LocalDate date = LocalDate.of(2026, 6, 18);
+        PropBoardRepository repo = mock(PropBoardRepository.class);
+        when(repo.findSlateRows(date)).thenReturn(List.of());
+        when(repo.findClearRatesBatch(any(), any())).thenReturn(Map.of());
+        when(repo.findPitcherRows(date)).thenReturn(List.of(noWorkloadRow()));
+        when(repo.findPitcherPrice(anyLong(), anyInt(), anyString(), anyString())).thenReturn(null);
+
+        PropBoardResponse resp = new PropBoardService(repo).board(date);
+
+        assertThat(resp.pitcherPicks()).isEmpty();
+    }
+
+    /** A starter with expected volumes but no distribution at all (workload null, no sim). */
+    private static PitcherRow noWorkloadRow() {
+        return new PitcherRow(
+            3L, "AWY @ HOM",
+            57, "No Workload", "HOM", "AWY",
+            6.0, 16.0, 5.5,
+            null, null, null,        // p_k cols null (workload never computed)
+            null, null,              // p_outs cols null
+            null, null, null, new int[0], new int[0],  // no sim histograms
+            0.25, 0.08, 0.32, 0.03, 0.22, 0.32,
+            List.of(new PitcherPropPickDto.ArsenalPitch("FF", 0.50, 0.20, 94.0)));
+    }
+
     /** A slate row with only the walk probability populated (other markets null). */
     private static SlateRow slateRow(int playerId, String name, double pBb1) {
         return new SlateRow(

@@ -1,5 +1,12 @@
 # Diamond scheduled jobs — install on the host with:  crontab deploy/crontab.example
 # (or paste into `crontab -e`). CRON_TZ requires Vixie/cronie (Debian/Ubuntu default).
+#
+# ONE-TIME bulk backfill on a fresh box (NOT scheduled below): these only ever ingest the
+# current day incrementally, so a new deploy starts with no history. Without it the workload
+# model stays inactive (no pitcher_starts → null pitcher_projections.workload), and the prop
+# board renders every pitcher pick as a bogus 100% under. Run once after first deploy:
+#   ./deploy/run-ingester.sh backfill-games --start 2023-03-01 --end <today>
+#   ./deploy/run-ingester.sh backfill-pitcher-starts --start 2023-03-01
 CRON_TZ=America/New_York
 DIAMOND_DIR=/opt/diamond
 # Optional offsite backup target (rclone remote:bucket). When set, backup.sh mirrors each

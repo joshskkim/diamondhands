@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * Builds the model-first prop board: for each batter prop market, the single most
@@ -184,31 +185,37 @@ public class PropBoardService {
         String key,                                  // odds market key
         Function<PitcherRow, Double> volume,         // ranking metric
         List<Double> lines,                          // distribution thresholds shown
-        Function<PitcherRow, List<Double>> probs) {} // P(over each line), aligned to lines
+        Function<PitcherRow, List<Double>> probs,    // P(over each line), aligned to lines
+        Predicate<PitcherRow> hasDist) {}            // true when the row carries a real distribution
 
     private static final List<Double> HITS_LINES = List.of(4.5, 5.5, 6.5);
     private static final List<Double> ER_LINES = List.of(1.5, 2.5, 3.5);
 
     private static final List<PitcherMarket> PITCHER_MARKETS = List.of(
+        // K / outs distributions come from the workload model's JSON. When it's absent (no
+        // pitcher_starts history → workload never computed), the cols are null; hasDist gates
+        // those rows out so a missing projection isn't rendered as a confident 100% under.
         new PitcherMarket("pitcher_k", PitcherRow::expectedK, List.of(4.5, 5.5, 6.5),
-            r -> List.of(nz(r.pk45()), nz(r.pk55()), nz(r.pk65()))),
+            r -> List.of(nz(r.pk45()), nz(r.pk55()), nz(r.pk65())),
+            r -> r.pk45() != null && r.pk55() != null && r.pk65() != null),
         new PitcherMarket("pitcher_outs", PitcherRow::expectedOuts, List.of(14.5, 17.5),
-            r -> List.of(nz(r.po145()), nz(r.po175()))),
+            r -> List.of(nz(r.po145()), nz(r.po175())),
+            r -> r.po145() != null && r.po175() != null),
         // Hits allowed / earned runs come from the simulator's histograms, so P(over) is
         // read off the distribution rather than a closed form. Like Ks/outs, ranked by
         // expected volume — here that surfaces the starter most exposed to a big line
-        // (the over lean), not the stingiest arm.
+        // (the over lean), not the stingiest arm. No histogram (no sim row) → no card.
         new PitcherMarket("pitcher_hits_allowed", PitcherRow::expectedHits, HITS_LINES,
-            r -> histPOver(r.hitsHist(), r.nSims(), HITS_LINES)),
+            r -> histPOver(r.hitsHist(), r.nSims(), HITS_LINES), r -> hasHist(r.hitsHist(), r.nSims())),
         new PitcherMarket("pitcher_earned_runs", PitcherRow::expectedEr, ER_LINES,
-            r -> histPOver(r.erHist(), r.nSims(), ER_LINES)));
+            r -> histPOver(r.erHist(), r.nSims(), ER_LINES), r -> hasHist(r.erHist(), r.nSims())));
 
     private List<PitcherPropPickDto> pitcherPicks(LocalDate date) {
         List<PitcherRow> rows = repo.findPitcherRows(date);
         List<PitcherPropPickDto> out = new ArrayList<>();
         for (PitcherMarket m : PITCHER_MARKETS) {
             List<PitcherRow> ranked = rows.stream()
-                .filter(r -> m.volume().apply(r) != null)
+                .filter(r -> m.volume().apply(r) != null && m.hasDist().test(r))
                 .sorted(Comparator.comparingDouble((PitcherRow r) -> m.volume().apply(r)).reversed())
                 .toList();
             if (ranked.isEmpty()) continue;
@@ -305,6 +312,13 @@ public class PropBoardService {
 
     private static double nz(Double v) {
         return v == null ? 0.0 : v;
+    }
+
+    /** True when a simulator histogram is usable (the game had a sim row). Mirrors the
+     *  emptiness guard in {@link #histPOver}: without it the card would render all-0% (a
+     *  bogus 100% under) instead of being suppressed. */
+    private static boolean hasHist(int[] hist, Integer nSims) {
+        return hist != null && hist.length > 0 && nSims != null && nSims > 0;
     }
 
     /** P(over each line) from a simulator count histogram (bin i = sims with exactly i,
