@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 
 /**
  * Aggregates settled Model's Picks into the live track record: overall / per-market / per-tier
@@ -43,6 +44,9 @@ public class TrackRecordService {
         Acc strong = new Acc("Strong");
         Acc standard = new Acc("Standard");
 
+        // Distinct model versions the record spans (disclosed, not filtered — the track record is
+        // the product's, across version bumps). Sorted for a stable badge.
+        TreeSet<String> versions = new TreeSet<>();
         // Brier over decided (win/loss) picks only.
         double brierSum = 0.0;
         int brierN = 0;
@@ -60,6 +64,7 @@ public class TrackRecordService {
                 continue;  // postponed/cancelled — never placed, excluded from the record
             }
             asOf = p.slateDate();
+            if (p.modelVersion() != null) versions.add(p.modelVersion());
             double units = unitsFor(o, p.priceAmerican());
 
             overall.add(o, units);
@@ -97,7 +102,7 @@ public class TrackRecordService {
 
         Double pickBrier = brierN > 0 ? round4(brierSum / brierN) : null;
         return new TrackRecordResponse(
-            days, asOf == null ? null : asOf.toString(),
+            days, asOf == null ? null : asOf.toString(), new ArrayList<>(versions),
             overall.toDto(), markets, tiers, equity, pickBrier);
     }
 

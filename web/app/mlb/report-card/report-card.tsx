@@ -55,6 +55,12 @@ function fmtDate(iso: string) {
   return format(parseISO(iso), 'MMM d')
 }
 
+// One version → "model vX"; a span → "models vMin–vMax (n)". Full list is in the title tooltip.
+function modelVersionLabel(versions: string[]): string {
+  if (versions.length === 1) return `model ${versions[0]}`
+  return `models ${versions[0]}–${versions[versions.length - 1]} (${versions.length})`
+}
+
 export function ReportCard() {
   const [days, setDays] = useState<number>(60)
   const { data, isPending, isError } = useQuery(trackRecordQueryOptions(days))
@@ -88,9 +94,12 @@ export function ReportCard() {
             </button>
           ))}
         </div>
-        {data?.asOf && (
-          <div className="text-xs text-zinc-500 font-mono">through {fmtDate(data.asOf)}</div>
-        )}
+        <div className="flex items-center gap-3 text-xs text-zinc-500 font-mono">
+          {data && data.modelVersions.length > 0 && (
+            <span title={data.modelVersions.join(', ')}>{modelVersionLabel(data.modelVersions)}</span>
+          )}
+          {data?.asOf && <span>through {fmtDate(data.asOf)}</span>}
+        </div>
       </div>
 
       {isPending && <div className="text-sm text-zinc-500">Loading track record…</div>}

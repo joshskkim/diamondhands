@@ -16,6 +16,7 @@ import java.util.List;
 public record TrackRecordResponse(
     int days,
     String asOf,                       // most recent settled slate date, or null when empty
+    List<String> modelVersions,        // distinct model versions in the window (the record spans these)
     RecordSummaryDto overall,
     List<RecordSummaryDto> byMarket,
     List<RecordSummaryDto> byTier,     // Strong / Standard

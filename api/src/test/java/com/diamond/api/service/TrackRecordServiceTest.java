@@ -22,7 +22,12 @@ class TrackRecordServiceTest {
 
     private static SettledPick pick(LocalDate day, String market, boolean strong,
                                     Boolean won, double modelProb, int price, Double resultValue) {
-        return new SettledPick(day, market, strong, won, modelProb, price, resultValue);
+        return pick(day, market, strong, won, modelProb, price, resultValue, "v2.12.0");
+    }
+
+    private static SettledPick pick(LocalDate day, String market, boolean strong, Boolean won,
+                                    double modelProb, int price, Double resultValue, String version) {
+        return new SettledPick(day, market, strong, won, modelProb, price, resultValue, version);
     }
 
     private TrackRecordResponse serve(List<SettledPick> picks) {
@@ -34,10 +39,10 @@ class TrackRecordServiceTest {
     @Test
     void aggregatesRecordUnitsRoiAndBrier() {
         TrackRecordResponse r = serve(List.of(
-            pick(D1, "total", true, true, 0.60, 150, 9.0),   // WIN  +1.50u
-            pick(D1, "hr", false, false, 0.20, 400, 0.0),    // LOSS -1.00u
-            pick(D2, "total", false, null, 0.55, -110, 8.0), // PUSH  0.00u (graded, has result)
-            pick(D2, "moneyline", false, null, 0.50, -120, null) // VOID — excluded entirely
+            pick(D1, "total", true, true, 0.60, 150, 9.0, "v2.12.0"),       // WIN  +1.50u
+            pick(D1, "hr", false, false, 0.20, 400, 0.0, "v2.11.0"),        // LOSS -1.00u
+            pick(D2, "total", false, null, 0.55, -110, 8.0, "v2.12.0"),     // PUSH  0.00u
+            pick(D2, "moneyline", false, null, 0.50, -120, null, "v9.9.9")  // VOID — excluded entirely
         ));
 
         RecordSummaryDto o = r.overall();
@@ -50,6 +55,8 @@ class TrackRecordServiceTest {
         assertThat(o.roiPct()).isEqualTo(16.67);        // 0.5 / 3 * 100
         assertThat(r.pickBrier()).isEqualTo(0.1);       // (0.16 + 0.04) / 2
         assertThat(r.asOf()).isEqualTo("2026-06-19");
+        // Distinct versions across counted picks, sorted; the void pick's v9.9.9 is excluded.
+        assertThat(r.modelVersions()).containsExactly("v2.11.0", "v2.12.0");
 
         // moneyline was void-only → dropped from the market breakdown.
         assertThat(r.byMarket()).extracting(RecordSummaryDto::label)
@@ -71,6 +78,7 @@ class TrackRecordServiceTest {
         assertThat(r.pickBrier()).isNull();
         assertThat(r.asOf()).isNull();
         assertThat(r.byMarket()).isEmpty();
+        assertThat(r.modelVersions()).isEmpty();
     }
 
     @Test

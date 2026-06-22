@@ -20,7 +20,8 @@ public class TrackRecordRepository {
     // (result_value present) or a void (result_value NULL, e.g. a postponed game) — the service
     // separates those. Ordered oldest-first so the equity curve accumulates in time order.
     private static final String SETTLED_SQL = """
-        SELECT slate_date, market, strong, won, model_prob, price_american, result_value
+        SELECT slate_date, market, strong, won, model_prob, price_american, result_value,
+               model_version
         FROM model_picks
         WHERE scored_at IS NOT NULL AND slate_date >= ?
         ORDER BY slate_date, rank
@@ -45,7 +46,8 @@ public class TrackRecordRepository {
             (Boolean) rs.getObject("won"),
             rs.getBigDecimal("model_prob").doubleValue(),
             rs.getInt("price_american"),
-            toDouble(rs.getBigDecimal("result_value")));
+            toDouble(rs.getBigDecimal("result_value")),
+            rs.getString("model_version"));
     }
 
     private static Double toDouble(BigDecimal bd) {
@@ -60,5 +62,6 @@ public class TrackRecordRepository {
         Boolean won,
         double modelProb,
         int priceAmerican,
-        Double resultValue) {}
+        Double resultValue,
+        String modelVersion) {}
 }

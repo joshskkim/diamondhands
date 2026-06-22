@@ -603,6 +603,8 @@ export interface EquityPoint {
 export interface TrackRecord {
   days: number
   asOf: string | null
+  /** Distinct model versions the record spans (disclosed, not filtered). */
+  modelVersions: string[]
   overall: RecordSummary
   byMarket: RecordSummary[]
   byTier: RecordSummary[]
