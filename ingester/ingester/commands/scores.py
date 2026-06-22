@@ -26,8 +26,9 @@ def _fetch_schedule_scores(game_date):
     return fetch_schedule(game_date, hydrate=_SCORE_HYDRATE)
 
 
-def _update_scores(conn: psycopg.Connection, raw_games: list[dict]) -> int:
-    n = 0
+def _update_scores(conn: psycopg.Connection, raw_games: list[dict]) -> tuple[int, int]:
+    """Returns (rows updated, rows that also got first-inning runs set)."""
+    n = first_n = 0
     for g in raw_games:
         game_pk = g.get("gamePk")
         score = parse_game_score(g)
@@ -41,7 +42,9 @@ def _update_scores(conn: psycopg.Connection, raw_games: list[dict]) -> int:
             " home_score_1st = %s, away_score_1st = %s WHERE id = %s",
             (home, away, home_1st, away_1st, game_pk),
         ).rowcount
-    return n
+        if first is not None:
+            first_n += 1
+    return n, first_n
 
 
 def cmd_backfill_scores(args: argparse.Namespace) -> None:
@@ -53,15 +56,18 @@ def cmd_backfill_scores(args: argparse.Namespace) -> None:
     print(f"[backfill-scores] {len(dates)} dates ({start} → {end}) with {MAX_WORKERS} workers…")
 
     conn = get_connection()
-    total = 0
+    total = first_total = 0
     try:
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
             for raw in pool.map(_fetch_schedule_scores, dates):
-                total += _update_scores(conn, raw)
+                n, first_n = _update_scores(conn, raw)
+                total += n
+                first_total += first_n
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
-    print(f"Backfilled scores for {total} games across {len(dates)} dates.")
+    print(f"Backfilled scores for {total} games across {len(dates)} dates "
+          f"({first_total} with first-inning runs).")

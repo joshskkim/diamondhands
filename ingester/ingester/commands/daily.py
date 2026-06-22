@@ -20,6 +20,7 @@ from ingester.db import eastern_today
 from ingester.commands.accuracy import cmd_compute_accuracy
 from ingester.commands.backfill_stats import cmd_backfill_stats
 from ingester.commands.backfill_pitcher_starts import cmd_backfill_pitcher_starts
+from ingester.commands.backfill_batter_lines import cmd_backfill_batter_lines
 from ingester.commands.daily_slate import cmd_daily_slate
 from ingester.commands.picks import cmd_record_picks, cmd_score_picks
 from ingester.commands.refresh_weather import cmd_refresh_weather
@@ -62,6 +63,11 @@ def cmd_daily(args: argparse.Namespace) -> None:
             ("backfill-scores", cmd_backfill_scores),
             ("backfill-stats", cmd_backfill_stats),
             ("backfill-pitcher-starts", cmd_backfill_pitcher_starts),
+            # Boxscore batter lines are available immediately, unlike Statcast
+            # (backfill-stats) which can lag past 9am — without them compute-accuracy
+            # finds no batter actuals for the prior slate and skips every binary
+            # market (hit/hr/k), only ever writing total_runs.
+            ("backfill-batter-lines", cmd_backfill_batter_lines),
             ("score-picks", cmd_score_picks),
             ("compute-accuracy", cmd_compute_accuracy),
         ):
@@ -73,9 +79,15 @@ def cmd_daily(args: argparse.Namespace) -> None:
     def _grade_today(_args: argparse.Namespace) -> None:
         """Grade TODAY's recorded picks against actuals as games finish — the
         intra-day pass that makes the home board's ✓/✗ markers live. Pulls final
-        scores + player stats for today, then scores today's picks (which
-        record-picks just (re)wrote). score-picks defaults to yesterday, so today
-        must be passed explicitly. Games not yet final simply stay pending."""
+        scores (+ first-inning runs for NRFI) and player lines for today, then
+        scores today's picks (which record-picks just (re)wrote). score-picks
+        defaults to yesterday, so today must be passed explicitly. Games not yet
+        final simply stay pending.
+
+        Pitcher and batter lines come from live boxscores (backfill-pitcher-starts
+        / backfill-batter-lines) rather than Statcast, which lags ~a day — that's
+        what lets pitcher-prop and batter-prop badges grade same-day. backfill-stats
+        still runs so anything Statcast does publish same-day is captured too."""
         cur = copy.copy(_args)
         cur.date = target
         cur.start = target
@@ -84,6 +96,8 @@ def cmd_daily(args: argparse.Namespace) -> None:
         for name, fn in (
             ("backfill-scores", cmd_backfill_scores),
             ("backfill-stats", cmd_backfill_stats),
+            ("backfill-pitcher-starts", cmd_backfill_pitcher_starts),
+            ("backfill-batter-lines", cmd_backfill_batter_lines),
             ("score-picks", cmd_score_picks),
         ):
             try:
