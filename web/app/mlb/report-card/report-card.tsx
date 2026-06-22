@@ -16,6 +16,7 @@ import {
 import { trackRecordQueryOptions } from '@/lib/api'
 import type { RecordSummary, TrackRecord } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { QueryError } from '@/components/ui/query-states'
 import { AccuracyBoard } from '../accuracy/accuracy-board'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -63,7 +64,7 @@ function modelVersionLabel(versions: string[]): string {
 
 export function ReportCard() {
   const [days, setDays] = useState<number>(60)
-  const { data, isPending, isError } = useQuery(trackRecordQueryOptions(days))
+  const { data, isPending, isError, refetch } = useQuery(trackRecordQueryOptions(days))
 
   return (
     <main className="max-w-5xl mx-auto px-4 py-8">
@@ -103,7 +104,7 @@ export function ReportCard() {
       </div>
 
       {isPending && <div className="text-sm text-zinc-500">Loading track record…</div>}
-      {isError && <div className="text-sm text-rose-300">Failed to load track record.</div>}
+      {isError && <QueryError message="Couldn’t load the track record." onRetry={refetch} />}
       {!isPending && !isError && data && data.overall.n === 0 && (
         <div className="text-sm text-zinc-500">
           No graded picks in this window yet. The record fills in as{' '}
