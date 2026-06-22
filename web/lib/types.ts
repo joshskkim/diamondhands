@@ -86,6 +86,8 @@ export interface ModelPickResult {
   priceAmerican: number
   book: string | null
   strong: boolean
+  /** true = the off-board "Lotto" moonshot (kept out of the disciplined tally). */
+  lotto: boolean
   resultValue: number | null
   /** true = hit, false = miss, null = push/void or not yet graded. */
   won: boolean | null

@@ -21,7 +21,7 @@ public class ModelPicksRepository {
     private static final String PICKS_SQL = """
         SELECT slate_date, rank, game_id, market, side, line, player_id, player_name,
                matchup, model_prob, fair_prob, edge, ev_pct, price_american, book,
-               strong, result_value, won, scored_at
+               strong, lotto, result_value, won, scored_at
         FROM model_picks
         WHERE slate_date = ?
         ORDER BY rank
@@ -55,6 +55,7 @@ public class ModelPicksRepository {
             nullableInt(rs, "price_american"),
             rs.getString("book"),
             rs.getBoolean("strong"),
+            rs.getBoolean("lotto"),
             dbl(rs, "result_value"),
             (Boolean) rs.getObject("won"),
             rs.getObject("scored_at") != null);

@@ -23,6 +23,7 @@ public record ModelPickResultDto(
     Integer priceAmerican,
     String book,
     boolean strong,
+    boolean lotto,           // true = the off-board "Lotto" moonshot (rank N+1)
     Double resultValue,
     Boolean won,
     boolean scored

@@ -3,7 +3,13 @@ from __future__ import annotations
 
 import unittest
 
-from ingester.commands.picks import MAX_PICKS, _grade, build_picks
+from ingester.commands.picks import (
+    MAX_PICKS,
+    _grade,
+    _pick_key,
+    build_lotto,
+    build_picks,
+)
 from ingester.projection.runner import DEGENERACY_MIN_ROWS, is_degenerate_slate
 
 
@@ -68,6 +74,58 @@ class TestBuildPicks(unittest.TestCase):
         sim_with = {"totals": [{"gameId": 1, "simTotal": 8.1}], "props": {}}
         self.assertEqual(build_picks([total], sim_against), [])
         self.assertEqual(len(build_picks([total], sim_with)), 1)
+
+    def test_strong_uses_proportional_overlay(self):
+        # Strong is conviction in the value (overlay = model/fair), not absolute
+        # likelihood — so the old modelProb>=0.5 floor is gone.
+        # A bare ~6pt total hugs the coinflip → overlay 1.12 < 1.15 → only a Lean.
+        bare_total = play(game_id=1, market="total", side="over", line=8.5,
+                          model=0.56, fair=0.50, ev=0.10, player_id=None, name=None)
+        self.assertFalse(build_picks([bare_total], None)[0]["strong"])
+        # The same total with a wider edge clears the overlay → Strong.
+        big_total = play(game_id=2, market="total", side="over", line=8.5,
+                         model=0.58, fair=0.50, ev=0.10, player_id=None, name=None)
+        self.assertTrue(build_picks([big_total], None)[0]["strong"])
+        # A longshot HR over that roughly doubles the fair price is a genuine value
+        # conviction → Strong, even though its absolute prob is well under 0.5.
+        hr_over = play(game_id=3, market="hr", side="over", model=0.15, fair=0.06, ev=0.20)
+        self.assertTrue(build_picks([hr_over], None)[0]["strong"])
+
+
+class TestBuildLotto(unittest.TestCase):
+    def test_region_and_max_ev(self):
+        # In-region longshot the model likes: prob 0.15 (≤0.30), EV 0.30, edge 0.07.
+        good = play(game_id=1, market="hr", side="over", model=0.15, fair=0.08, ev=0.30)
+        # A higher-EV in-region longshot should win the max-EV tiebreak.
+        better = play(game_id=2, market="hr", side="over", model=0.18, fair=0.10,
+                      ev=0.45, player_id=20)
+        lotto = build_lotto([good, better])
+        self.assertIsNotNone(lotto)
+        self.assertEqual(lotto["gameId"], 2)
+        self.assertTrue(lotto["lotto"])
+        self.assertFalse(lotto["strong"])
+
+    def test_favorite_excluded(self):
+        # High EV but a favorite (prob > 0.30) is not a lotto — that's the board's job.
+        fav = play(game_id=1, market="total", side="over", line=8.5,
+                   model=0.62, fair=0.50, ev=0.30, player_id=None, name=None)
+        self.assertIsNone(build_lotto([fav]))
+
+    def test_value_and_edge_gates(self):
+        low_ev = play(game_id=1, market="hr", model=0.15, fair=0.10, ev=0.10)  # EV < 0.20
+        thin_edge = play(game_id=2, market="hr", model=0.12, fair=0.10, ev=0.30)  # edge < 0.03
+        phantom = play(game_id=3, market="hr", model=0.02, fair=0.005, ev=0.30)  # prob < 0.05
+        self.assertIsNone(build_lotto([low_ev]))
+        self.assertIsNone(build_lotto([thin_edge]))
+        self.assertIsNone(build_lotto([phantom]))
+
+    def test_hit_rate_veto_and_exclusion(self):
+        over = play(game_id=1, market="hr", side="over", model=0.15, fair=0.08, ev=0.30)
+        red = {"10:hr": {"season": 0.05, "nSeason": 40}}  # never homers → veto over
+        self.assertIsNone(build_lotto([over], red))
+        # A selection already on the disciplined board is skipped.
+        self.assertIsNone(build_lotto([over], None, {_pick_key(over)}))
+        self.assertIsNotNone(build_lotto([over], None, set()))
 
 
 class TestGrade(unittest.TestCase):

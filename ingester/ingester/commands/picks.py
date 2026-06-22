@@ -8,6 +8,11 @@ the SAME bar; `score-picks` grades a prior slate against actuals the next
 morning (game markets need final scores; props additionally need
 player_game_stats, so a pick can stay pending until stats land).
 
+The "Strong" flag reflects conviction in the *value* — a meaningful absolute
+edge AND a meaningful proportional overlay (model ÷ fair) — not absolute
+likelihood. There is no absolute-probability floor (it used to reserve Strong
+for totals and lock every longshot prop to Lean); the overlay rule is scale-free.
+
 KEEP THE BAR IN SYNC with model-picks.tsx — these constants are a deliberate
 duplicate of the TS ones (the web computes live, this records the snapshot).
 """
@@ -37,8 +42,20 @@ MIN_EV = 0.05
 MIN_MODEL_PROB = 0.40
 LONGSHOT_EDGE = 0.08
 STRONG_EDGE = 0.06
+STRONG_OVERLAY = 1.15  # Strong needs model ≥15% above the de-vigged fair price
 MAX_PICKS = 3
 EXCLUDED_MARKETS = {"pitcher_k", "pitcher_outs", "hit"}
+
+# ── the Lotto bar (mirror of model-picks.tsx) ────────────────────────────────
+# One bonus pick below the disciplined board: the single best *value* play in the
+# longshot region. Price is deliberately NOT a criterion — a long price is just a
+# proxy for "rarely hits", and max-EV alone would surface a chalky favorite (the
+# main board's job). The region is the model's own probability (low) + strong
+# value (high EV, positive de-vig edge); the long price falls out naturally.
+LOTTO_MAX_PROB = 0.30   # it usually loses — the lottery-ticket feel
+LOTTO_MIN_PROB = 0.05   # floor: reject near-degenerate phantom longshots
+LOTTO_MIN_EV = 0.20     # juicy value
+LOTTO_MIN_EDGE = 0.03   # model genuinely above the de-vigged fair line
 HIT_RATE_VETO_MIN_N = 15  # season sample needed before the traffic light can veto
 # Per-market veto bands: (no OVER below, no UNDER above). Market-specific because
 # clear-rate scales differ wildly — the hit bands applied to HR would veto every
@@ -129,7 +146,8 @@ def build_picks(plays: list[dict], sim: dict | None,
             continue
         corroborated = _sim_corroborates(p, sim)
         score = edge + 0.5 * p["evPct"] + (0.02 if corroborated else 0.0)
-        strong = edge >= STRONG_EDGE and p["modelProb"] >= 0.5
+        # fairProb is non-null here (guarded above), so the overlay is safe.
+        strong = edge >= STRONG_EDGE and p["modelProb"] / p["fairProb"] >= STRONG_OVERLAY
         candidates.append((score, p, edge, strong))
 
     candidates.sort(key=lambda c: -c[0])
@@ -143,6 +161,43 @@ def build_picks(plays: list[dict], sim: dict | None,
         if len(picks) == MAX_PICKS:
             break
     return picks
+
+
+def _pick_key(p: dict) -> str:
+    """Identity for a selection (mirror of pickKey in web/lib/picks.ts)."""
+    line = p.get("line")
+    return (f"{p['gameId']}|{p['market']}|{p['side']}|"
+            f"{'' if line is None else line}|{p.get('playerId') or ''}")
+
+
+def build_lotto(plays: list[dict], hit_rates: dict | None = None,
+                exclude_keys: set[str] | None = None) -> dict | None:
+    """The single best *value* play in the longshot region, or None.
+
+    The lotto region is defined by the model's own probability (low — it usually
+    loses) plus strong value (high EV, positive de-vig edge), NOT by the book
+    price. Reuses the board's market exclusions and HR hit-rate veto. Picks the
+    max-EV qualifier; skips anything already on the disciplined board.
+    """
+    exclude_keys = exclude_keys or set()
+    best: dict | None = None
+    for p in plays:
+        if p["market"] in EXCLUDED_MARKETS or p.get("fairProb") is None:
+            continue
+        if not (LOTTO_MIN_PROB <= p["modelProb"] <= LOTTO_MAX_PROB):
+            continue
+        if p["evPct"] < LOTTO_MIN_EV:
+            continue
+        edge = p["modelProb"] - p["fairProb"]
+        if edge < LOTTO_MIN_EDGE:
+            continue
+        if _hit_rate_veto(p, hit_rates):
+            continue
+        if _pick_key(p) in exclude_keys:
+            continue
+        if best is None or p["evPct"] > best["evPct"]:
+            best = {**p, "edge": edge, "strong": False, "lotto": True}
+    return best
 
 
 def cmd_record_picks(args: argparse.Namespace) -> None:
@@ -163,25 +218,28 @@ def cmd_record_picks(args: argparse.Namespace) -> None:
         hit_rates = None
 
     picks = build_picks(plays, sim, hit_rates)
+    # One bonus moonshot, not overlapping the disciplined board.
+    lotto = build_lotto(plays, hit_rates, {_pick_key(p) for p in picks})
+    rows = [*picks, lotto] if lotto is not None else picks
 
     conn = get_connection()
     try:
         conn.execute("DELETE FROM model_picks WHERE slate_date = %s", (slate,))
-        for rank, p in enumerate(picks, start=1):
+        for rank, p in enumerate(rows, start=1):
             conn.execute(
                 """
                 INSERT INTO model_picks (
                     slate_date, rank, game_id, market, side, line, player_id,
                     player_name, matchup, model_prob, fair_prob, edge, ev_pct,
-                    price_american, book, strong, model_version, recorded_at
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    price_american, book, strong, lotto, model_version, recorded_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     slate, rank, p["gameId"], p["market"], p["side"], p.get("line"),
                     p.get("playerId"), p.get("playerName"), p.get("matchup"),
                     p["modelProb"], p["fairProb"], p["edge"], p["evPct"],
                     p["priceAmerican"], p.get("bestBook"), p["strong"],
-                    MODEL_VERSION, datetime.now(timezone.utc),
+                    p.get("lotto", False), MODEL_VERSION, datetime.now(timezone.utc),
                 ),
             )
         conn.commit()
@@ -191,12 +249,18 @@ def cmd_record_picks(args: argparse.Namespace) -> None:
     finally:
         conn.close()
 
-    print(f"[record-picks] {slate}: recorded {len(picks)} pick(s) "
+    print(f"[record-picks] {slate}: recorded {len(picks)} pick(s)"
+          f"{' + 1 lotto' if lotto is not None else ''} "
           f"(from {len(plays)} priced plays).")
     for i, p in enumerate(picks, 1):
         who = p.get("playerName") or p.get("matchup")
         print(f"  #{i} {who} {p['market']} {p['side']} {p.get('line')} "
               f"model={p['modelProb']:.3f} fair={p['fairProb']:.3f} edge={p['edge']:+.3f}")
+    if lotto is not None:
+        who = lotto.get("playerName") or lotto.get("matchup")
+        print(f"  🎟 LOTTO {who} {lotto['market']} {lotto['side']} {lotto.get('line')} "
+              f"model={lotto['modelProb']:.3f} fair={lotto['fairProb']:.3f} "
+              f"ev={lotto['evPct']:+.3f} price={lotto['priceAmerican']:+d}")
 
 
 # ── scoring ───────────────────────────────────────────────────────────────────

@@ -37,7 +37,14 @@ function ResultRow({ p }: { p: ModelPickResult }) {
     <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-[#0e1015] px-4 py-2.5">
       <OutcomeBadge outcome={outcome} />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm text-zinc-200">{pickTitle(p)}</div>
+        <div className="flex items-center gap-1.5">
+          {p.lotto && (
+            <span className="shrink-0 text-[9px] uppercase tracking-[0.12em] font-semibold px-1 py-0.5 rounded border text-amber-300 border-amber-400/40 bg-amber-500/10">
+              Lotto
+            </span>
+          )}
+          <span className="truncate text-sm text-zinc-200">{pickTitle(p)}</span>
+        </div>
         <div className="text-xs text-zinc-500">
           Model {(p.modelProb * 100).toFixed(0)}%
           {result != null && <> · actual {result}</>}
@@ -65,8 +72,11 @@ export function RecentResults() {
   const settled = picks.filter((p) => p.scored)
   if (settled.length === 0) return null
 
-  const won = settled.filter((p) => p.won === true).length
-  const lost = settled.filter((p) => p.won === false).length
+  // The high-variance lotto is excluded from the disciplined track record (it
+  // still renders, tagged, so its result is visible).
+  const disciplined = settled.filter((p) => !p.lotto)
+  const won = disciplined.filter((p) => p.won === true).length
+  const lost = disciplined.filter((p) => p.won === false).length
 
   return (
     <section className="mb-10">
