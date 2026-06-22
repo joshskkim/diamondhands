@@ -7,6 +7,15 @@
 # board renders every pitcher pick as a bogus 100% under. Run once after first deploy:
 #   ./deploy/run-ingester.sh backfill-games --start 2023-03-01 --end <today>
 #   ./deploy/run-ingester.sh backfill-pitcher-starts --start 2023-03-01
+#
+# ONE-TIME point-in-time snapshot backfill (NOT forward-only — computed from existing
+# player_game_stats history, so build it all now to seed the leak-free blend/ensemble
+# dataset instead of waiting weeks for the weekly job below to accrue it). Idempotent;
+# run once per season with history:
+#   ./deploy/run-ingester.sh refresh-skill-snapshots --season 2023 --start 2023-04-01 --end 2023-10-01
+#   ./deploy/run-ingester.sh refresh-skill-snapshots --season 2024 --start 2024-03-20 --end 2024-10-01
+#   ./deploy/run-ingester.sh refresh-skill-snapshots --season 2025 --start 2025-03-18 --end 2025-10-01
+#   # refresh-pitch-snapshots likewise, where the pitch Statcast cache covers the range.
 CRON_TZ=America/New_York
 DIAMOND_DIR=/opt/diamond
 # Optional offsite backup target (rclone remote:bucket). When set, backup.sh mirrors each
@@ -24,6 +33,13 @@ DIAMOND_DIR=/opt/diamond
 # postponed/suspended/cancelled. Each tick also grades TODAY's recorded picks against
 # final scores/stats as games finish, so the home board's ✓/✗ markers update live.
 */30 12-23 * * *  /opt/diamond/deploy/run-ingester.sh daily --quick
+
+# Weekly point-in-time skill + pitch-mix snapshots (Mon 7am ET). Banks one row per player
+# per Monday using only game_date < as_of_date — the leak-free dataset the blend/ensemble
+# backtests read (ingester ml/features.py). NOT part of `daily`. Idempotent; the rolling
+# ~2-week window re-stamps the latest Monday even if a week was missed. (date -d is GNU/
+# Ubuntu; cron needs % escaped as \%. --season defaults to the current season.)
+0 7 * * 1        /opt/diamond/deploy/run-ingester.sh refresh-skill-snapshots --start $(date -d '14 days ago' +\%Y-\%m-\%d) --end $(date +\%Y-\%m-\%d) && /opt/diamond/deploy/run-ingester.sh refresh-pitch-snapshots --start $(date -d '14 days ago' +\%Y-\%m-\%d) --end $(date +\%Y-\%m-\%d)
 
 # Weekly projection-prior refresh (Mon 8am ET, before the 9am daily run): pull the
 # external systems (Steamer/THE BAT X/ATC/ZiPS) from FanGraphs, bank a dated snapshot
