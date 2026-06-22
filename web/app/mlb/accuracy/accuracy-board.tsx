@@ -53,14 +53,17 @@ export function AccuracyBoard() {
   const markets: MarketAccuracy[] = data?.markets ?? []
 
   return (
-    <main className="max-w-5xl mx-auto px-4 py-8">
-      <div className={microLabel}>Model</div>
-      <h1 className="text-2xl font-bold tracking-tight text-zinc-100 mt-1 mb-2">Accuracy</h1>
+    <section className="mt-14">
+      <div className={microLabel}>Every projection — not just the ones we bet</div>
+      <h2 className="text-xl font-bold tracking-tight text-zinc-100 mt-1 mb-2">
+        Projection Calibration
+      </h2>
       <p className="text-sm text-zinc-400 mb-5 max-w-2xl">
-        How well our projections matched reality, scored each day against final stats.
-        Lower Brier is better; <span className="text-emerald-300">skill</span> is how much we
-        beat the naive always-predict-the-average baseline. Calibration shows whether a
-        projected probability matches the rate things actually happened.
+        How well our projections matched reality, scored each day against final stats — across
+        <em> all</em> projected players, an unbiased read on the model itself. Lower Brier is
+        better; <span className="text-emerald-300">skill</span> is how much we beat the naive
+        always-predict-the-average baseline. Calibration shows whether a projected probability
+        matches the rate things actually happened.
       </p>
 
       <div className="flex items-center justify-between mb-5">
@@ -100,7 +103,7 @@ export function AccuracyBoard() {
           <MarketCard key={m.market} market={m} />
         ))}
       </div>
-    </main>
+    </section>
   )
 }
 

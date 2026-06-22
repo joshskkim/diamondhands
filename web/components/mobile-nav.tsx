@@ -15,7 +15,7 @@ const SHORT_LABEL: Record<string, string> = {
   '/': 'Board',
   '/mlb/odds': 'Lines',
   '/mlb/leaderboards/pitch-types': 'Matchups',
-  '/mlb/accuracy': 'Accuracy',
+  '/mlb/report-card': 'Record',
 }
 
 // Secondary destinations that don't earn a bottom-bar tab live in the account sheet.
