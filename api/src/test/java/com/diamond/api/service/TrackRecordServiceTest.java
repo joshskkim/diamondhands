@@ -27,7 +27,12 @@ class TrackRecordServiceTest {
 
     private static SettledPick pick(LocalDate day, String market, boolean strong, Boolean won,
                                     double modelProb, int price, Double resultValue, String version) {
-        return new SettledPick(day, market, strong, won, modelProb, price, resultValue, version);
+        return new SettledPick(day, market, strong, won, modelProb, price, resultValue, version, false);
+    }
+
+    private static SettledPick lottoPick(LocalDate day, String market, Boolean won,
+                                         double modelProb, int price, Double resultValue) {
+        return new SettledPick(day, market, false, won, modelProb, price, resultValue, "v2.12.0", true);
     }
 
     private TrackRecordResponse serve(List<SettledPick> picks) {
@@ -79,6 +84,22 @@ class TrackRecordServiceTest {
         assertThat(r.asOf()).isNull();
         assertThat(r.byMarket()).isEmpty();
         assertThat(r.modelVersions()).isEmpty();
+    }
+
+    @Test
+    void lottoPicksFormTheirOwnTier() {
+        TrackRecordResponse r = serve(List.of(
+            pick(D1, "total", true, true, 0.60, -110, 9.0),   // Strong WIN
+            pick(D1, "hr", false, false, 0.20, 400, 0.0),     // Standard LOSS
+            lottoPick(D2, "hr", true, 0.10, 800, 2.0)         // Lotto WIN  +8.00u
+        ));
+
+        assertThat(r.byTier()).extracting(RecordSummaryDto::label)
+            .containsExactly("Strong", "Standard", "Lotto");
+        RecordSummaryDto lotto = r.byTier().stream()
+            .filter(t -> t.label().equals("Lotto")).findFirst().orElseThrow();
+        assertThat(lotto.wins()).isEqualTo(1);
+        assertThat(lotto.units()).isEqualTo(8.0);  // +800 → decimal 9.0 → +8.00u
     }
 
     @Test

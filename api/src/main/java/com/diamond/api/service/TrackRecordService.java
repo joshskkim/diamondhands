@@ -41,8 +41,12 @@ public class TrackRecordService {
 
         Acc overall = new Acc("Overall");
         Map<String, Acc> byMarket = new LinkedHashMap<>();
+        // Conviction tiers. A Lotto pick (longshot moonshot) is its own bucket so its different
+        // risk profile doesn't muddy the Standard record; absent the lotto column it's never set,
+        // so the tier simply doesn't appear.
         Acc strong = new Acc("Strong");
         Acc standard = new Acc("Standard");
+        Acc lotto = new Acc("Lotto");
 
         // Distinct model versions the record spans (disclosed, not filtered — the track record is
         // the product's, across version bumps). Sorted for a stable badge.
@@ -69,7 +73,7 @@ public class TrackRecordService {
 
             overall.add(o, units);
             byMarket.computeIfAbsent(p.market(), Acc::new).add(o, units);
-            (p.strong() ? strong : standard).add(o, units);
+            (p.lotto() ? lotto : p.strong() ? strong : standard).add(o, units);
 
             if (o != Outcome.PUSH) {
                 double outcome = o == Outcome.WIN ? 1.0 : 0.0;
@@ -99,6 +103,7 @@ public class TrackRecordService {
         List<RecordSummaryDto> tiers = new ArrayList<>();
         if (strong.n() > 0) tiers.add(strong.toDto());
         if (standard.n() > 0) tiers.add(standard.toDto());
+        if (lotto.n() > 0) tiers.add(lotto.toDto());
 
         Double pickBrier = brierN > 0 ? round4(brierSum / brierN) : null;
         return new TrackRecordResponse(
