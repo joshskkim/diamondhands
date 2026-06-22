@@ -20,6 +20,10 @@ import { AccuracyBoard } from '../accuracy/accuracy-board'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
+// Below this many settled picks, units/ROI swing wildly on a single result — show the
+// caveat and let the steadier calibration section carry the "is the model good" story.
+const MIN_MEANINGFUL_N = 50
+
 // All-time uses a large day count; the API clamps and the equity curve just spans everything.
 const ALL_DAYS = 36500
 const WINDOWS = [
@@ -96,6 +100,14 @@ export function ReportCard() {
           No graded picks in this window yet. The record fills in as{' '}
           <code className="text-zinc-400">record-picks</code> /{' '}
           <code className="text-zinc-400">score-picks</code> run each night.
+        </div>
+      )}
+
+      {data && data.overall.n > 0 && data.overall.n < MIN_MEANINGFUL_N && (
+        <div className="mb-4 rounded-lg border border-amber-400/20 bg-amber-400/[0.06] px-4 py-2.5 text-xs text-amber-200/90">
+          Early sample — {data.overall.n} graded pick{data.overall.n === 1 ? '' : 's'}. Units and ROI
+          swing hard on a single result here and aren&apos;t yet statistically meaningful; the
+          projection calibration below is the steadier read on model quality.
         </div>
       )}
 
