@@ -1,6 +1,7 @@
 import { queryOptions } from '@tanstack/react-query'
 import type {
   AccuracyResponse,
+  TrackRecord,
   BatterPropOdds,
   BestPlay,
   FlatBatterPick,
@@ -288,6 +289,11 @@ export function fetchAccuracy(days = 30): Promise<AccuracyResponse> {
   return apiGet<AccuracyResponse>(`/api/accuracy?days=${safeDays}`)
 }
 
+export function fetchTrackRecord(days = 60): Promise<TrackRecord> {
+  // days is clamped server-side too; a large value (All) yields the full history.
+  return apiGet<TrackRecord>(`/api/track-record?days=${Math.max(days, 1)}`)
+}
+
 export function fetchPitchTypeLeaderboard(
   pitch: string,
   date?: string,
@@ -372,6 +378,7 @@ export const queryKeys = {
   accuracy: {
     trend: (days: number) => ['accuracy', 'trend', days] as const,
   },
+  trackRecord: (days: number) => ['track-record', days] as const,
 }
 
 // ── Query options (use with useQuery / prefetchQuery) ─────────────────────────
@@ -494,6 +501,13 @@ export function accuracyQueryOptions(days = 30) {
   return queryOptions({
     queryKey: queryKeys.accuracy.trend(days),
     queryFn: () => fetchAccuracy(days),
+  })
+}
+
+export function trackRecordQueryOptions(days = 60) {
+  return queryOptions({
+    queryKey: queryKeys.trackRecord(days),
+    queryFn: () => fetchTrackRecord(days),
   })
 }
 
