@@ -34,6 +34,7 @@ from ingester.commands.odds import cmd_refresh_odds
 from ingester.commands.lineups import cmd_backfill_lineups, cmd_refresh_lineups
 from ingester.commands.scores import cmd_backfill_scores
 from ingester.commands.backfill_pitcher_starts import cmd_backfill_pitcher_starts
+from ingester.commands.backfill_batter_lines import cmd_backfill_batter_lines
 from ingester.commands.backfill_weather import cmd_backfill_weather
 from ingester.commands.refresh_weather import cmd_refresh_weather
 from ingester.commands.refresh_umpires import cmd_refresh_umpires
@@ -360,6 +361,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_bf_starts.add_argument("--start", metavar="YYYY-MM-DD", type=_date_arg, default=None)
     p_bf_starts.add_argument("--end", metavar="YYYY-MM-DD", type=_date_arg, default=None)
 
+    p_bf_batters = sub.add_parser(
+        "backfill-batter-lines",
+        help="Backfill same-day batting actuals (H/HR/K/BB/TB/PA) from boxscores",
+    )
+    p_bf_batters.add_argument("--start", metavar="YYYY-MM-DD", type=_date_arg, default=None)
+    p_bf_batters.add_argument("--end", metavar="YYYY-MM-DD", type=_date_arg, default=None)
+
     p_bf_weather = sub.add_parser(
         "backfill-weather",
         help="Backfill actual historical weather (Open-Meteo archive) so backtests can use it",
@@ -549,6 +557,7 @@ COMMANDS = {
     "backfill-lineups":         cmd_backfill_lineups,
     "backfill-scores":          cmd_backfill_scores,
     "backfill-pitcher-starts":  cmd_backfill_pitcher_starts,
+    "backfill-batter-lines":    cmd_backfill_batter_lines,
     "backfill-weather":         cmd_backfill_weather,
     "refresh-weather":          cmd_refresh_weather,
     "refresh-umpires":          cmd_refresh_umpires,
