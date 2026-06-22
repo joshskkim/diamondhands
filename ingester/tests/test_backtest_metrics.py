@@ -10,6 +10,7 @@ from ingester.commands.backtest import (
     calibration_buckets,
     mae_per_game,
 )
+from ingester.metrics import crps_count, crps_count_mean, log_loss, sharpness
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +170,84 @@ class TestMaePerGame:
         # One game over, one under by same amount
         game_hits = {1: (5.0, 3), 2: (3.0, 5)}  # |5-3|=2, |3-5|=2 → MAE=2
         assert mae_per_game(game_hits) == pytest.approx(2.0)
+
+
+# ---------------------------------------------------------------------------
+# log_loss
+# ---------------------------------------------------------------------------
+
+class TestLogLoss:
+    def test_empty_returns_nan(self):
+        assert math.isnan(log_loss([], []))
+
+    def test_perfect_confident_is_near_zero(self):
+        # Correct and confident → loss ~0 (clipped, so not exactly 0)
+        assert log_loss([1.0, 0.0], [1, 0]) == pytest.approx(0.0, abs=1e-10)
+
+    def test_hand_computed(self):
+        # single: p=0.8, a=1 → -ln(0.8)
+        assert log_loss([0.8], [1]) == pytest.approx(-math.log(0.8), rel=1e-9)
+
+    def test_constant_half(self):
+        # Always 0.5 → -ln(0.5) regardless of outcome
+        assert log_loss([0.5, 0.5], [0, 1]) == pytest.approx(-math.log(0.5))
+
+    def test_confident_wrong_is_large_but_finite(self):
+        # p=1.0 but actual 0 → clipped, large finite penalty (not inf)
+        val = log_loss([1.0], [0])
+        assert val > 30.0 and math.isfinite(val)
+
+    def test_punishes_confident_wrong_more_than_brier(self):
+        # Same calibration error, log-loss separates the confident-wrong case harder.
+        # Brier of (0.99 vs 0) == Brier of (0.51 vs 0)? No — but log-loss ratio >> brier ratio.
+        ll_ratio = log_loss([0.99], [0]) / log_loss([0.51], [0])
+        brier_ratio = brier_score([0.99], [0]) / brier_score([0.51], [0])
+        assert ll_ratio > brier_ratio
+
+
+# ---------------------------------------------------------------------------
+# sharpness
+# ---------------------------------------------------------------------------
+
+class TestSharpness:
+    def test_empty_returns_nan(self):
+        assert math.isnan(sharpness([]))
+
+    def test_constant_predictions_zero_sharpness(self):
+        # A base-rate predictor has no decisiveness.
+        assert sharpness([0.3, 0.3, 0.3]) == pytest.approx(0.0)
+
+    def test_spread_predictions_positive(self):
+        assert sharpness([0.1, 0.9]) == pytest.approx(0.16)  # var of {0.1,0.9} = 0.16
+
+
+# ---------------------------------------------------------------------------
+# crps_count (ranked probability score for integer counts)
+# ---------------------------------------------------------------------------
+
+class TestCrpsCount:
+    def test_empty_returns_nan(self):
+        assert math.isnan(crps_count([], 0))
+
+    def test_certain_correct_is_zero(self):
+        # All mass on count==2, actual==2 → CDF jumps to 1 exactly at/after 2.
+        # k=0: cdf 0, ind(2<=0)=0 → 0; k=1: cdf 0, ind 0 → 0; k=2: cdf 1, ind 1 → 0
+        assert crps_count([0.0, 0.0, 1.0], 2) == pytest.approx(0.0)
+
+    def test_certain_wrong_penalized(self):
+        # All mass on 0, actual==2: k0 cdf1 ind0 →1; k1 cdf1 ind0 →1; k2 cdf1 ind1 →0
+        assert crps_count([1.0, 0.0, 0.0], 2) == pytest.approx(2.0)
+
+    def test_spread_distribution(self):
+        # pmf [0.5,0.5], actual 0: k0 cdf .5 ind1 → .25; k1 cdf 1 ind1 → 0  => 0.25
+        assert crps_count([0.5, 0.5], 0) == pytest.approx(0.25)
+
+    def test_mean_over_forecasts(self):
+        f = [([0.0, 0.0, 1.0], 2), ([1.0, 0.0, 0.0], 2)]  # 0.0 and 2.0
+        assert crps_count_mean(f) == pytest.approx(1.0)
+
+    def test_mean_empty_nan(self):
+        assert math.isnan(crps_count_mean([]))
 
 
 # ---------------------------------------------------------------------------

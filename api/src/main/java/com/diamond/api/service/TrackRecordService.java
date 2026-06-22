@@ -54,6 +54,10 @@ public class TrackRecordService {
         // Brier over decided (win/loss) picks only.
         double brierSum = 0.0;
         int brierN = 0;
+        // CLV over picks that had a closing quote (independent of win/loss).
+        double clvSum = 0.0;
+        int clvN = 0;
+        int clvPositive = 0;
         // Per-day equity, accumulated in time order (picks arrive oldest-first).
         List<EquityPointDto> equity = new ArrayList<>();
         LocalDate curDay = null;
@@ -82,6 +86,12 @@ public class TrackRecordService {
                 brierN++;
             }
 
+            if (p.clv() != null) {
+                clvSum += p.clv();
+                clvN++;
+                if (p.clv() > 0) clvPositive++;
+            }
+
             // Roll up the equity curve a day at a time.
             if (curDay != null && !p.slateDate().equals(curDay)) {
                 equity.add(new EquityPointDto(curDay.toString(), round(cumUnits), cumWins, cumLosses));
@@ -106,9 +116,12 @@ public class TrackRecordService {
         if (lotto.n() > 0) tiers.add(lotto.toDto());
 
         Double pickBrier = brierN > 0 ? round4(brierSum / brierN) : null;
+        Double clvRate = clvN > 0 ? round4((double) clvPositive / clvN) : null;
+        Double avgClv = clvN > 0 ? round4(clvSum / clvN) : null;
         return new TrackRecordResponse(
             days, asOf == null ? null : asOf.toString(), new ArrayList<>(versions),
-            overall.toDto(), markets, tiers, equity, pickBrier);
+            overall.toDto(), markets, tiers, equity, pickBrier,
+            clvN > 0 ? clvN : null, clvRate, avgClv);
     }
 
     private enum Outcome { WIN, LOSS, PUSH, VOID }

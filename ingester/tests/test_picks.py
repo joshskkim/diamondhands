@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from ingester.commands.picks import MAX_PICKS, _grade, build_picks
+from ingester.commands.picks import MAX_PICKS, _devig_two_way, _grade, build_picks
 from ingester.projection.runner import DEGENERACY_MIN_ROWS, is_degenerate_slate
 
 
@@ -88,6 +88,29 @@ class TestGrade(unittest.TestCase):
         self.assertEqual(_grade("hit", "under", 1.5, 0, 0, 2), (2.0, False))
         self.assertEqual(_grade("hr", "over", 0.5, 0, 0, 1), (1.0, True))
         self.assertEqual(_grade("hit", "over", 0.5, 0, 0, None), (None, None))
+
+
+class TestDevigForClv(unittest.TestCase):
+    def test_balanced_book_is_half(self):
+        # Both sides -110 (decimal 1.909): a fair coin after stripping vig.
+        fair = _devig_two_way(1.909, 1.909)
+        self.assertAlmostEqual(fair, 0.5, places=4)
+
+    def test_favorite_above_half(self):
+        # -200 (1.5) vs +170 (2.7): the favorite's fair prob exceeds 0.5.
+        fair = _devig_two_way(1.5, 2.7)
+        self.assertGreater(fair, 0.5)
+        # implied 0.6667 / (0.6667 + 0.3704) ≈ 0.643
+        self.assertAlmostEqual(fair, 0.6428, places=3)
+
+    def test_two_sides_sum_to_one(self):
+        side = _devig_two_way(1.8, 2.1)
+        opp = _devig_two_way(2.1, 1.8)
+        self.assertAlmostEqual(side + opp, 1.0, places=6)
+
+    def test_nonpositive_returns_none(self):
+        self.assertIsNone(_devig_two_way(0.0, 1.9))
+        self.assertIsNone(_devig_two_way(1.9, -1.0))
 
 
 class TestDegeneracyGuard(unittest.TestCase):
