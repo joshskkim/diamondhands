@@ -1,8 +1,7 @@
-import type { Metadata } from 'next'
-import { AccuracyBoard } from './accuracy-board'
+import { redirect } from 'next/navigation'
 
-export const metadata: Metadata = { title: 'Accuracy' }
-
+// The accuracy charts now live inside the unified Model Report Card. Keep this URL
+// alive (bookmarks, old links) by redirecting to the calibration section there.
 export default function AccuracyPage() {
-  return <AccuracyBoard />
+  redirect('/mlb/report-card')
 }

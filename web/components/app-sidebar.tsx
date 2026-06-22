@@ -17,7 +17,7 @@ export const NAV_LINKS: NavLink[] = [
   { label: "Today's Board", href: '/', icon: LayoutGrid },
   { label: 'Best Lines', href: '/mlb/odds', icon: TrendingUp },
   { label: 'Pitch Matchups', href: '/mlb/leaderboards/pitch-types', icon: Target },
-  { label: 'Accuracy', href: '/mlb/accuracy', icon: LineChart },
+  { label: 'Report Card', href: '/mlb/report-card', icon: LineChart },
 ]
 
 // Secondary/help destinations shown on the desktop rail only. The mobile bottom

@@ -21,9 +21,23 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # Mapped from the secret so the conditional login step can gate on it — secrets
+    # can't be referenced directly in an `if:`.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+      # Authenticate Docker Hub so base-image pulls (eclipse-temurin, node, python…) use
+      # the higher authenticated rate limit instead of the anonymous one that intermittently
+      # times out ("DeadlineExceeded loading metadata for eclipse-temurin"). No-op until
+      # DOCKERHUB_USERNAME / DOCKERHUB_TOKEN secrets are set.
+      - name: Log in to Docker Hub (base images)
+        if: ${{ env.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
