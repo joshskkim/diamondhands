@@ -312,6 +312,14 @@ class GameSim:
     away_props: list[BatterProps]
     home_pitcher_props: PitcherProps   # the HOME starter's hits-allowed / earned-runs
     away_pitcher_props: PitcherProps   # the AWAY starter's hits-allowed / earned-runs
+    # Raw per-sim team arrays, retained so the JOINT distribution between legs can be
+    # recomputed on demand (correlation / same-game-parlay pricing). Not persisted — the
+    # runner stores only the marginals above. None on a GameSim built without them.
+    # NOTE: the two teams are drawn from INDEPENDENT rng streams, so cross-team player
+    # correlation is ~0 by construction; within-team and player-vs-game-total joints are
+    # real (a hitter's big day rides the same simulated game as his team's runs).
+    home: "TeamSim | None" = None
+    away: "TeamSim | None" = None
 
     @property
     def full(self) -> PeriodMarket:
@@ -428,6 +436,8 @@ def simulate_game(
         # A starter's hits/runs allowed = what the OPPOSING lineup put up against him.
         home_pitcher_props=_pitcher_props(away),
         away_pitcher_props=_pitcher_props(home),
+        home=home,
+        away=away,
     )
 
 
