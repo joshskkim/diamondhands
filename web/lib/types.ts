@@ -62,6 +62,10 @@ export interface TodayGame {
   /** Final score once the game is over (null while scheduled / in progress). */
   finalHomeScore: number | null
   finalAwayScore: number | null
+  /** Runs per side in the 1st inning, set once the 1st completes (null otherwise) —
+   *  drives the NRFI/YRFI hit/miss marker on the Sim Signals board. */
+  finalHomeFirstInningRuns: number | null
+  finalAwayFirstInningRuns: number | null
 }
 
 /** GET /api/model-picks — a persisted Model's Pick with its graded outcome. */
@@ -630,4 +634,31 @@ export interface MostLikely {
   nrfi: MostLikelyNrfi[]
   runLine: MostLikelyRunLine[]
   props: PropLeaders
+}
+
+/** A batter's actual line for one finished game (grades prop-board batter picks). */
+export interface BatterResult {
+  playerId: number
+  gameId: number
+  hits: number | null
+  homeRuns: number | null
+  strikeouts: number | null
+  walks: number | null
+}
+
+/** A starter's actual line for one finished game (grades pitcher prop picks). */
+export interface PitcherResult {
+  playerId: number
+  gameId: number
+  strikeouts: number | null
+  outs: number | null
+  hitsAllowed: number | null
+  earnedRuns: number | null
+}
+
+/** GET /api/results/players — actual per-player results for a slate. */
+export interface PlayerResults {
+  date: string
+  batters: BatterResult[]
+  pitchers: PitcherResult[]
 }

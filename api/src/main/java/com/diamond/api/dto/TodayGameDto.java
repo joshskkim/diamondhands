@@ -18,5 +18,9 @@ public record TodayGameDto(
     // Final score once the game is over (null while scheduled / in progress) — drives
     // the projected-winner hit/miss marker on the slate.
     Integer finalHomeScore,
-    Integer finalAwayScore
+    Integer finalAwayScore,
+    // First-inning runs per side, set once the 1st completes (null otherwise) — drives
+    // the NRFI/YRFI hit/miss marker on the Sim Signals board.
+    Integer finalHomeFirstInningRuns,
+    Integer finalAwayFirstInningRuns
 ) {}

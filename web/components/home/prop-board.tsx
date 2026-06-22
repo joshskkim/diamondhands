@@ -3,10 +3,12 @@
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { Target } from 'lucide-react'
-import { propBoardQueryOptions } from '@/lib/api'
-import type { PitcherPropPick, PropBoardPick } from '@/lib/types'
+import { playerResultsQueryOptions, propBoardQueryOptions } from '@/lib/api'
+import type { BatterResult, PitcherPropPick, PitcherResult, PropBoardPick } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
+import { overUnderOutcome, propOutcome, type PickOutcome } from '@/lib/picks'
+import { OutcomeBadge } from './outcome-badge'
 import { WhyDisclosure } from './why-disclosure'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -35,6 +37,15 @@ const PITCHER_MARKET_META: Record<string, { chip: string; unit: string; noun: st
   pitcher_outs: { chip: 'Outs', unit: 'outs', noun: 'outs recorded' },
   pitcher_hits_allowed: { chip: 'Hits allowed', unit: 'H', noun: 'hits allowed' },
   pitcher_earned_runs: { chip: 'Earned runs', unit: 'ER', noun: 'earned runs' },
+}
+
+// Which actual-result stat grades each market once a game is final.
+const BATTER_RESULT_FIELD: Record<string, keyof BatterResult> = {
+  hit: 'hits', hr: 'homeRuns', k: 'strikeouts', bb: 'walks',
+}
+const PITCHER_RESULT_FIELD: Record<string, keyof PitcherResult> = {
+  pitcher_k: 'strikeouts', pitcher_outs: 'outs',
+  pitcher_hits_allowed: 'hitsAllowed', pitcher_earned_runs: 'earnedRuns',
 }
 
 function pct(v: number) {
@@ -195,7 +206,7 @@ function RunnersUpLine({
   )
 }
 
-function PropCard({ pick }: { pick: PropBoardPick }) {
+function PropCard({ pick, outcome }: { pick: PropBoardPick; outcome?: PickOutcome }) {
   const meta = MARKET_META[pick.market] ?? { chip: pick.market, verb: pick.market }
   return (
     <div className="rounded-xl border border-white/10 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">
@@ -203,6 +214,7 @@ function PropCard({ pick }: { pick: PropBoardPick }) {
         <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-cyan-300 border-cyan-400/40 bg-cyan-500/10">
           {meta.chip}
         </span>
+        {outcome && <OutcomeBadge outcome={outcome} iconOnly />}
         <Link
           href={`/mlb/games/${pick.gameId}`}
           className="ml-auto font-mono text-xs text-zinc-500 hover:text-cyan-400 transition-colors"
@@ -387,7 +399,7 @@ function BestPick({ pick, unit }: { pick: PitcherPropPick; unit: string }) {
 // Pitcher cards are AMBER (batter cards are cyan) so "whose prop is this" is never
 // ambiguous — these are the starter's line, ranked by expected volume; the headline
 // number is the projection, the Best pick row is the model's lean (over or under).
-function PitcherCard({ pick }: { pick: PitcherPropPick }) {
+function PitcherCard({ pick, outcome }: { pick: PitcherPropPick; outcome?: PickOutcome }) {
   const meta =
     PITCHER_MARKET_META[pick.market] ?? { chip: pick.market, unit: '', noun: pick.market }
 
@@ -399,6 +411,7 @@ function PitcherCard({ pick }: { pick: PitcherPropPick }) {
         <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-300 border-amber-400/40 bg-amber-500/10">
           {meta.chip}
         </span>
+        {outcome && <OutcomeBadge outcome={outcome} iconOnly />}
         <span className="text-[10px] uppercase tracking-[0.12em] text-zinc-600">Pitcher</span>
         <Link
           href={`/mlb/games/${pick.gameId}`}
@@ -451,6 +464,30 @@ function Skeleton({ className = '' }: { className?: string }) {
  */
 export function PropBoard() {
   const { data, isPending, isError } = useQuery(propBoardQueryOptions())
+  // Actual results overlay a ✓/✗ on the headline pick once its game is final.
+  const { data: results } = useQuery(playerResultsQueryOptions())
+  const batterByKey = new Map<string, BatterResult>(
+    (results?.batters ?? []).map((b) => [`${b.playerId}:${b.gameId}`, b]),
+  )
+  const pitcherByKey = new Map<string, PitcherResult>(
+    (results?.pitchers ?? []).map((p) => [`${p.playerId}:${p.gameId}`, p]),
+  )
+
+  function batterOutcome(pick: PropBoardPick): PickOutcome | undefined {
+    const field = BATTER_RESULT_FIELD[pick.market]
+    if (!field) return undefined
+    return propOutcome(batterByKey.get(`${pick.playerId}:${pick.gameId}`)?.[field], pick.line)
+  }
+
+  function pitcherOutcome(pick: PitcherPropPick): PickOutcome | undefined {
+    const field = PITCHER_RESULT_FIELD[pick.market]
+    if (!field) return undefined
+    return overUnderOutcome(
+      pick.bestSide,
+      pick.bestLine,
+      pitcherByKey.get(`${pick.pitcherId}:${pick.gameId}`)?.[field],
+    )
+  }
 
   return (
     <section className="mb-10">
@@ -492,7 +529,7 @@ export function PropBoard() {
           )}
         >
           {data.picks.map((pick) => (
-            <PropCard key={pick.market} pick={pick} />
+            <PropCard key={pick.market} pick={pick} outcome={batterOutcome(pick)} />
           ))}
         </div>
       )}
@@ -510,7 +547,7 @@ export function PropBoard() {
             )}
           >
             {data.pitcherPicks.map((pick) => (
-              <PitcherCard key={pick.market} pick={pick} />
+              <PitcherCard key={pick.market} pick={pick} outcome={pitcherOutcome(pick)} />
             ))}
           </div>
         </div>

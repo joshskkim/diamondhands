@@ -25,6 +25,8 @@ public class GameRepository {
             g.projected_at,
             g.home_score,
             g.away_score,
+            g.home_score_1st,
+            g.away_score_1st,
             ht.id                           AS home_team_id,
             ht.abbreviation                 AS home_abbr,
             ht.name                         AS home_name,
@@ -125,7 +127,9 @@ public class GameRepository {
             rs.getString("status"),
             rs.getString("detailed_status"),
             nullableInt(rs, "home_score"),
-            nullableInt(rs, "away_score"));
+            nullableInt(rs, "away_score"),
+            nullableInt(rs, "home_score_1st"),
+            nullableInt(rs, "away_score_1st"));
     }
 
     /** FanDuel game-market summary, or null when the game has no FanDuel odds. */
