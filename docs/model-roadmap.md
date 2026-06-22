@@ -16,8 +16,12 @@ Honesty guardrails (per `docs/resume-bullets.md`): metric/eval changes are **cra
 gains"; don't publish CLV/ROI off a small sample; most past model levers came back Brier-neutral, so
 frame builds as honestly-tested hypotheses (nulls included).
 
-Next Flyway migration number: **V54** (highest currently is V53). Check the shared-dev-DB Flyway
-history before numbering (known collision gotcha).
+Next Flyway migration number: **V56** (V54/V55 used by Phase 0 below; highest before this work was
+V53). Check the shared-dev-DB Flyway history before numbering (known collision gotcha).
+
+> **Status (built):** Phase 0 is **done and committed** (Phase 0b = `V54`, Phase 0a = `V55` — the
+> two were built 0b-first so the migration numbers are swapped vs. the headings below). Phase 1's
+> **engine** is built (`ingester/projection/sgp.py` + retained sim arrays); its serving layer is not.
 
 ---
 
@@ -37,20 +41,18 @@ Build:
    `games.game_time` (first pitch). Add a `close-odds` step (or extend `score-picks`) that, per settled
    `model_picks` row, finds the matching closing snapshot by `(game_id, scope, player_id, market, side,
    line, book)` and the max `captured_at < first_pitch`.
-2. **Schema:** `V54__model_picks_clv.sql` — add to `model_picks`: `close_price_american INT`,
+2. **Schema (built as `V55`):** added to `model_picks`: `close_price_american INT`,
    `close_price_decimal NUMERIC(7,3)`, `close_fair_prob NUMERIC(6,4)`, `clv NUMERIC(6,4)`,
-   `clv_captured_at TIMESTAMPTZ`. (CLV = our de-vigged fair prob at close − fair prob at bet; also store
-   cents/decimal CLV.)
-3. **Compute** in `ingester/ingester/commands/picks.py` (`cmd_score_picks` or a new `cmd_close_odds`):
-   de-vig the closing two-sided price the same way `OddsService` does, then
-   `clv = close_fair_prob − pick_fair_prob` (positive = we beat the close).
-4. **Surface:** extend `TrackRecordService.java` / `TrackRecordResponse` with `clvRate` (% picks with
-   positive CLV), `avgClv`, and per-market CLV; render on `web/app/mlb/report-card/`.
+   `clv_captured_at TIMESTAMPTZ`. (CLV = our de-vigged fair prob at close − fair prob at bet.)
+3. **Compute (built):** `cmd_score_picks` finds the closing quote (`_closing_quote`), de-vigs it
+   (`_devig_two_way`, mirrors `OddsService`), and writes `clv = close_fair_prob − pick_fair_prob`.
+4. **Surface (built):** `TrackRecordService` / `TrackRecordResponse` now expose `clvN`/`clvRate`/
+   `avgClv` + web `TrackRecord` type. (Report-card *rendering* is remaining UI polish.)
 
 Honesty: show CLV with a sample-size note + CI; **do not** headline a number under a few hundred settled
-picks.
-Effort: **Medium.** Files: `ingester/commands/picks.py`, `db/migrations/V54__*.sql`,
-`api/.../service/TrackRecordService.java`, `api/.../dto/TrackRecordResponse.java`, report-card UI.
+picks. `clvN` is returned for exactly this reason.
+Effort: **Medium (done).** Files: `ingester/commands/picks.py`, `db/migrations/V55__*.sql`,
+`api/.../service/TrackRecordService.java`, `api/.../dto/TrackRecordResponse.java`, report-card UI (pending).
 
 ### 0b. Log-loss / CRPS + sharpness  *(projection north star)*
 **Why:** Brier is flat exactly on our rare-event markets (HR, 2+); log-loss rewards confident-and-right
@@ -61,11 +63,14 @@ Build:
    `crps_count(pmf_or_hist, actual)` for the count/total markets (empirical CRPS = Σ (CDF − 1[actual≤k])²);
    a `sharpness(predicted)` helper (variance/entropy of the predicted-prob distribution, or the
    resolution component of the Brier decomposition).
-2. **Schema:** `V55__accuracy_logloss_crps.sql` — add `log_loss NUMERIC(7,5)`, `crps NUMERIC(7,5)`,
-   `sharpness NUMERIC(7,5)` to `daily_accuracy`; mirror in `backtest_runs`.
-3. Wire into `ingester/ingester/commands/accuracy.py` (`_upsert_binary` / `_upsert_runs`) and
-   `commands/backtest.py` so every run emits them alongside Brier.
-4. Surface in `AccuracyService.java` / report-card as "sharpness subject to calibration."
+2. **Schema (built as `V54`):** added `log_loss`/`sharpness` to `daily_accuracy` and `log_loss_*`
+   to `backtest_runs`. (CRPS landed as a tested `metrics.py` helper for the *sim count
+   distribution* path rather than a `daily_accuracy` column — `daily_accuracy.total_runs` only has
+   a point estimate, no pmf to score; wire CRPS in once the sim histogram feeds the accuracy job.)
+3. Wired into `ingester/ingester/commands/accuracy.py` (`_upsert_binary`) and `commands/backtest.py`
+   so every run emits log-loss alongside Brier; sharpness on the daily snapshots.
+4. Surfaced via `AccuracyRepository`/`AccuracyService` + `AccuracyPointDto` + web `AccuracyPoint`.
+   (Report-card *rendering* of the new columns is remaining UI polish.)
 
 Honesty: this is an **evaluation** upgrade — frame as statistical craft, not a model accuracy gain.
 Effort: **Low.** Files: `ingester/metrics.py`, `ingester/commands/{accuracy,backtest}.py`,
