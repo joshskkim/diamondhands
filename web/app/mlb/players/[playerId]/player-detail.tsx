@@ -82,7 +82,7 @@ function HeaderSkeleton() {
 }
 
 export function PlayerDetail({ playerId }: { playerId: number }) {
-  const { data: player } = useQuery({
+  const { data: player, isError: playerError } = useQuery({
     queryKey: ['player', 'detail', playerId],
     queryFn: () => fetchPlayer(playerId),
   })
@@ -137,6 +137,10 @@ export function PlayerDetail({ playerId }: { playerId: number }) {
             <Users className="h-4 w-4" />
             <span className="hidden sm:inline">Compare</span>
           </Link>
+        </div>
+      ) : playerError ? (
+        <div className="mb-6 text-sm text-zinc-500">
+          Couldn&apos;t load this player&apos;s profile.
         </div>
       ) : (
         <HeaderSkeleton />
