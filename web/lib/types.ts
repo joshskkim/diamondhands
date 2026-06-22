@@ -574,6 +574,42 @@ export interface AccuracyResponse {
   markets: MarketAccuracy[]
 }
 
+// ── Track Record (GET /api/track-record) ─────────────────────────────────────
+
+/** Win/loss record + units/ROI for a slice of graded picks (overall, a market, or a tier). */
+export interface RecordSummary {
+  label: string
+  n: number // settled non-void picks (wins + losses + pushes)
+  wins: number
+  losses: number
+  pushes: number
+  winPct: number // over decided picks only
+  units: number // net units at flat 1u stakes
+  roiPct: number
+}
+
+/** One point on the cumulative-units equity curve. */
+export interface EquityPoint {
+  date: string
+  cumUnits: number
+  cumWins: number
+  cumLosses: number
+}
+
+/**
+ * GET /api/track-record — how the published Model's Picks actually performed.
+ * pickBrier scores only this +EV-selected sample, NOT the whole model (that's /api/accuracy).
+ */
+export interface TrackRecord {
+  days: number
+  asOf: string | null
+  overall: RecordSummary
+  byMarket: RecordSummary[]
+  byTier: RecordSummary[]
+  equity: EquityPoint[]
+  pickBrier: number | null
+}
+
 // ── Most Likely board (GET /api/most-likely) ─────────────────────────────────
 
 /** Full-game total vs the consensus book line. */
