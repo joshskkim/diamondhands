@@ -105,6 +105,9 @@ services:
     environment:
       DATABASE_URL: postgresql://diamond:${DB_PASSWORD}@postgres:5432/diamond
       ODDS_API_KEY: ${ODDS_API_KEY:-}
+      # record-picks calls the API over the compose network (the `api` service, not
+      # localhost) — without this the nightly silently skips and no picks are recorded.
+      DIAMOND_API_URL: http://api:8080
       TZ: ${TZ:-America/New_York}
     volumes:
       - pybaseball_cache:/root/.pybaseball

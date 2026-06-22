@@ -14,6 +14,7 @@ duplicate of the TS ones (the web computes live, this records the snapshot).
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import date, datetime, timedelta, timezone
 
 import requests
@@ -48,7 +49,11 @@ HIT_RATE_VETO_BANDS: dict[str, tuple[float, float]] = {
     "hr": (0.08, 0.50),
 }
 
-DEFAULT_API = "http://localhost:8080"
+# Resolved from the env so the dockerized nightly (where the API is the `api` compose
+# service, not localhost) can reach it without daily.py threading an --api flag through.
+# Mirrors the mcp-server's DIAMOND_API_URL. Local/host runs fall back to localhost. An
+# explicit --api still wins (see cmd_record_picks).
+DEFAULT_API = os.environ.get("DIAMOND_API_URL", "http://localhost:8080")
 
 
 def _get_json(url: str) -> object:
