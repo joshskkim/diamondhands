@@ -6,6 +6,7 @@ import { Flame } from 'lucide-react'
 import type { BatterPropOdds, FlatBatterPick } from '@/lib/types'
 import { batterPropOddsQueryOptions } from '@/lib/api'
 import { usePicks } from '@/components/home/use-picks'
+import { QueryError } from '@/components/ui/query-states'
 import { cn } from '@/lib/utils'
 import {
   bookLabel,
@@ -283,7 +284,7 @@ function LoadingState() {
 // ── page body ─────────────────────────────────────────────────────────────────
 
 export function BestBetsBoard() {
-  const { games, picks, isPending, isError, projectionsLoading } = usePicks()
+  const { games, picks, isPending, isError, projectionsLoading, refetch } = usePicks()
   const { data: propOdds } = useQuery(batterPropOddsQueryOptions())
 
   const oddsByKey = new Map<string, BatterPropOdds>()
@@ -320,9 +321,7 @@ export function BestBetsBoard() {
       </div>
 
       {isError ? (
-        <div className="text-rose-400 text-sm bg-rose-400/10 border border-rose-400/30 rounded-xl p-4">
-          Failed to load today&apos;s slate. Is the API running?
-        </div>
+        <QueryError message="Couldn’t load today’s slate. The API may be unreachable." onRetry={refetch} />
       ) : loading ? (
         <LoadingState />
       ) : !hasContent || picks.length === 0 ? (

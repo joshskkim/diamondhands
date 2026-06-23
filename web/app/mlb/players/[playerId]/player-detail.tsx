@@ -18,6 +18,7 @@ import type { RecentStat } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { getStadiumByAbbr } from '@/lib/stadiums'
 import { StadiumDiagram } from '@/components/game/stadium-diagram'
+import { QueryError } from '@/components/ui/query-states'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 const chip =
@@ -87,7 +88,7 @@ export function PlayerDetail({ playerId }: { playerId: number }) {
     queryFn: () => fetchPlayer(playerId),
   })
 
-  const { data: stats, isPending, isError } = useQuery({
+  const { data: stats, isPending, isError, refetch } = useQuery({
     queryKey: ['player', 'recent', playerId],
     queryFn: () => api.recentStats(playerId, 20),
   })
@@ -156,7 +157,7 @@ export function PlayerDetail({ playerId }: { playerId: number }) {
           <div className="h-48 animate-pulse bg-white/5 rounded-xl" />
         </div>
       )}
-      {isError && <p className="text-rose-400">Failed to load player stats.</p>}
+      {isError && <QueryError message="Couldn’t load this player’s recent stats." onRetry={refetch} />}
 
       {stats && stats.length === 0 && (
         <p className="text-zinc-500 mt-4">No recent activity.</p>
