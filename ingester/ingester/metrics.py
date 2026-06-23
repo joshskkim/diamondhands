@@ -5,6 +5,8 @@ commands so the two surfaces always score predictions identically.
 """
 from __future__ import annotations
 
+import math
+
 
 def brier_score(predicted: list[float], actual: list[int]) -> float:
     """Mean squared error between probabilistic predictions and binary outcomes."""
@@ -77,8 +79,6 @@ def log_loss(predicted: list[float], actual: list[int], eps: float = 1e-15) -> f
     """
     if not predicted:
         return float("nan")
-    import math
-
     total = 0.0
     for p, a in zip(predicted, actual):
         pc = min(max(p, eps), 1.0 - eps)

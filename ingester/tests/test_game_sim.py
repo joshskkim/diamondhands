@@ -260,6 +260,20 @@ class TestRunLineCover(unittest.TestCase):
         self.assertGreater(sim.p_home_cover_1_5, sim.p_away_cover_1_5)
 
 
+class TestRetainTeams(unittest.TestCase):
+    def test_default_does_not_retain_arrays(self) -> None:
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=200, seed=5)
+        self.assertIsNone(sim.home)
+        self.assertIsNone(sim.away)
+
+    def test_opt_in_retains_arrays_for_sgp(self) -> None:
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=200, seed=5,
+                            retain_teams=True)
+        self.assertIsNotNone(sim.home)
+        self.assertIsNotNone(sim.away)
+        self.assertEqual(sim.home.slot_hits.shape, (200, 9))
+
+
 class TestTtoPenalty(unittest.TestCase):
     def test_first_time_through_is_neutral(self) -> None:
         self.assertEqual(tto_multipliers(0, 0.55), (1.0, 1.0))

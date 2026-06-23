@@ -126,6 +126,10 @@ class TestPriceSgp(unittest.TestCase):
         self.assertIsNone(q.ev)
         self.assertIsNone(q.book_implied)
 
+    def test_empty_legs_raises(self):
+        with self.assertRaises(ValueError):
+            price_sgp(_sim(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

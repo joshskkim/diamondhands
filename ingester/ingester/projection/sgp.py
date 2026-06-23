@@ -151,6 +151,8 @@ def price_sgp(sim: GameSim, legs: list[Leg], book_decimal: float | None = None) 
     the legs are positively correlated and a book pricing them as independent is
     *underpaying* the bettor's true probability; negative means the opposite.
     """
+    if not legs:
+        raise ValueError("price_sgp requires at least one leg")
     model_joint = joint_prob(sim, legs)
     indep = independent_prob(sim, legs)
     book_implied = (1.0 / book_decimal) if book_decimal else None

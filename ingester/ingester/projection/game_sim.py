@@ -457,6 +457,7 @@ def simulate_game(
     away_starter_innings: int | None = None,
     home_starter_fb_share: float | None = None,
     away_starter_fb_share: float | None = None,
+    retain_teams: bool = False,
 ) -> GameSim:
     """Simulate a full game n_sims times; derive per-period markets and props.
 
@@ -472,6 +473,10 @@ def simulate_game(
     `home_starter_fb_share`/`away_starter_fb_share` (Phase 2a): the fastball-usage share
     of the OPPOSING starter each lineup faces, for the times-through-order penalty (only
     active when constants.TTO_ENABLED). Same orientation as the innings args.
+
+    `retain_teams` (Phase 1): keep the raw per-sim TeamSim arrays on the result for joint /
+    correlation (SGP) pricing. Off by default so the nightly marginals path doesn't carry
+    the (n_sims × 9) arrays in memory; the SGP caller opts in.
     """
     # Independent RNG streams per team so one team's late innings (bullpen) can't shift
     # the other team's draws — this keeps F1/F5 invariant to the bullpen inputs.
@@ -500,8 +505,8 @@ def simulate_game(
         # A starter's hits/runs allowed = what the OPPOSING lineup put up against him.
         home_pitcher_props=_pitcher_props(away),
         away_pitcher_props=_pitcher_props(home),
-        home=home,
-        away=away,
+        home=home if retain_teams else None,
+        away=away if retain_teams else None,
     )
 
 

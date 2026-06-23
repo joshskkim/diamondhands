@@ -16,11 +16,11 @@ Honesty guardrails (per `docs/resume-bullets.md`): metric/eval changes are **cra
 gains"; don't publish CLV/ROI off a small sample; most past model levers came back Brier-neutral, so
 frame builds as honestly-tested hypotheses (nulls included).
 
-Next Flyway migration number: **V56** (V54/V55 used by Phase 0 below; highest before this work was
-V53). Check the shared-dev-DB Flyway history before numbering (known collision gotcha).
+Next Flyway migration number: **V58** (V56/V57 used by Phase 0 below; V54 is taken by the lotto branch
+and V55 left as a buffer — the known shared-dev-DB collision gotcha, why Phase 0 was renumbered off V54).
 
-> **Status (built):** Phase 0 is **done and committed** (Phase 0b = `V54`, Phase 0a = `V55` — the
-> two were built 0b-first so the migration numbers are swapped vs. the headings below). Phase 1's
+> **Status (built):** Phase 0 is **done and committed** (Phase 0b = `V56`, Phase 0a = `V57` — built
+> 0b-first then renumbered above the lotto branch's V54). Phase 1's
 > **engine** is built (`ingester/projection/sgp.py` + retained sim arrays); its serving layer is not.
 
 ---
@@ -41,7 +41,7 @@ Build:
    `games.game_time` (first pitch). Add a `close-odds` step (or extend `score-picks`) that, per settled
    `model_picks` row, finds the matching closing snapshot by `(game_id, scope, player_id, market, side,
    line, book)` and the max `captured_at < first_pitch`.
-2. **Schema (built as `V55`):** added to `model_picks`: `close_price_american INT`,
+2. **Schema (built as `V57`):** added to `model_picks`: `close_price_american INT`,
    `close_price_decimal NUMERIC(7,3)`, `close_fair_prob NUMERIC(6,4)`, `clv NUMERIC(6,4)`,
    `clv_captured_at TIMESTAMPTZ`. (CLV = our de-vigged fair prob at close − fair prob at bet.)
 3. **Compute (built):** `cmd_score_picks` finds the closing quote (`_closing_quote`), de-vigs it
@@ -51,7 +51,7 @@ Build:
 
 Honesty: show CLV with a sample-size note + CI; **do not** headline a number under a few hundred settled
 picks. `clvN` is returned for exactly this reason.
-Effort: **Medium (done).** Files: `ingester/commands/picks.py`, `db/migrations/V55__*.sql`,
+Effort: **Medium (done).** Files: `ingester/commands/picks.py`, `db/migrations/V57__*.sql`,
 `api/.../service/TrackRecordService.java`, `api/.../dto/TrackRecordResponse.java`, report-card UI (pending).
 
 ### 0b. Log-loss / CRPS + sharpness  *(projection north star)*
@@ -63,7 +63,7 @@ Build:
    `crps_count(pmf_or_hist, actual)` for the count/total markets (empirical CRPS = Σ (CDF − 1[actual≤k])²);
    a `sharpness(predicted)` helper (variance/entropy of the predicted-prob distribution, or the
    resolution component of the Brier decomposition).
-2. **Schema (built as `V54`):** added `log_loss`/`sharpness` to `daily_accuracy` and `log_loss_*`
+2. **Schema (built as `V56`):** added `log_loss`/`sharpness` to `daily_accuracy` and `log_loss_*`
    to `backtest_runs`. (CRPS landed as a tested `metrics.py` helper for the *sim count
    distribution* path rather than a `daily_accuracy` column — `daily_accuracy.total_runs` only has
    a point estimate, no pmf to score; wire CRPS in once the sim histogram feeds the accuracy job.)
@@ -74,7 +74,7 @@ Build:
 
 Honesty: this is an **evaluation** upgrade — frame as statistical craft, not a model accuracy gain.
 Effort: **Low.** Files: `ingester/metrics.py`, `ingester/commands/{accuracy,backtest}.py`,
-`db/migrations/V55__*.sql`, `AccuracyService.java`.
+`db/migrations/V56__*.sql`, `AccuracyService.java`.
 
 ---
 
@@ -96,7 +96,7 @@ Build (start narrow — 2-leg correlated pairs, the highest-value case):
 2. **Persistence decision (pick one):**
    - *(simplest)* recompute on demand: cache the per-game `GameSim` object (or its stacked arrays) in
      Redis/in-memory for the slate day; compute any requested SGP joint on the fly. Good for <~30 games/day.
-   - *(durable)* `V56__game_sim_joint.sql`: store a compact joint — either down-sampled per-sim draws
+   - *(durable)* `V58__game_sim_joint.sql`: store a compact joint — either down-sampled per-sim draws
      (e.g. 1,000 of 4,000) as compressed arrays, or a precomputed correlation matrix for the headline
      legs (player props × team total × NRFI/F5).
 3. **Pricing layer.** New service that, given two+ legs and their book SGP price, computes the model's
@@ -109,7 +109,7 @@ Sequence within phase: (1)+(3) on the recompute-on-demand path first (no schema)
 backtest using `odds_snapshots` SGP-equivalent pricing, then decide on durable persistence (2).
 Effort: **Hard** (the headline feature). Files: `ingester/projection/game_sim.py`,
 `ingester/projection/runner.py`, new `api/.../service/CorrelationService.java` + DTOs, web SGP board,
-optional `db/migrations/V56__*.sql`.
+optional `db/migrations/V58__*.sql`.
 
 ---
 

@@ -92,13 +92,13 @@ def _load_recent_slots(
             WHERE g.game_date < %(as_of)s
               AND ((g.home_team_id = %(team)s AND gl.is_home)
                    OR (g.away_team_id = %(team)s AND NOT gl.is_home))
-            ORDER BY g.game_date DESC
+            ORDER BY g.game_date DESC, g.id DESC  -- g.id tiebreak: deterministic for doubleheaders
             LIMIT %(window)s
         )
         SELECT rg.id, rg.game_date, gl.player_id, gl.batting_order
         FROM recent_games rg
         JOIN game_lineups gl ON gl.game_id = rg.id AND gl.is_home = rg.is_home
-        ORDER BY rg.game_date DESC
+        ORDER BY rg.game_date DESC, rg.id DESC
         """,
         {"team": team_id, "as_of": as_of, "window": window},
     ).fetchall()

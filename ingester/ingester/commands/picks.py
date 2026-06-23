@@ -228,41 +228,49 @@ def _devig_two_way(side_decimal: float, opp_decimal: float) -> float | None:
 
 def _closing_quote(
     conn, game_id: int, market: str, side: str, line: float | None,
-    book: str | None, start_time,
+    book: str | None, start_time, player_id: int | None,
 ) -> tuple[int | None, float | None, float | None, object]:
     """Find the closing quote for a pick's selection and its de-vigged fair prob.
 
     "Closing" = the last odds_snapshots pull strictly before first pitch
-    (start_time_utc). We match the SAME book + line the pick was taken at, then read
-    both sides from that same pull (one refresh-odds run shares a captured_at, so the
-    opposite side is present at the same timestamp) and de-vig exactly like OddsService:
+    (start_time_utc). We match the SAME player (props), book + line the pick was taken
+    at, then read both sides from that same pull (one refresh-odds run shares a
+    captured_at, so the opposite side is present at the same timestamp) and de-vig
+    exactly like OddsService:
         fair = side_implied / (side_implied + opp_implied),  implied = 1/decimal.
     Returns (close_american, close_decimal, close_fair_prob, captured_at); any field is
     None when the selection or its opposite side can't be found at close.
+
+    NOTE the de-vigged close uses the pick's single book on both sides, whereas the
+    stored bet-time fair_prob came from OddsService's best-of-books de-vig — a small
+    vig-basis difference, so CLV here is a close approximation, not an exact line-move.
     """
     scope = "prop" if market in ("hit", "hr") else "game"
-    # Latest pull for THIS selection before first pitch.
+    # player_id must match for props (multiple players share a market/line/book); it is
+    # NULL for game markets, where IS NOT DISTINCT FROM matches the NULL snapshot rows.
     ts_row = conn.execute(
         """
         SELECT MAX(captured_at) FROM odds_snapshots
-        WHERE game_id = %s AND scope = %s AND market = %s AND side = %s
+        WHERE game_id = %s AND scope = %s AND player_id IS NOT DISTINCT FROM %s
+          AND market = %s AND side = %s
           AND line IS NOT DISTINCT FROM %s AND bookmaker = %s
           AND captured_at < %s
         """,
-        (game_id, scope, market, side, line, book, start_time),
+        (game_id, scope, player_id, market, side, line, book, start_time),
     ).fetchone()
     captured_at = ts_row[0] if ts_row else None
     if captured_at is None:
         return None, None, None, None
 
-    # Both sides at that pull (same book, same line).
+    # Both sides at that pull (same player, book, line).
     rows = conn.execute(
         """
         SELECT side, price_american, price_decimal FROM odds_snapshots
-        WHERE game_id = %s AND scope = %s AND market = %s AND bookmaker = %s
+        WHERE game_id = %s AND scope = %s AND player_id IS NOT DISTINCT FROM %s
+          AND market = %s AND bookmaker = %s
           AND line IS NOT DISTINCT FROM %s AND captured_at = %s
         """,
-        (game_id, scope, market, book, line, captured_at),
+        (game_id, scope, player_id, market, book, line, captured_at),
     ).fetchall()
     prices = {r[0]: (int(r[1]), float(r[2])) for r in rows}
     if side not in prices:
@@ -364,6 +372,7 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
                     close_am, close_dec, close_fair, captured_at = _closing_quote(
                         conn, game_id, market, side,
                         float(line) if line is not None else None, book, start_time,
+                        player_id,
                     )
                 if close_fair is not None and fair_prob is not None:
                     clv = round(close_fair - float(fair_prob), 4)
