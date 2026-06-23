@@ -8,6 +8,7 @@ import {
   pitchTypesQueryOptions,
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { QueryError } from '@/components/ui/query-states'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
@@ -22,7 +23,7 @@ export function PitchTypeLeaderboard() {
   const [pitch, setPitch] = useState<string | null>(null)
   const active = pitch ?? pitchTypes?.[0]?.code ?? null
 
-  const { data: rows, isPending, isError } = useQuery({
+  const { data: rows, isPending, isError, refetch } = useQuery({
     ...pitchTypeLeaderboardQueryOptions(active ?? '', undefined, 20),
     enabled: Boolean(active),
   })
@@ -65,9 +66,7 @@ export function PitchTypeLeaderboard() {
           ))}
         </div>
       ) : isError ? (
-        <div className="p-6 text-rose-400 text-sm bg-rose-400/10 border border-rose-400/30 rounded-xl">
-          Failed to load leaderboard.
-        </div>
+        <QueryError message="Couldn’t load the leaderboard." onRetry={refetch} />
       ) : !rows || rows.length === 0 ? (
         <div className="p-6 text-zinc-500 text-sm bg-[#0e1015] border border-white/10 rounded-xl">
           No qualifying batters today against this pitch type.

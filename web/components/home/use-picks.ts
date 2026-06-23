@@ -13,6 +13,8 @@ export interface PicksData {
   isError: boolean
   /** At least one game's batter projections are still loading. */
   projectionsLoading: boolean
+  /** Refetch the slate (used by the error-state retry button). */
+  refetch: () => void
 }
 
 /**
@@ -48,5 +50,6 @@ export function usePicks(): PicksData {
     isPending: gamesQuery.isPending,
     isError: gamesQuery.isError,
     projectionsLoading: results.some((r) => r.isPending),
+    refetch: () => gamesQuery.refetch(),
   }
 }
