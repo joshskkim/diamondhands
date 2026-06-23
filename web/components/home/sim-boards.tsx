@@ -195,13 +195,39 @@ function NrfiCard({ data, games }: { data: MostLikely['nrfi']; games: Map<number
   )
 }
 
+function SimBoardsSkeleton() {
+  return (
+    <section className="mb-10">
+      <h2 className="text-sm font-semibold tracking-tight text-zinc-100 mb-1">Sim Signals</h2>
+      <p className="text-zinc-500 text-xs mb-3">
+        Monte-Carlo game-simulator leans — totals vs the book line, the ±1.5 run line, and
+        first-inning runs. Top {N} per market.
+      </p>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div
+            key={i}
+            className="rounded-xl border border-white/10 bg-[#0e1015] p-4 space-y-2.5"
+          >
+            <div className="h-4 w-32 animate-pulse rounded bg-white/5" />
+            <div className="h-3 w-48 animate-pulse rounded bg-white/5" />
+            {Array.from({ length: N }).map((_, r) => (
+              <div key={r} className="h-7 w-full animate-pulse rounded bg-white/5" />
+            ))}
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 /**
  * The game-sim leans that used to live on the standalone Most Likely page,
  * condensed into one section of Today's Board. Renders nothing until the sim
  * has produced output for the slate.
  */
 export function SimBoards() {
-  const { data } = useQuery(mostLikelyQueryOptions())
+  const { data, isPending } = useQuery(mostLikelyQueryOptions())
   // Reuse the home page's today-games query (final scores + first-inning runs) to grade
   // each lean ✓/✗ once its game is final — same source the projected-favorites badge uses.
   const { data: games } = useQuery(todayGamesQueryOptions())
@@ -219,6 +245,9 @@ export function SimBoards() {
     ]),
   )
 
+  // While the sim loads, hold the section's shape with skeletons so the page
+  // below doesn't jump when the boards arrive.
+  if (isPending) return <SimBoardsSkeleton />
   if (!data) return null
   if (data.totals.length === 0 && data.runLine.length === 0 && data.nrfi.length === 0) return null
 

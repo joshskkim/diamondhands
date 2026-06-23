@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { format, parseISO } from 'date-fns'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Users } from 'lucide-react'
 import Link from 'next/link'
 import {
   CartesianGrid,
@@ -18,6 +18,7 @@ import type { RecentStat } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { getStadiumByAbbr } from '@/lib/stadiums'
 import { StadiumDiagram } from '@/components/game/stadium-diagram'
+import { QueryError } from '@/components/ui/query-states'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 const chip =
@@ -82,12 +83,12 @@ function HeaderSkeleton() {
 }
 
 export function PlayerDetail({ playerId }: { playerId: number }) {
-  const { data: player } = useQuery({
+  const { data: player, isError: playerError } = useQuery({
     queryKey: ['player', 'detail', playerId],
     queryFn: () => fetchPlayer(playerId),
   })
 
-  const { data: stats, isPending, isError } = useQuery({
+  const { data: stats, isPending, isError, refetch } = useQuery({
     queryKey: ['player', 'recent', playerId],
     queryFn: () => api.recentStats(playerId, 20),
   })
@@ -113,21 +114,34 @@ export function PlayerDetail({ playerId }: { playerId: number }) {
 
       {/* header */}
       {player ? (
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold tracking-tight text-zinc-100 mb-2">
-            {player.fullName}
-          </h1>
-          <div className="flex flex-wrap gap-2">
-            {player.teamAbbr && <span className={chip}>{player.teamAbbr}</span>}
-            {player.position && <span className={chip}>{player.position}</span>}
-            <span className={chip}>
-              <span className={microLabel}>Bats</span>
-              <span className="text-zinc-200">{player.bats ?? '?'}</span>
-              <span className="text-zinc-600">·</span>
-              <span className={microLabel}>Throws</span>
-              <span className="text-zinc-200">{player.throwsHand ?? '?'}</span>
-            </span>
+        <div className="mb-6 flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-zinc-100 mb-2">
+              {player.fullName}
+            </h1>
+            <div className="flex flex-wrap gap-2">
+              {player.teamAbbr && <span className={chip}>{player.teamAbbr}</span>}
+              {player.position && <span className={chip}>{player.position}</span>}
+              <span className={chip}>
+                <span className={microLabel}>Bats</span>
+                <span className="text-zinc-200">{player.bats ?? '?'}</span>
+                <span className="text-zinc-600">·</span>
+                <span className={microLabel}>Throws</span>
+                <span className="text-zinc-200">{player.throwsHand ?? '?'}</span>
+              </span>
+            </div>
           </div>
+          <Link
+            href={`/mlb/players/compare?ids=${player.id}`}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm font-medium text-zinc-300 transition-colors hover:border-cyan-400/30 hover:text-cyan-300"
+          >
+            <Users className="h-4 w-4" />
+            <span className="hidden sm:inline">Compare</span>
+          </Link>
+        </div>
+      ) : playerError ? (
+        <div className="mb-6 text-sm text-zinc-500">
+          Couldn&apos;t load this player&apos;s profile.
         </div>
       ) : (
         <HeaderSkeleton />
@@ -143,7 +157,7 @@ export function PlayerDetail({ playerId }: { playerId: number }) {
           <div className="h-48 animate-pulse bg-white/5 rounded-xl" />
         </div>
       )}
-      {isError && <p className="text-rose-400">Failed to load player stats.</p>}
+      {isError && <QueryError message="Couldn’t load this player’s recent stats." onRetry={refetch} />}
 
       {stats && stats.length === 0 && (
         <p className="text-zinc-500 mt-4">No recent activity.</p>

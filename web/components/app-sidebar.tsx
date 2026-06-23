@@ -2,10 +2,11 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutGrid, TrendingUp, Target, LineChart, Search, LogIn, LogOut, Menu, HelpCircle, type LucideIcon } from 'lucide-react'
+import { LayoutGrid, TrendingUp, Target, LineChart, Search, LogIn, LogOut, Menu, HelpCircle, Users, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { DiamondMark } from '@/components/diamond-mark'
 import { GamesBadge } from '@/components/games-badge'
+import { NavPlayerSearch } from '@/components/nav-player-search'
 import { useAuth } from '@/components/auth-provider'
 
 type NavLink = { label: string; href: string; icon: LucideIcon }
@@ -24,6 +25,7 @@ export const NAV_LINKS: NavLink[] = [
 // bar stays at the four primary tabs; these live in its account sheet instead
 // (see mobile-nav.tsx). Keep FAQ out of NAV_LINKS so it doesn't crowd that bar.
 export const SECONDARY_LINKS: NavLink[] = [
+  { label: 'Compare Players', href: '/mlb/players/compare', icon: Users },
   { label: 'FAQ', href: '/faq', icon: HelpCircle },
 ]
 
@@ -111,6 +113,13 @@ export function AppSidebar({
               <kbd className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-500">⌘K</kbd>
             </button>
           )}
+        </div>
+      )}
+
+      {/* Player name search — jumps straight to a player page (expanded rail only). */}
+      {!collapsed && (
+        <div className="px-4 pt-2">
+          <NavPlayerSearch onNavigate={onNavigate} />
         </div>
       )}
 

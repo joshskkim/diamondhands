@@ -8,6 +8,7 @@ import { Fragment, useState } from 'react'
 import { api } from '@/lib/api'
 import type { BatterProjection, Adjustments } from '@/lib/types'
 import { cn, parseApiDate } from '@/lib/utils'
+import { QueryError } from '@/components/ui/query-states'
 import { OddsPanel } from './odds-panel'
 import { PitchersView } from './pitchers-view'
 
@@ -402,7 +403,7 @@ export function GameDetail({ gameId }: { gameId: number }) {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [view, setView] = useState<'batters' | 'pitchers'>('batters')
 
-  const { data, isPending, isError } = useQuery({
+  const { data, isPending, isError, refetch } = useQuery({
     queryKey: ['game', 'projections', gameId],
     queryFn: () => api.gameProjections(gameId),
   })
@@ -415,7 +416,12 @@ export function GameDetail({ gameId }: { gameId: number }) {
   const game = games?.find((g) => g.gameId === gameId)
 
   if (isPending) return <div className="p-8 text-zinc-400">Loading projections…</div>
-  if (isError) return <div className="p-8 text-rose-400">Failed to load projections.</div>
+  if (isError)
+    return (
+      <div className="p-8">
+        <QueryError message="Couldn’t load this game’s projections." onRetry={refetch} />
+      </div>
+    )
 
   const bothConfirmed = data.home.lineupConfirmed && data.away.lineupConfirmed
   const anyConfirmed = data.home.lineupConfirmed || data.away.lineupConfirmed
