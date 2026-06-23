@@ -273,6 +273,39 @@ PA_BY_ORDER: dict[int, float] = {
 # every projected starter, same as v1.
 EXPECTED_PA_PER_STARTER: float = 4.0
 
+# Playing-time / start-probability model (Phase 2c). Forward-looking, pre-lineup
+# estimate of P(start) and expected PA from each player's RECENT usage (game_lineups
+# over the team's last PT_WINDOW games), so picks can be made before lineups post and
+# expected PA isn't a flat 4.0. Recency-weighted (most recent game weight 1, decaying
+# by PT_RECENCY_DECAY each game back) so a player just moved into/out of the lineup is
+# reflected quickly.
+PT_WINDOW: int = 20            # team games of lineup history to look back over
+PT_RECENCY_DECAY: float = 0.90  # geometric weight per game into the past
+
+# ---------------------------------------------------------------------------
+# Minor-league equivalencies (MLEs)   [Phase 4]
+# ---------------------------------------------------------------------------
+# A debutant / recent call-up has no MLB history, so the Marcel prior falls back to the
+# flat league mean — the softest projection on the board exactly where prop lines are
+# also softest. MLEs translate a player's minor-league line to an MLB-equivalent one by
+# level: moving up, hit rate and ISO fall and K rate rises (tougher pitching). The
+# translated line feeds the prior as a synthetic prior season.
+#
+# Per-component multipliers by level (KATOH / Szymborski-MLE lineage). Conservative
+# PLACEHOLDERS — not fitted on our data; treat MLE projections as low-confidence and
+# validate before leaning on them. Keyed by level code (see mle.LEVEL_BY_SPORT_ID).
+MLE_LEVEL_FACTORS: dict[str, dict[str, float]] = {
+    #            hit-rate   ISO     K-rate
+    "AAA": {"hit": 0.92, "iso": 0.85, "k": 1.10},
+    "AA":  {"hit": 0.89, "iso": 0.78, "k": 1.18},
+    "A+":  {"hit": 0.86, "iso": 0.72, "k": 1.25},
+    "A":   {"hit": 0.83, "iso": 0.66, "k": 1.32},
+    "R":   {"hit": 0.80, "iso": 0.60, "k": 1.40},  # Rookie/complex
+}
+# How much to trust an MLE-derived prior season vs a real MLB one: scale its effective
+# PA down so a translated AAA line regresses harder toward league than a true MLB line.
+MLE_PA_DISCOUNT: float = 0.50
+
 # ---------------------------------------------------------------------------
 # Switch hitter rule (apply in pitcher_adj and park_adj)
 # ---------------------------------------------------------------------------
@@ -446,6 +479,51 @@ OPENER_REAL_START_OUTS: int = 15            # 5.0 IP — an outing this deep is 
 OPENER_STARTED_SHARE_MIN: float = 0.5       # season GS/GP below this is reliever-ish
 OPENER_SEASON_IP_PER_APP_MIN: float = 4.0   # season IP/appearance below this is reliever-ish
 OPENER_RECENT_REAL_STARTS_OVERRIDE: int = 2  # this many real starts in-window vetoes the flag
+
+# ---------------------------------------------------------------------------
+# Aging curve   [Phase 3a — env-gated OFF pending backtest]
+# ---------------------------------------------------------------------------
+# The Marcel prior is built from prior-season rates but never ages them forward to the
+# target season. Players below their peak age are projected too low, above it too high.
+# We apply a component-specific multiplicative age factor to the projected rate, with
+# peak ages from the aging-curve literature: overall offense (xwOBA) peaks ~27, power
+# (ISO) later ~29 and declines more slowly. K-rate aging is deliberately NOT modeled —
+# the literature is murky and K already rides inside xwOBA.
+#
+# `birth_date` is in the DB (V29) so no new ingestion is needed. OFF by default: this
+# shifts every aged player's projection, so it must be validated leak-free (and the
+# coefficients are conservative placeholders, not fitted values) before being enabled
+# or claimed. Effect concentrates on age tails (<24, >33).
+AGING_ENABLED: bool = os.environ.get("DIAMOND_AGING_ENABLED", "0") == "1"
+AGING_PEAK_AGE_XWOBA: float = 27.0
+AGING_XWOBA_UP_PER_YEAR: float = 0.004    # improvement/yr below peak
+AGING_XWOBA_DOWN_PER_YEAR: float = 0.006  # decline/yr above peak (steeper)
+AGING_XWOBA_CLAMP: tuple[float, float] = (0.90, 1.06)
+AGING_PEAK_AGE_ISO: float = 29.0
+AGING_ISO_UP_PER_YEAR: float = 0.006
+AGING_ISO_DOWN_PER_YEAR: float = 0.007
+AGING_ISO_CLAMP: tuple[float, float] = (0.88, 1.10)
+
+# ---------------------------------------------------------------------------
+# Times-through-the-order (TTO) penalty   [Phase 2a — env-gated OFF pending backtest]
+# ---------------------------------------------------------------------------
+# A starter loses effectiveness each time through the lineup, and the decay is LARGER
+# for fastball-heavy starters (SABR/Lichtman: ~+47 wOBA pts by the 3rd time through for
+# fastball-heavy arms vs ~+18 for low-fastball arsenals). In the sim we raise the
+# batter's offensive rates (and lower K) on the 2nd and 3rd+ times through the STARTER
+# only (the bullpen is unaffected), scaled by the starter's fastball-usage share.
+#
+# OFF by default: enabling it raises early-inning offense, so the sim's run-environment
+# calibration (tuned to ~4.4 R/9) must be re-tuned and a LEAK-FREE backtest must set
+# these coefficients before TTO is turned on or claimed as an improvement. The defaults
+# below are conservative placeholders, not validated values.
+TTO_ENABLED: bool = os.environ.get("DIAMOND_TTO_ENABLED", "0") == "1"
+TTO_OFFENSE_DELTA_2ND: float = 0.03   # +3% offensive rate, 2nd time through (at league-avg FB share)
+TTO_OFFENSE_DELTA_3RD: float = 0.07   # +7% offensive rate, 3rd+ time through
+TTO_K_RELIEF_FRACTION: float = 0.5    # K rate falls by this fraction of the offensive rise
+TTO_FB_REFERENCE: float = 0.55        # league-avg fastball (4-seam+sinker+cutter) usage share
+TTO_FB_FACTOR_MIN: float = 0.4        # clamp on fb_share / reference so extremes stay bounded
+TTO_FB_FACTOR_MAX: float = 1.8
 
 # ---------------------------------------------------------------------------
 # Probability output

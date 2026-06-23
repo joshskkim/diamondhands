@@ -27,7 +27,7 @@ public class TrackRecordRepository {
     // %s is the lotto projection: the real column when it exists, else a constant false.
     private static final String SETTLED_SQL = """
         SELECT slate_date, market, strong, won, model_prob, price_american, result_value,
-               model_version, %s AS lotto
+               model_version, clv, %s AS lotto
         FROM model_picks
         WHERE scored_at IS NOT NULL AND slate_date >= ?
         ORDER BY slate_date, rank
@@ -72,6 +72,7 @@ public class TrackRecordRepository {
             rs.getInt("price_american"),
             toDouble(rs.getBigDecimal("result_value")),
             rs.getString("model_version"),
+            toDouble(rs.getBigDecimal("clv")),
             rs.getBoolean("lotto"));
     }
 
@@ -79,7 +80,8 @@ public class TrackRecordRepository {
         return bd == null ? null : bd.doubleValue();
     }
 
-    /** A graded pick. {@code won} null = push or void (disambiguated by {@code resultValue}). */
+    /** A graded pick. {@code won} null = push or void (disambiguated by {@code resultValue}).
+     *  {@code clv} null when no closing quote was found at scoring time. */
     public record SettledPick(
         LocalDate slateDate,
         String market,
@@ -89,5 +91,6 @@ public class TrackRecordRepository {
         int priceAmerican,
         Double resultValue,
         String modelVersion,
+        Double clv,
         boolean lotto) {}
 }

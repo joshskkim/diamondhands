@@ -25,6 +25,7 @@ import numpy as np
 # 1 = NRFI/YRFI (F1), 5 = first five (F5), 9 = full game.
 PERIODS: tuple[int, ...] = (1, 3, 5, 7, 9)
 
+from ingester.projection import constants as C
 from ingester.projection.batter_model import BatterProjection
 from ingester.projection.constants import (
     LEAGUE_1B_SHARE,
@@ -69,6 +70,43 @@ def lineup_probs(projs: list[BatterProjection]) -> np.ndarray:
     return np.vstack([batter_pa_probs(p) for p in projs[:9]])
 
 
+def tto_multipliers(turn: int, fb_share: float) -> tuple[float, float]:
+    """(offense_mult, k_mult) for a time-through-the-order (0-based) vs a starter.
+
+    turn 0 = 1st time through (no penalty). The offensive bump scales with the starter's
+    fastball-usage share relative to league average (fastball-heavy arms decay more); the
+    K rate is relieved by a fraction of that bump. See constants.py TTO_* for the (OFF by
+    default, unvalidated) coefficients.
+    """
+    if turn <= 0:
+        return 1.0, 1.0
+    base = C.TTO_OFFENSE_DELTA_2ND if turn == 1 else C.TTO_OFFENSE_DELTA_3RD
+    fb_factor = min(max(fb_share / C.TTO_FB_REFERENCE, C.TTO_FB_FACTOR_MIN), C.TTO_FB_FACTOR_MAX)
+    off_delta = base * fb_factor
+    return 1.0 + off_delta, 1.0 - off_delta * C.TTO_K_RELIEF_FRACTION
+
+
+def _apply_tto_probs(probs: np.ndarray, off_mult: float, k_mult: float) -> np.ndarray:
+    """Scale a (9,7) per-PA matrix for a TTO penalty and renormalize.
+
+    Cats: 0 out, 1 K, 2 BB, 3 1B, 4 2B, 5 3B, 6 HR. Hits+HR (3..6) scale by off_mult,
+    K (1) by k_mult, BB held; the 'out' category absorbs the difference so each row
+    still sums to 1 (clamped non-negative).
+    """
+    p = probs.copy()
+    p[:, 3:7] *= off_mult
+    p[:, 1] *= k_mult
+    p[:, 0] = np.maximum(1.0 - p[:, 1:].sum(axis=1), 0.0)
+    return p / p.sum(axis=1, keepdims=True)
+
+
+def _tto_cum_stack(probs: np.ndarray, fb_share: float) -> np.ndarray:
+    """(3,9,7) cumulative per-PA matrices for times-through 1st/2nd/3rd+ vs a starter."""
+    mats = [np.cumsum(_apply_tto_probs(probs, *tto_multipliers(turn, fb_share)), axis=1)
+            for turn in range(3)]
+    return np.stack(mats)
+
+
 @dataclass
 class TeamSim:
     runs: np.ndarray            # (n_sims,) total runs (== period_runs at full game)
@@ -89,6 +127,7 @@ def _sim_team(
     periods: tuple[int, ...] = PERIODS,
     bullpen_probs: np.ndarray | None = None,
     starter_innings: int = 5,
+    starter_fb_share: float | None = None,
 ) -> TeamSim:
     """Simulate one team's offense `n_sims` times; track runs, per-period runs, per-slot events.
 
@@ -96,9 +135,18 @@ def _sim_team(
     `starter_innings` innings and the bullpen's rates thereafter. This keeps the
     first-N-innings (F1/F3/F5) markets purely starter-driven while making the full-game
     output bullpen-aware. Default (None) faces the starter all game.
+
+    `starter_fb_share` (with constants.TTO_ENABLED) turns on the times-through-the-order
+    penalty: the starter's rates are raised on the 2nd/3rd+ time through the lineup,
+    scaled by his fastball share. None or TTO disabled → starter rates are flat (current
+    behavior, bit-for-bit).
     """
     cum_starter = np.cumsum(probs, axis=1)
     cum_bullpen = np.cumsum(bullpen_probs, axis=1) if bullpen_probs is not None else None
+    # Per-time-through starter matrices (3,9,7), only when TTO is enabled + a fb share given.
+    tto_cum = (_tto_cum_stack(probs, starter_fb_share)
+               if C.TTO_ENABLED and starter_fb_share is not None else None)
+    pa_count = np.zeros(n_sims, dtype=np.int32)  # PAs taken so far (per sim) → time-through index
     runs = np.zeros(n_sims, dtype=np.int32)
     team_hits = np.zeros(n_sims, dtype=np.int32)  # cumulative team hits (for pitcher props)
     period_runs: dict[int, np.ndarray] = {}
@@ -117,14 +165,22 @@ def _sim_team(
     bptr = np.zeros(n_sims, dtype=np.int32)
 
     for inning in range(innings):
-        cum = cum_bullpen if (cum_bullpen is not None and inning >= starter_innings) else cum_starter
+        facing_bullpen = cum_bullpen is not None and inning >= starter_innings
+        cum = cum_bullpen if facing_bullpen else cum_starter
         outs = np.zeros(n_sims, dtype=np.int32)
         b1 = np.zeros(n_sims, bool); b2 = np.zeros(n_sims, bool); b3 = np.zeros(n_sims, bool)
         while (outs < 3).any():
             s = np.where(outs < 3)[0]
             slot = bptr[s].copy()
             u = rng.random(len(s))
-            oc = (u[:, None] < cum[bptr[s]]).argmax(axis=1)
+            if tto_cum is not None and not facing_bullpen:
+                # Per-sim time-through index (0/1/2+) picks the right starter matrix.
+                tidx = np.minimum(pa_count[s] // 9, 2)
+                cum_s = tto_cum[tidx, bptr[s]]
+            else:
+                cum_s = cum[bptr[s]]
+            oc = (u[:, None] < cum_s).argmax(axis=1)
+            pa_count[s] += 1
             bptr[s] = (bptr[s] + 1) % 9
 
             # per-slot props
@@ -312,6 +368,14 @@ class GameSim:
     away_props: list[BatterProps]
     home_pitcher_props: PitcherProps   # the HOME starter's hits-allowed / earned-runs
     away_pitcher_props: PitcherProps   # the AWAY starter's hits-allowed / earned-runs
+    # Raw per-sim team arrays, retained so the JOINT distribution between legs can be
+    # recomputed on demand (correlation / same-game-parlay pricing). Not persisted — the
+    # runner stores only the marginals above. None on a GameSim built without them.
+    # NOTE: the two teams are drawn from INDEPENDENT rng streams, so cross-team player
+    # correlation is ~0 by construction; within-team and player-vs-game-total joints are
+    # real (a hitter's big day rides the same simulated game as his team's runs).
+    home: "TeamSim | None" = None
+    away: "TeamSim | None" = None
 
     @property
     def full(self) -> PeriodMarket:
@@ -391,6 +455,9 @@ def simulate_game(
     starter_innings: int = 5,
     home_starter_innings: int | None = None,
     away_starter_innings: int | None = None,
+    home_starter_fb_share: float | None = None,
+    away_starter_fb_share: float | None = None,
+    retain_teams: bool = False,
 ) -> GameSim:
     """Simulate a full game n_sims times; derive per-period markets and props.
 
@@ -402,6 +469,14 @@ def simulate_game(
     starter each lineup faces, from the workload model — the home lineup faces the away
     starter, so `home_starter_innings` is the away starter's projected innings. Both
     default to the flat `starter_innings` when not supplied.
+
+    `home_starter_fb_share`/`away_starter_fb_share` (Phase 2a): the fastball-usage share
+    of the OPPOSING starter each lineup faces, for the times-through-order penalty (only
+    active when constants.TTO_ENABLED). Same orientation as the innings args.
+
+    `retain_teams` (Phase 1): keep the raw per-sim TeamSim arrays on the result for joint /
+    correlation (SGP) pricing. Off by default so the nightly marginals path doesn't carry
+    the (n_sims × 9) arrays in memory; the SGP caller opts in.
     """
     # Independent RNG streams per team so one team's late innings (bullpen) can't shift
     # the other team's draws — this keeps F1/F5 invariant to the bullpen inputs.
@@ -410,10 +485,12 @@ def simulate_game(
     away_pen = lineup_probs(away_bullpen) if away_bullpen is not None else None
     home = _sim_team(lineup_probs(home_lineup), n_sims, rng_home,
                      bullpen_probs=home_pen,
-                     starter_innings=home_starter_innings or starter_innings)
+                     starter_innings=home_starter_innings or starter_innings,
+                     starter_fb_share=home_starter_fb_share)
     away = _sim_team(lineup_probs(away_lineup), n_sims, rng_away,
                      bullpen_probs=away_pen,
-                     starter_innings=away_starter_innings or starter_innings)
+                     starter_innings=away_starter_innings or starter_innings,
+                     starter_fb_share=away_starter_fb_share)
 
     periods = {
         p: PeriodMarket(innings=p, home_runs=home.period_runs[p], away_runs=away.period_runs[p])
@@ -428,6 +505,8 @@ def simulate_game(
         # A starter's hits/runs allowed = what the OPPOSING lineup put up against him.
         home_pitcher_props=_pitcher_props(away),
         away_pitcher_props=_pitcher_props(home),
+        home=home if retain_teams else None,
+        away=away if retain_teams else None,
     )
 
 

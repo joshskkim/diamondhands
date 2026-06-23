@@ -16,11 +16,14 @@ from ingester.projection.constants import (
     LEAGUE_HR_PER_PA,
     LEAGUE_K_PER_PA,
 )
+from ingester.projection import constants as C
 from ingester.projection.game_sim import (
+    _apply_tto_probs,
     batter_pa_probs,
     lineup_probs,
     prob_over,
     simulate_game,
+    tto_multipliers,
 )
 
 
@@ -255,6 +258,74 @@ class TestRunLineCover(unittest.TestCase):
         sim = simulate_game(strong, weak, n_sims=4000, seed=41)
         self.assertGreater(sim.p_home_cover_1_5, 0.5)
         self.assertGreater(sim.p_home_cover_1_5, sim.p_away_cover_1_5)
+
+
+class TestRetainTeams(unittest.TestCase):
+    def test_default_does_not_retain_arrays(self) -> None:
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=200, seed=5)
+        self.assertIsNone(sim.home)
+        self.assertIsNone(sim.away)
+
+    def test_opt_in_retains_arrays_for_sgp(self) -> None:
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=200, seed=5,
+                            retain_teams=True)
+        self.assertIsNotNone(sim.home)
+        self.assertIsNotNone(sim.away)
+        self.assertEqual(sim.home.slot_hits.shape, (200, 9))
+
+
+class TestTtoPenalty(unittest.TestCase):
+    def test_first_time_through_is_neutral(self) -> None:
+        self.assertEqual(tto_multipliers(0, 0.55), (1.0, 1.0))
+
+    def test_later_turns_raise_offense_and_lower_k(self) -> None:
+        om2, km2 = tto_multipliers(1, C.TTO_FB_REFERENCE)
+        om3, km3 = tto_multipliers(2, C.TTO_FB_REFERENCE)
+        self.assertGreater(om2, 1.0)
+        self.assertLess(km2, 1.0)
+        self.assertGreater(om3, om2)   # 3rd time through hurts more than 2nd
+        self.assertLess(km3, km2)
+
+    def test_fastball_heavy_starter_decays_more(self) -> None:
+        om_hi, _ = tto_multipliers(2, 0.75)
+        om_lo, _ = tto_multipliers(2, 0.40)
+        self.assertGreater(om_hi, om_lo)
+
+    def test_fb_factor_is_clamped(self) -> None:
+        # An absurd fb share saturates at the clamp, not unbounded.
+        om_extreme, _ = tto_multipliers(2, 5.0)
+        om_clamped = 1.0 + C.TTO_OFFENSE_DELTA_3RD * C.TTO_FB_FACTOR_MAX
+        self.assertAlmostEqual(om_extreme, om_clamped)
+
+    def test_apply_tto_keeps_rows_normalized_and_raises_hits(self) -> None:
+        base = lineup_probs(_league_lineup())
+        out = _apply_tto_probs(base, 1.10, 0.95)
+        np.testing.assert_allclose(out.sum(axis=1), 1.0, atol=1e-9)
+        self.assertGreater(out[:, 3:7].sum(), base[:, 3:7].sum())  # more hits+HR
+        self.assertLess(out[:, 1].sum(), base[:, 1].sum())          # fewer K
+
+    def test_off_by_default_ignores_fb_share(self) -> None:
+        # With TTO disabled (default), passing a fb share must change nothing.
+        lineup = _league_lineup()
+        a = simulate_game(lineup, lineup, n_sims=600, seed=7,
+                          home_starter_fb_share=0.55, away_starter_fb_share=0.55)
+        b = simulate_game(lineup, lineup, n_sims=600, seed=7)
+        self.assertEqual(a.expected_total, b.expected_total)
+
+    def test_enabled_raises_offense(self) -> None:
+        lineup = _league_lineup()
+        base = simulate_game(lineup, lineup, n_sims=3000, seed=11)
+        C.TTO_ENABLED = True
+        try:
+            boosted = simulate_game(lineup, lineup, n_sims=3000, seed=11,
+                                    home_starter_fb_share=0.55, away_starter_fb_share=0.55)
+        finally:
+            C.TTO_ENABLED = False
+        # Later-turn batters score more, so the run environment rises.
+        self.assertGreater(boosted.expected_total, base.expected_total)
+        # F1 (first inning, always 1st time through) is essentially untouched.
+        self.assertAlmostEqual(base.periods[1].expected_total,
+                               boosted.periods[1].expected_total, delta=0.05)
 
 
 if __name__ == "__main__":

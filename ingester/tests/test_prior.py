@@ -11,9 +11,11 @@ from ingester.projection.constants import (
     MARCEL_REGRESSION_PA_K,
     MARCEL_REGRESSION_PA_XWOBA,
 )
+from ingester.projection import constants as C
 from ingester.projection.prior import (
     ProjectionPrior,
     SeasonLine,
+    aging_factor,
     compute_marcel_prior,
 )
 
@@ -159,3 +161,65 @@ class TestWhiffKAnchor(unittest.TestCase):
         # Other metrics untouched.
         self.assertAlmostEqual(hi.xwoba, plain.xwoba, places=9)
         self.assertAlmostEqual(hi.iso, plain.iso, places=9)
+
+
+class TestAgingFactor(unittest.TestCase):
+    def test_neutral_at_peak(self):
+        self.assertAlmostEqual(aging_factor(27, 27, 0.004, 0.006, (0.9, 1.06)), 1.0)
+
+    def test_young_boosted_old_declined(self):
+        young = aging_factor(23, 27, 0.004, 0.006, (0.9, 1.06))
+        old = aging_factor(35, 27, 0.004, 0.006, (0.9, 1.06))
+        self.assertGreater(young, 1.0)
+        self.assertLess(old, 1.0)
+
+    def test_clamped(self):
+        # A 19-year-old would exceed the cap without clamping.
+        self.assertEqual(aging_factor(10, 27, 0.004, 0.006, (0.9, 1.06)), 1.06)
+        self.assertEqual(aging_factor(60, 27, 0.004, 0.006, (0.9, 1.06)), 0.9)
+
+
+class TestAgingInPrior(unittest.TestCase):
+    """The aging curve only applies when DIAMOND_AGING_ENABLED; toggled here."""
+
+    def setUp(self):
+        self.seasons = {
+            2023: SeasonLine(pa=600, ab=540, hits=150, hr=25, tb=260, k=120, xwoba=0.350),
+            2024: SeasonLine(pa=600, ab=540, hits=150, hr=25, tb=260, k=120, xwoba=0.350),
+            2025: SeasonLine(pa=600, ab=540, hits=150, hr=25, tb=260, k=120, xwoba=0.350),
+        }
+        self.kw = dict(league_xwoba=LEAGUE_XWOBA, league_k_rate=LEAGUE_K_PER_PA,
+                       league_iso=LEAGUE_ISO)
+
+    def test_off_by_default_ignores_age(self):
+        base = compute_marcel_prior(self.seasons, 2026, **self.kw)
+        aged = compute_marcel_prior(self.seasons, 2026, **self.kw, age=35)
+        self.assertEqual(base.xwoba, aged.xwoba)
+        self.assertEqual(base.iso, aged.iso)
+
+    def test_enabled_ages_young_up_old_down(self):
+        C.AGING_ENABLED = True
+        try:
+            base = compute_marcel_prior(self.seasons, 2026, **self.kw)
+            young = compute_marcel_prior(self.seasons, 2026, **self.kw, age=23)
+            old = compute_marcel_prior(self.seasons, 2026, **self.kw, age=36)
+        finally:
+            C.AGING_ENABLED = False
+        self.assertGreater(young.xwoba, base.xwoba)
+        self.assertGreater(young.iso, base.iso)
+        self.assertLess(old.xwoba, base.xwoba)
+        self.assertLess(old.iso, base.iso)
+        # K-rate is deliberately not aged.
+        self.assertEqual(young.k_rate, base.k_rate)
+        self.assertEqual(old.k_rate, base.k_rate)
+
+    def test_enabled_neutral_at_peak_ish(self):
+        # At the xwOBA peak age the xwOBA is essentially unchanged (ISO peak differs).
+        C.AGING_ENABLED = True
+        try:
+            base = compute_marcel_prior(self.seasons, 2026, **self.kw)
+            peak = compute_marcel_prior(self.seasons, 2026, **self.kw,
+                                        age=C.AGING_PEAK_AGE_XWOBA)
+        finally:
+            C.AGING_ENABLED = False
+        self.assertAlmostEqual(peak.xwoba, base.xwoba, places=4)

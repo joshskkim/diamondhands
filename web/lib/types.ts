@@ -550,13 +550,17 @@ export interface CalibrationBucket {
   actualRate: number
 }
 
-/** One day's accuracy snapshot for a market (brier/baseline/ece null for total_runs). */
+/** One day's accuracy snapshot for a market (binary metrics null for total_runs). */
 export interface AccuracyPoint {
   date: string
   n: number
   brier: number | null
   baselineBrier: number | null
   ece: number | null
+  /** Log-loss: proper scoring rule, sharper than Brier on rare events. */
+  logLoss: number | null
+  /** Sharpness = variance of predicted probs; read with ece ("sharpness subject to calibration"). */
+  sharpness: number | null
 }
 
 /** Rolling accuracy for one market + its latest calibration curve. */
@@ -610,6 +614,12 @@ export interface TrackRecord {
   byTier: RecordSummary[]
   equity: EquityPoint[]
   pickBrier: number | null
+  /** CLV sample size: settled picks for which a closing quote was found. Null until any CLV. */
+  clvN: number | null
+  /** Share of clvN with positive closing-line value (we beat the close). */
+  clvRate: number | null
+  /** Mean CLV (de-vigged probability points beaten) over clvN. */
+  avgClv: number | null
 }
 
 // ── Most Likely board (GET /api/most-likely) ─────────────────────────────────

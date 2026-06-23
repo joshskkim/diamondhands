@@ -20,6 +20,7 @@ from ingester.metrics import (
     baseline_brier,
     brier_score,
     calibration_buckets,
+    log_loss,
     mae,
     mae_per_game,
     pearson,
@@ -93,7 +94,14 @@ def _update_backtest_run(
     cal_json: str,
     run_corr: float = float("nan"),
     run_mae_baseline: float = float("nan"),
+    ll_h1: float = float("nan"),
+    ll_h2: float = float("nan"),
+    ll_hr: float = float("nan"),
+    ll_k: float = float("nan"),
 ) -> None:
+    def _ll(v: float) -> float | None:
+        return None if v != v else round(v, 5)  # NaN -> NULL
+
     conn.execute(
         """
         UPDATE backtest_runs SET
@@ -107,6 +115,10 @@ def _update_backtest_run(
             mae_total_runs       = %s,
             run_corr             = %s,
             run_mae_baseline     = %s,
+            log_loss_hit1plus    = %s,
+            log_loss_hit2plus    = %s,
+            log_loss_hr          = %s,
+            log_loss_k1plus      = %s,
             calibration_buckets  = %s::jsonb
         WHERE id = %s
         """,
@@ -119,6 +131,7 @@ def _update_backtest_run(
             None if mae != mae           else round(mae, 2),
             None if run_corr != run_corr else round(run_corr, 3),
             None if run_mae_baseline != run_mae_baseline else round(run_mae_baseline, 2),
+            _ll(ll_h1), _ll(ll_h2), _ll(ll_hr), _ll(ll_k),
             cal_json,
             run_id,
         ),
@@ -481,6 +494,12 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         base_hr = baseline_brier(out.a_hr)
         base_k  = baseline_brier(out.a_k)
 
+        # Log-loss: strictly-proper, sharper than Brier on the rare-event markets.
+        ll_h1 = log_loss(out.p_hit1, out.a_hit1)
+        ll_h2 = log_loss(out.p_hit2, out.a_hit2)
+        ll_hr = log_loss(out.p_hr,   out.a_hr)
+        ll_k  = log_loss(out.p_k,    out.a_k)
+
         mae_hits = mae_per_game(out.game_hits)  # legacy hits proxy (printed for continuity)
 
         # Real run-total scoring: predicted game total vs actual final score, plus a
@@ -508,6 +527,7 @@ def cmd_backtest(args: argparse.Namespace) -> None:
             json.dumps(cal),
             run_corr=run_corr,
             run_mae_baseline=run_mae_baseline,
+            ll_h1=ll_h1, ll_h2=ll_h2, ll_hr=ll_hr, ll_k=ll_k,
         )
 
     except Exception:
@@ -529,6 +549,10 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     print(f"  run MAE:            {run_mae:.3f}")
     print(f"  league-mean MAE:    {run_mae_baseline:.3f}  (always {2 * LEAGUE_RUNS_PER_GAME_BASE:.1f})")
     print(f"  corr(pred, actual): {run_corr:+.3f}")
+
+    # Log-loss (sharper than Brier on rare events; lower is better).
+    print("\nLog-loss (proper scoring, rewards sharp+correct):")
+    print(f"  hit1plus={ll_h1:.5f}  hit2plus={ll_h2:.5f}  hr={ll_hr:.5f}  k1plus={ll_k:.5f}")
 
     # Sim-blend weight fitting (only when --sim-props captured the simulator's estimate).
     if sim_props:
