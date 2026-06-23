@@ -210,6 +210,11 @@ export function fetchPlayerRecentStats(
   )
 }
 
+export function searchPlayers(name: string, limit = 8): Promise<PlayerDetail[]> {
+  const params = new URLSearchParams({ name, limit: String(limit) })
+  return apiGet<PlayerDetail[]>(`/api/players/search?${params}`)
+}
+
 export function fetchGameOdds(gameId: number): Promise<GameOdds> {
   return apiGet<GameOdds>(`/api/games/${gameId}/odds`)
 }
@@ -366,6 +371,7 @@ export const queryKeys = {
       ['player', 'recent', playerId, limit] as const,
     spray: (playerId: number, season?: number) =>
       ['player', 'spray', playerId, season ?? 'current'] as const,
+    search: (name: string) => ['player', 'search', name] as const,
   },
   pitchers: {
     skill: (pitcherId: number) => ['pitcher', 'skill', pitcherId] as const,
@@ -466,6 +472,19 @@ export function playerSprayQueryOptions(playerId: number, season?: number) {
     queryKey: queryKeys.players.spray(playerId, season),
     queryFn: () => fetchPlayerSpray(playerId, season),
     enabled: playerId > 0,
+  })
+}
+
+export function playerSearchQueryOptions(name: string) {
+  const trimmed = name.trim()
+  return queryOptions({
+    queryKey: queryKeys.players.search(trimmed.toLowerCase()),
+    queryFn: () => searchPlayers(trimmed),
+    // Only fire once there's something worth matching; keep prior results on
+    // screen while the next keystroke's query resolves (no empty flash).
+    enabled: trimmed.length >= 2,
+    staleTime: 5 * 60_000,
+    placeholderData: (prev) => prev,
   })
 }
 

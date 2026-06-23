@@ -3,10 +3,11 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useState } from 'react'
-import { CircleUserRound, HelpCircle, LogIn, LogOut, Trophy, X, type LucideIcon } from 'lucide-react'
+import { CircleUserRound, HelpCircle, LogIn, LogOut, Trophy, Users, X, type LucideIcon } from 'lucide-react'
 import { NAV_LINKS } from '@/components/app-sidebar'
 import { useAuth } from '@/components/auth-provider'
 import { DiamondMark } from '@/components/diamond-mark'
+import { NavPlayerSearch } from '@/components/nav-player-search'
 import { cn } from '@/lib/utils'
 
 // The bottom bar is tight, so the primary nav uses shorter labels than the
@@ -20,6 +21,7 @@ const SHORT_LABEL: Record<string, string> = {
 
 // Secondary destinations that don't earn a bottom-bar tab live in the account sheet.
 const SHEET_LINKS: { label: string; href: string; icon: LucideIcon }[] = [
+  { label: 'Compare Players', href: '/mlb/players/compare', icon: Users },
   { label: 'Leaderboards', href: '/leaderboard', icon: Trophy },
   { label: 'FAQ', href: '/faq', icon: HelpCircle },
 ]
@@ -94,6 +96,11 @@ export function MobileNav() {
               >
                 <X className="h-4 w-4" />
               </button>
+            </div>
+
+            {/* player search — jumps to a player page, then closes the sheet */}
+            <div className="mb-3">
+              <NavPlayerSearch onNavigate={() => setSheetOpen(false)} />
             </div>
 
             {/* auth — mirrors the desktop rail's auth block */}
