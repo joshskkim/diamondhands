@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timedelta, timezone
 
-from ingester.commands.picks import MAX_PICKS, _devig_two_way, _grade, build_picks
+from ingester.commands.picks import (
+    MAX_PICKS, _devig_two_way, _grade, _pick_key, build_picks, plan_reconcile,
+)
 from ingester.projection.runner import DEGENERACY_MIN_ROWS, is_degenerate_slate
 
 
@@ -68,6 +71,60 @@ class TestBuildPicks(unittest.TestCase):
         sim_with = {"totals": [{"gameId": 1, "simTotal": 8.1}], "props": {}}
         self.assertEqual(build_picks([total], sim_against), [])
         self.assertEqual(len(build_picks([total], sim_with)), 1)
+
+
+class TestPlanReconcile(unittest.TestCase):
+    NOW = datetime(2026, 6, 23, 18, 0, tzinfo=timezone.utc)
+
+    def existing(self, picks, active=True, start=None):
+        """Build an existing-rows map keyed like the DB read (id starts at 100)."""
+        return {
+            _pick_key(p): (100 + i, active, start)
+            for i, p in enumerate(picks)
+        }
+
+    def test_first_run_all_insert(self):
+        picks = [play(game_id=1), play(game_id=2, player_id=20)]
+        ops = plan_reconcile(picks, {}, self.NOW, board_loaded=True)
+        self.assertEqual([o[0] for o in ops], ["insert", "insert"])
+        self.assertEqual([o[1] for o in ops], [1, 2])  # ranks
+
+    def test_kept_pick_relocked_not_reinserted(self):
+        p = play(game_id=1)
+        ops = plan_reconcile([p], self.existing([p]), self.NOW, board_loaded=True)
+        self.assertEqual(ops, [("keep", 100, 1, p)])
+
+    def test_better_late_pick_bumps_earlier(self):
+        early = play(game_id=1)
+        existing = self.existing([early])           # already on record, active
+        late = play(game_id=2, player_id=20)        # different game now tops the board
+        ops = plan_reconcile([late], existing, self.NOW, board_loaded=True)
+        kinds = {o[0] for o in ops}
+        self.assertEqual(kinds, {"insert", "bump"})
+        bump = next(o for o in ops if o[0] == "bump")
+        self.assertEqual(bump[1], 100)             # the earlier pick's id
+
+    def test_started_game_is_frozen_not_bumped(self):
+        early = play(game_id=1)
+        started = self.NOW - timedelta(hours=1)
+        existing = self.existing([early], start=started)
+        late = play(game_id=2, player_id=20)
+        ops = plan_reconcile([late], existing, self.NOW, board_loaded=True)
+        self.assertNotIn("bump", [o[0] for o in ops])  # locked once underway
+
+    def test_empty_board_never_bumps(self):
+        early = play(game_id=1)
+        existing = self.existing([early])
+        # No picks AND board didn't load (odds expired) → leave the record untouched.
+        ops = plan_reconcile([], existing, self.NOW, board_loaded=False)
+        self.assertEqual(ops, [])
+
+    def test_qualifying_board_with_no_picks_does_bump(self):
+        # Board loaded but nothing clears the bar now → the earlier pick is genuinely dropped.
+        early = play(game_id=1)
+        existing = self.existing([early])
+        ops = plan_reconcile([], existing, self.NOW, board_loaded=True)
+        self.assertEqual(ops, [("bump", 100)])
 
 
 class TestGrade(unittest.TestCase):

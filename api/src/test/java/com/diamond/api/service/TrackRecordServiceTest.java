@@ -27,16 +27,16 @@ class TrackRecordServiceTest {
 
     private static SettledPick pick(LocalDate day, String market, boolean strong, Boolean won,
                                     double modelProb, int price, Double resultValue, String version) {
-        return new SettledPick(day, market, strong, won, modelProb, price, resultValue, version, null, false);
+        return new SettledPick(day, market, strong, won, modelProb, price, resultValue, version, null, false, false);
     }
 
     private static SettledPick lottoPick(LocalDate day, String market, Boolean won,
                                          double modelProb, int price, Double resultValue) {
-        return new SettledPick(day, market, false, won, modelProb, price, resultValue, "v2.12.0", null, true);
+        return new SettledPick(day, market, false, won, modelProb, price, resultValue, "v2.12.0", null, false, true);
     }
 
     private static SettledPick clvPick(LocalDate day, Boolean won, Double clv) {
-        return new SettledPick(day, "total", false, won, 0.55, -110, 8.0, "v2.12.0", clv, false);
+        return new SettledPick(day, "total", false, won, 0.55, -110, 8.0, "v2.12.0", clv, false, false);
     }
 
     private TrackRecordResponse serve(List<SettledPick> picks) {

@@ -83,7 +83,7 @@ export function RecentResults() {
       </div>
       <div className="grid gap-2">
         {picks.map((p) => (
-          <ResultRow key={`${p.gameId}-${p.market}-${p.rank}`} p={p} />
+          <ResultRow key={`${p.gameId}-${p.market}-${p.side}-${p.playerId ?? ''}`} p={p} />
         ))}
       </div>
     </section>

@@ -6,9 +6,9 @@ import com.diamond.api.dto.TodayGameDto;
 import com.diamond.api.service.GameService;
 import com.diamond.api.service.OddsService;
 import com.diamond.api.service.ProjectionService;
+import com.diamond.api.service.SlateService;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.LocalDate;
 import java.util.List;
 
 @RestController
@@ -18,17 +18,19 @@ public class GamesController {
     private final GameService gameService;
     private final ProjectionService projectionService;
     private final OddsService oddsService;
+    private final SlateService slateService;
 
     public GamesController(GameService gameService, ProjectionService projectionService,
-                           OddsService oddsService) {
+                           OddsService oddsService, SlateService slateService) {
         this.gameService = gameService;
         this.projectionService = projectionService;
         this.oddsService = oddsService;
+        this.slateService = slateService;
     }
 
     @GetMapping("/today")
     public List<TodayGameDto> today() {
-        return gameService.todayGames(LocalDate.now());
+        return gameService.todayGames(slateService.activeSlateDate());
     }
 
     @GetMapping("/{gameId}/projections")

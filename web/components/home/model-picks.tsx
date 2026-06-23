@@ -6,14 +6,15 @@ import { Flame, Ticket } from 'lucide-react'
 import {
   bestPlaysQueryOptions,
   hitRatesQueryOptions,
+  modelPicksQueryOptions,
   mostLikelyQueryOptions,
   playerResultsQueryOptions,
   todayGamesQueryOptions,
 } from '@/lib/api'
-import type { BestPlay, HitRate, MostLikely, TodayGame } from '@/lib/types'
+import type { BestPlay, HitRate, ModelPickResult, MostLikely, TodayGame } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
-import { modelPlayOutcome, pickTitle, type PickOutcome } from '@/lib/picks'
+import { modelPlayOutcome, pickOutcome, pickTitle, type PickOutcome } from '@/lib/picks'
 import { OutcomeBadge } from './outcome-badge'
 import { WhyDisclosure } from './why-disclosure'
 
@@ -383,6 +384,93 @@ function Skeleton({ className = '' }: { className?: string }) {
   return <div className={cn('animate-pulse bg-white/5 rounded', className)} />
 }
 
+// ── earlier picks (honest history) ──────────────────────────────────────────────
+// The live board above always shows the current top picks. When a better play appears
+// later in the slate it can knock an earlier pick off that top set — but we don't hide
+// what we already showed. Those displaced picks are recorded server-side (locked at the
+// line they were shown at) and surfaced here, still graded, so the board never quietly
+// rewrites its own history.
+
+// Identity ignoring line/price — a line move shouldn't split one pick into two rows.
+function liveKey(p: { gameId: number; market: string; side: string; playerId: number | null }): string {
+  return `${p.gameId}|${p.market}|${p.side}|${p.playerId ?? ''}`
+}
+
+// ET clock time a pick first hit the board, e.g. "1:15 PM" (the slate's timezone).
+function shownClock(iso: string | null): string | null {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(d)
+}
+
+function EarlierPickRow({ pick, outcome }: { pick: ModelPickResult; outcome?: PickOutcome }) {
+  const shown = shownClock(pick.firstShownAt)
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-[#0e1015] px-4 py-2.5">
+      {outcome && <OutcomeBadge outcome={outcome} />}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm text-zinc-300">
+          {pick.playerId ? (
+            <Link
+              href={`/mlb/players/${pick.playerId}`}
+              className="transition-colors hover:text-cyan-300"
+            >
+              {pickTitle(pick)}
+            </Link>
+          ) : (
+            pickTitle(pick)
+          )}
+        </div>
+        <div className="text-xs text-zinc-500">
+          {formatAmerican(pick.priceAmerican)} {bookLabel(pick.book ?? undefined)}
+          {shown != null && <> · shown {shown}</>} · later replaced by a better pick
+        </div>
+      </div>
+      <Link
+        href={`/mlb/games/${pick.gameId}`}
+        className="shrink-0 font-mono text-xs text-zinc-500 transition-colors hover:text-cyan-400"
+      >
+        {pick.matchup}
+      </Link>
+    </div>
+  )
+}
+
+function EarlierPicks({
+  picks,
+  gamesById,
+  hrByKey,
+}: {
+  picks: ModelPickResult[]
+  gamesById: Map<number, TodayGame>
+  hrByKey: Map<string, number | null>
+}) {
+  if (picks.length === 0) return null
+  return (
+    <div className="mt-4">
+      <h3 className={cn(microLabel, 'mb-2 normal-case tracking-normal text-zinc-400')}>
+        Earlier today — picks a later, better play replaced (kept on the record, still graded)
+      </h3>
+      <div className="grid gap-2">
+        {picks.map((p) => (
+          <EarlierPickRow
+            key={`${p.gameId}-${p.market}-${p.side}-${p.playerId ?? ''}`}
+            pick={p}
+            outcome={
+              p.scored ? pickOutcome(p) : modelPlayOutcome(p, gamesById.get(p.gameId), hrByKey)
+            }
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function ModelPicks() {
   const { data: plays, isPending, isError } = useQuery(bestPlaysQueryOptions(undefined, 100))
   const { data: sim } = useQuery(mostLikelyQueryOptions())
@@ -391,6 +479,9 @@ export function ModelPicks() {
   // the same source the projected-favorites badge uses, so ✓/✗ lands same-day.
   const { data: games } = useQuery(todayGamesQueryOptions())
   const { data: results } = useQuery(playerResultsQueryOptions())
+  // The recorded snapshot of the active slate — used only to surface picks a better
+  // late play has since bumped off the live top set, so the board keeps its history.
+  const { data: recorded } = useQuery(modelPicksQueryOptions())
 
   const rows = plays ?? []
   const hitRates = new Map<string, HitRate>(
@@ -405,6 +496,13 @@ export function ModelPicks() {
   const lotto = pickLotto(rows, sim, hitRates)
   const gridRows = lotto ? rows.filter((p) => p !== lotto.play) : rows
   const picks = buildPicks(gridRows, sim, hitRates)
+
+  // Bumped picks not currently in the live top set (dedupe by identity in case the
+  // recorded snapshot lags the live board on a refresh).
+  const liveKeys = new Set(picks.map((c) => liveKey(c.play)))
+  const earlier = (recorded ?? []).filter(
+    (p) => p.bumpedAt != null && !liveKeys.has(liveKey(p)),
+  )
 
   return (
     <section className="mb-10">
@@ -453,6 +551,7 @@ export function ModelPicks() {
         </div>
       )}
 
+<<<<<<< HEAD
       {!isPending && !isError && lotto && (
         <div className="mt-6">
           <div className="mb-2 flex items-baseline gap-2">
@@ -467,6 +566,9 @@ export function ModelPicks() {
           </div>
         </div>
       )}
+=======
+      <EarlierPicks picks={earlier} gamesById={gamesById} hrByKey={hrByKey} />
+>>>>>>> 5e71f02 (Adjust nightly timeline to accomodate user viewing and account for later games for picks)
     </section>
   )
 }

@@ -18,13 +18,16 @@ import java.util.List;
 @Repository
 public class ModelPicksRepository {
 
+    // Active picks first (board order), then earlier/bumped ones oldest-shown first.
     private static final String PICKS_SQL = """
         SELECT slate_date, rank, game_id, market, side, line, player_id, player_name,
                matchup, model_prob, fair_prob, edge, ev_pct, price_american, book,
-               strong, result_value, won, scored_at
+               strong, result_value, won, scored_at, active,
+               to_char(first_shown_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS first_shown_at,
+               to_char(bumped_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS bumped_at
         FROM model_picks
         WHERE slate_date = ?
-        ORDER BY rank
+        ORDER BY active DESC, rank ASC NULLS LAST, first_shown_at ASC
         """;
 
     private final JdbcTemplate jdbc;
@@ -40,7 +43,7 @@ public class ModelPicksRepository {
     private ModelPickResultDto map(ResultSet rs, int rowNum) throws SQLException {
         return new ModelPickResultDto(
             rs.getString("slate_date"),
-            rs.getInt("rank"),
+            nullableInt(rs, "rank"),
             rs.getLong("game_id"),
             rs.getString("market"),
             rs.getString("side"),
@@ -57,7 +60,10 @@ public class ModelPicksRepository {
             rs.getBoolean("strong"),
             dbl(rs, "result_value"),
             (Boolean) rs.getObject("won"),
-            rs.getObject("scored_at") != null);
+            rs.getObject("scored_at") != null,
+            rs.getBoolean("active"),
+            rs.getString("first_shown_at"),
+            rs.getString("bumped_at"));
     }
 
     private static Double dbl(ResultSet rs, String col) throws SQLException {

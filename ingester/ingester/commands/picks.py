@@ -151,9 +151,57 @@ def build_picks(plays: list[dict], sim: dict | None,
     return picks
 
 
+def _active_slate(api: str) -> date:
+    """The slate users are currently shown (server resolves lineup+projection readiness)."""
+    return date.fromisoformat(_get_json(f"{api}/api/slate/active")["date"])
+
+
+def _pick_key(p: dict) -> tuple:
+    """Stable identity for a pick: one per selection per slate. line is excluded so a
+    line move keeps the first-shown pick; player_id is None for game markets."""
+    return (p["gameId"], p["market"], p["side"], p.get("playerId"))
+
+
+def plan_reconcile(picks: list[dict], existing: dict, now: datetime,
+                   board_loaded: bool) -> list[tuple]:
+    """Decide what to do with each pick given the current top set and what's on record.
+
+    Pure (no DB/IO) so it's unit-testable. ``existing`` maps a pick key
+    (see _pick_key) to (pick_id, active, start_time). Returns ops in apply order:
+      · ("keep",   pick_id, rank, pick)  — still in the top set; re-promote, keep locked line
+      · ("insert", rank, pick)           — newly qualifies; append at first-shown price
+      · ("bump",   pick_id)              — displaced before its game; mark inactive
+    A pick whose game has started is frozen (never bumped). When the board didn't load
+    (board_loaded False, i.e. odds expired mid-slate), nothing is bumped — an empty pull
+    must never wipe legitimately-shown picks.
+    """
+    ops: list[tuple] = []
+    desired_keys: set[tuple] = set()
+    for rank, p in enumerate(picks, start=1):
+        key = _pick_key(p)
+        desired_keys.add(key)
+        if key in existing:
+            ops.append(("keep", existing[key][0], rank, p))
+        else:
+            ops.append(("insert", rank, p))
+    if board_loaded:
+        for key, (pick_id, active, start) in existing.items():
+            if key in desired_keys:
+                continue
+            if start is not None and start <= now:
+                continue  # game started → frozen, leave as-is (stays gradeable)
+            if active:
+                ops.append(("bump", pick_id))
+    return ops
+
+
 def cmd_record_picks(args: argparse.Namespace) -> None:
-    slate = args.date if getattr(args, "date", None) is not None else eastern_today()
     api = getattr(args, "api", None) or DEFAULT_API
+    # Record the slate users are actually shown, not the wall-clock/projection date — so a
+    # pick is "first shown" (and locked) only once its slate is live on the board. An
+    # explicit --date still pins it (manual backfills); daily.py leaves date None so the
+    # nightly/quick runs self-resolve the active slate.
+    slate = args.date if getattr(args, "date", None) is not None else _active_slate(api)
 
     plays = _get_json(f"{api}/api/odds/best?date={slate}&limit=200")
     try:
@@ -169,27 +217,65 @@ def cmd_record_picks(args: argparse.Namespace) -> None:
         hit_rates = None
 
     picks = build_picks(plays, sim, hit_rates)
+    now = datetime.now(timezone.utc)
 
+    # Reconcile (never DELETE): a pick keeps its row once shown. Picks still in the top set
+    # stay active (locked at their first-shown line); a new pick is appended; a pick a
+    # better one displaces before its game is marked bumped (still graded + counted, shown
+    # as an "earlier" extra). Picks whose game has started are frozen as-is.
     conn = get_connection()
     try:
-        conn.execute("DELETE FROM model_picks WHERE slate_date = %s", (slate,))
-        for rank, p in enumerate(picks, start=1):
-            conn.execute(
-                """
-                INSERT INTO model_picks (
-                    slate_date, rank, game_id, market, side, line, player_id,
-                    player_name, matchup, model_prob, fair_prob, edge, ev_pct,
-                    price_american, book, strong, model_version, recorded_at
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                """,
-                (
-                    slate, rank, p["gameId"], p["market"], p["side"], p.get("line"),
-                    p.get("playerId"), p.get("playerName"), p.get("matchup"),
-                    p["modelProb"], p["fairProb"], p["edge"], p["evPct"],
-                    p["priceAmerican"], p.get("bestBook"), p["strong"],
-                    MODEL_VERSION, datetime.now(timezone.utc),
-                ),
-            )
+        existing = conn.execute(
+            """
+            SELECT mp.id, mp.game_id, mp.market, mp.side, mp.player_id, mp.active,
+                   g.start_time_utc
+            FROM model_picks mp JOIN games g ON g.id = mp.game_id
+            WHERE mp.slate_date = %s
+            """,
+            (slate,),
+        ).fetchall()
+        existing_by_key = {
+            (gid, market, side, pid): (pick_id, active, start)
+            for (pick_id, gid, market, side, pid, active, start) in existing
+        }
+
+        inserted = kept = bumped = 0
+        for op in plan_reconcile(picks, existing_by_key, now, board_loaded=bool(plays)):
+            if op[0] == "keep":
+                _, pick_id, rank, _p = op
+                # Re-promote to the active top set; DO NOT touch the locked first-shown
+                # line/price/probs.
+                conn.execute(
+                    "UPDATE model_picks SET active=true, rank=%s, bumped_at=NULL WHERE id=%s",
+                    (rank, pick_id),
+                )
+                kept += 1
+            elif op[0] == "insert":
+                _, rank, p = op
+                conn.execute(
+                    """
+                    INSERT INTO model_picks (
+                        slate_date, rank, game_id, market, side, line, player_id,
+                        player_name, matchup, model_prob, fair_prob, edge, ev_pct,
+                        price_american, book, strong, model_version, recorded_at,
+                        first_shown_at, active
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,true)
+                    """,
+                    (
+                        slate, rank, p["gameId"], p["market"], p["side"], p.get("line"),
+                        p.get("playerId"), p.get("playerName"), p.get("matchup"),
+                        p["modelProb"], p["fairProb"], p["edge"], p["evPct"],
+                        p["priceAmerican"], p.get("bestBook"), p["strong"],
+                        MODEL_VERSION, now, now,
+                    ),
+                )
+                inserted += 1
+            else:  # "bump"
+                conn.execute(
+                    "UPDATE model_picks SET active=false, bumped_at=%s WHERE id=%s",
+                    (now, op[1]),
+                )
+                bumped += 1
         conn.commit()
     except Exception:
         conn.rollback()
@@ -197,8 +283,8 @@ def cmd_record_picks(args: argparse.Namespace) -> None:
     finally:
         conn.close()
 
-    print(f"[record-picks] {slate}: recorded {len(picks)} pick(s) "
-          f"(from {len(plays)} priced plays).")
+    print(f"[record-picks] {slate}: {len(picks)} active pick(s) "
+          f"({inserted} new, {kept} kept, {bumped} bumped) from {len(plays)} priced plays.")
     for i, p in enumerate(picks, 1):
         who = p.get("playerName") or p.get("matchup")
         print(f"  #{i} {who} {p['market']} {p['side']} {p.get('line')} "
@@ -323,7 +409,7 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
     try:
         rows = conn.execute(
             """
-            SELECT mp.slate_date, mp.rank, mp.game_id, mp.market, mp.side, mp.line,
+            SELECT mp.id, mp.rank, mp.game_id, mp.market, mp.side, mp.line,
                    mp.player_id, g.home_score, g.away_score, g.detailed_status,
                    CASE mp.market WHEN 'hit' THEN pgs.hits WHEN 'hr' THEN pgs.home_runs END,
                    mp.fair_prob, mp.book, g.start_time_utc
@@ -332,16 +418,17 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
             LEFT JOIN player_game_stats pgs
                    ON pgs.player_id = mp.player_id AND pgs.game_id = mp.game_id
             WHERE mp.slate_date = %s AND mp.scored_at IS NULL
-            ORDER BY mp.rank
+            ORDER BY mp.rank NULLS LAST, mp.first_shown_at
             """,
             (slate,),
         ).fetchall()
 
         scored = pending = voided = clv_n = 0
         record: list[str] = []
-        for (slate_date, rank, game_id, market, side, line, player_id,
+        for (pick_id, rank, game_id, market, side, line, player_id,
              home, away, detailed_status, prop_val,
              fair_prob, book, start_time) in rows:
+            tag = f"#{rank}" if rank is not None else "(earlier)"
             if detailed_status in DEAD_GAME_STATUSES:
                 # The game won't be played — settle the pick as voided (no win/loss)
                 # rather than leaving it pending forever. record-picks normally rebuilds
@@ -349,11 +436,11 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
                 # catches a pick recorded before the postponement landed.
                 conn.execute(
                     "UPDATE model_picks SET result_value=NULL, won=NULL, scored_at=NOW() "
-                    "WHERE slate_date=%s AND rank=%s",
-                    (slate_date, rank),
+                    "WHERE id=%s",
+                    (pick_id,),
                 )
                 voided += 1
-                record.append(f"  #{rank} {market} {side} {line}: VOID ({detailed_status.lower()})")
+                record.append(f"  {tag} {market} {side} {line}: VOID ({detailed_status.lower()})")
                 continue
             if home is None or away is None:
                 pending += 1
@@ -383,22 +470,22 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
                     clv_n += 1
             except Exception as exc:  # noqa: BLE001 — never let CLV break grading
                 close_am = close_dec = close_fair = clv = captured_at = None
-                print(f"[score-picks] CLV capture failed for rank {rank} "
+                print(f"[score-picks] CLV capture failed for pick {pick_id} "
                       f"(grade still recorded): {exc}", file=sys.stderr)
             conn.execute(
                 "UPDATE model_picks SET result_value=%s, won=%s, scored_at=NOW(), "
                 "close_price_american=%s, close_price_decimal=%s, close_fair_prob=%s, "
                 "clv=%s, clv_captured_at=%s "
-                "WHERE slate_date=%s AND rank=%s",
+                "WHERE id=%s",
                 (value, won, close_am,
                  round(close_dec, 3) if close_dec is not None else None,
                  round(close_fair, 4) if close_fair is not None else None,
-                 clv, captured_at, slate_date, rank),
+                 clv, captured_at, pick_id),
             )
             scored += 1
             outcome = "PUSH" if won is None else ("WON" if won else "LOST")
             clv_str = f" clv={clv:+.4f}" if clv is not None else ""
-            record.append(f"  #{rank} {market} {side} {line}: {outcome} (actual {value}){clv_str}")
+            record.append(f"  {tag} {market} {side} {line}: {outcome} (actual {value}){clv_str}")
         conn.commit()
     except Exception:
         conn.rollback()

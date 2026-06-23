@@ -71,7 +71,8 @@ export interface TodayGame {
 /** GET /api/model-picks — a persisted Model's Pick with its graded outcome. */
 export interface ModelPickResult {
   slateDate: string
-  rank: number
+  /** Board order among active picks; null for an earlier/bumped pick. */
+  rank: number | null
   gameId: number
   market: string
   side: string
@@ -91,6 +92,12 @@ export interface ModelPickResult {
   won: boolean | null
   /** true once score-picks has settled it (won may still be null on a push). */
   scored: boolean
+  /** false once a better late pick displaced this one from the top set (still graded). */
+  active: boolean
+  /** ISO-8601 (UTC) instant the pick first made the board — its line is locked here. */
+  firstShownAt: string | null
+  /** ISO-8601 (UTC) instant it was displaced, or null if it never was. */
+  bumpedAt: string | null
 }
 
 export interface BatterPlayer {
