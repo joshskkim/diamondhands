@@ -170,14 +170,17 @@ shows the fixed constants are miscalibrated for a specific cohort.
 
 ---
 
-## Phase 4 — Minor-league equivalencies (MLEs)
+## Phase 4 — Minor-league equivalencies (MLEs)   ✅ CORE BUILT (ingestion + wiring remain)
 
-Fills a real hole: call-ups/rookies currently fall back to league average. Translate MiLB lines to
-MLB-equivalent rates via level/park/age multipliers; feed as the prior for players lacking MLB history.
-Highest ingestion cost (MiLB stats via MLB Stats API / pybaseball + level factors). Small, noisy slice
-of the slate but the softest prop lines.
-Effort: **Hard (mostly ingestion).** Files: new `commands/backfill_milb.py`, new MLE table migration,
-`projection/prior.py` fallback path.
+Fills a real hole: call-ups/rookies fall back to league average. **Built the translation core**:
+`projection/mle.py` (`translate_rates` + `to_equivalent_season` → a PA-discounted synthetic prior
+season the existing `compute_marcel_prior` consumes; xwOBA left None), `constants.MLE_LEVEL_FACTORS`
++ `MLE_PA_DISCOUNT` (per-level hit/ISO/K multipliers, KATOH/ZiPS-MLE lineage, conservative
+placeholders), and the ingestion primitive `mlb_api.fetch_minor_league_hitting(id, season, sportId)`.
+Tested (level suppression/ordering, K cap, PA discount, HR bound).
+**Remaining (the heavy part):** a `backfill-mle` command to pull MiLB lines for call-ups, and the
+`refresh_priors` wiring to use the MLE prior when a player has no/thin MLB history. Factors are
+unfitted placeholders — treat MLE projections as low-confidence until validated.
 
 ---
 
