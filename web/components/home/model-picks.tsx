@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
-import { Flame } from 'lucide-react'
+import { Flame, Ticket } from 'lucide-react'
 import {
   bestPlaysQueryOptions,
   hitRatesQueryOptions,
@@ -50,6 +50,11 @@ const LONGSHOT_EDGE = 0.08
 const STRONG_EDGE = 0.06
 const STRONG_OVERLAY = 1.15
 const MAX_PICKS = 3
+// The "Lotto of the Day" — one deliberate longshot, model 5–30% with big value (see
+// docs/model-explained.md). It's surfaced as its own card, not in the value grid, so its very
+// different hit rate doesn't read like a Lean. Same gates as the board, minus the prob floor.
+const LOTTO_MIN_PROB = 0.05
+const LOTTO_MAX_PROB = 0.3
 const EXCLUDED_MARKETS = new Set(['pitcher_k', 'pitcher_outs', 'hit'])
 const HIT_RATE_VETO_MIN_N = 15
 // Per-market veto bands: [no OVER below, no UNDER above]. Market-specific because
@@ -119,6 +124,22 @@ function hitRateVeto(p: BestPlay, hitRates: Map<string, HitRate> | undefined): b
   return false
 }
 
+// The "Why" lines for a pick — shared by the value grid and the lotto card so wording stays
+// identical. fairProb is asserted non-null because every caller guards it before calling.
+function buildReasons(p: BestPlay, edge: number, corroboration: string | null): string[] {
+  const reasons = [
+    `Model probability ${pct(p.modelProb)} against a de-vigged market ${pct(p.fairProb!)} — a ${(edge * 100).toFixed(1)}-point edge after stripping the book's margin from both sides.`,
+    `${signedPct(p.evPct)} expected value per unit at the best available price, ${formatAmerican(p.priceAmerican)} (${bookLabel(p.bestBook)}).`,
+  ]
+  if (p.modelProb < 0.5) {
+    reasons.push(
+      'A longshot by design — it makes the board because the price overpays the model probability, not because it should usually hit.',
+    )
+  }
+  if (corroboration) reasons.push(corroboration)
+  return reasons
+}
+
 function buildPicks(
   plays: BestPlay[],
   sim: MostLikely | undefined,
@@ -139,17 +160,6 @@ function buildPicks(
     if (totals.veto) continue
     const corroboration = totals.note ?? simPropNote(p, sim)
 
-    const reasons = [
-      `Model probability ${pct(p.modelProb)} against a de-vigged market ${pct(p.fairProb)} — a ${(edge * 100).toFixed(1)}-point edge after stripping the book's margin from both sides.`,
-      `${signedPct(p.evPct)} expected value per unit at the best available price, ${formatAmerican(p.priceAmerican)} (${bookLabel(p.bestBook)}).`,
-    ]
-    if (p.modelProb < 0.5) {
-      reasons.push(
-        'A longshot by design — it makes the board because the price overpays the model probability, not because it should usually hit.',
-      )
-    }
-    if (corroboration) reasons.push(corroboration)
-
     candidates.push({
       play: p,
       edge,
@@ -158,7 +168,7 @@ function buildPicks(
       // Edge is the primary signal; EV breaks ties toward better prices, and
       // independent sim agreement nudges a pick up the board.
       score: edge + 0.5 * p.evPct + (corroboration ? 0.02 : 0),
-      reasons,
+      reasons: buildReasons(p, edge, corroboration),
     })
   }
 
@@ -173,6 +183,37 @@ function buildPicks(
     if (picks.length === MAX_PICKS) break
   }
   return picks
+}
+
+// The single best longshot for the "Lotto of the Day" card. Same gates as the board (value,
+// price, sim & traffic-light vetoes) but the model probability must sit in the lotto band — these
+// are the plays the grid's MIN_MODEL_PROB floor would otherwise reserve for a quiet "Lean".
+function pickLotto(
+  plays: BestPlay[],
+  sim: MostLikely | undefined,
+  hitRates: Map<string, HitRate> | undefined,
+): ModelPick | null {
+  let best: ModelPick | null = null
+
+  for (const p of plays) {
+    if (EXCLUDED_MARKETS.has(p.market)) continue
+    if (p.fairProb == null) continue
+    if (p.modelProb < LOTTO_MIN_PROB || p.modelProb > LOTTO_MAX_PROB) continue
+    const edge = p.modelProb - p.fairProb
+    if (edge < LONGSHOT_EDGE || edge > MAX_EDGE) continue // longshots need the bigger edge
+    if (p.evPct < MIN_EV) continue
+    if (hitRateVeto(p, hitRates)) continue
+
+    const totals = simTotalsCheck(p, sim)
+    if (totals.veto) continue
+    const corroboration = totals.note ?? simPropNote(p, sim)
+
+    const score = edge + 0.5 * p.evPct + (corroboration ? 0.02 : 0)
+    if (best == null || score > best.score) {
+      best = { play: p, edge, score, strong: false, reasons: buildReasons(p, edge, corroboration) }
+    }
+  }
+  return best
 }
 
 // ── presentation ──────────────────────────────────────────────────────────────
@@ -265,6 +306,53 @@ function PickCard({
   )
 }
 
+function LottoCard({ pick, outcome }: { pick: ModelPick; outcome?: PickOutcome }) {
+  const p = pick.play
+  return (
+    <div className="rounded-xl border border-amber-400/30 bg-gradient-to-br from-amber-500/10 to-[#0e1015] px-5 py-4 flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <Ticket className="h-4 w-4 text-amber-300" aria-hidden="true" />
+        <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-200 border-amber-400/40 bg-amber-500/10">
+          Lotto
+        </span>
+        {outcome && <OutcomeBadge outcome={outcome} />}
+        <Link
+          href={`/mlb/games/${p.gameId}`}
+          className="ml-auto font-mono text-xs text-zinc-500 hover:text-amber-300 transition-colors"
+        >
+          {p.matchup}
+        </Link>
+      </div>
+
+      <div className="flex items-baseline justify-between gap-3">
+        {p.playerId ? (
+          <Link
+            href={`/mlb/players/${p.playerId}`}
+            className="text-base font-bold tracking-tight text-zinc-100 hover:text-amber-200 transition-colors"
+          >
+            {pickTitle(p)}
+          </Link>
+        ) : (
+          <span className="text-base font-bold tracking-tight text-zinc-100">{pickTitle(p)}</span>
+        )}
+        <span className="shrink-0 font-mono tabular-nums text-sm text-amber-200">
+          {formatAmerican(p.priceAmerican)}{' '}
+          <span className="text-zinc-500 text-xs">{bookLabel(p.bestBook)}</span>
+        </span>
+      </div>
+
+      <div className="grid grid-cols-4 gap-2">
+        <Stat label="Model" value={pct(p.modelProb)} className="text-zinc-200" />
+        <Stat label="Fair" value={p.fairProb == null ? '—' : pct(p.fairProb)} className="text-zinc-400" />
+        <Stat label="Edge" value={signedPct(pick.edge)} className="text-emerald-400" />
+        <Stat label="EV" value={signedPct(p.evPct)} className="text-emerald-300" />
+      </div>
+
+      <WhyDisclosure reasons={pick.reasons} />
+    </div>
+  )
+}
+
 function PassCard({ surveyed }: { surveyed: number }) {
   return (
     <div className="bg-[#0e1015] border border-white/10 rounded-xl px-6 py-8 text-center">
@@ -312,7 +400,11 @@ export function ModelPicks() {
   const hrByKey = new Map<string, number | null>(
     (results?.batters ?? []).map((b) => [`${b.playerId}:${b.gameId}`, b.homeRuns]),
   )
-  const picks = buildPicks(rows, sim, hitRates)
+  // Pull the lotto first so it shows only on its own card, then build the value grid from the rest
+  // (a promoted longshot never reads as both a "Lotto" and a quiet "Lean").
+  const lotto = pickLotto(rows, sim, hitRates)
+  const gridRows = lotto ? rows.filter((p) => p !== lotto.play) : rows
+  const picks = buildPicks(gridRows, sim, hitRates)
 
   return (
     <section className="mb-10">
@@ -358,6 +450,21 @@ export function ModelPicks() {
               outcome={modelPlayOutcome(pick.play, gamesById.get(pick.play.gameId), hrByKey)}
             />
           ))}
+        </div>
+      )}
+
+      {!isPending && !isError && lotto && (
+        <div className="mt-6">
+          <div className="mb-2 flex items-baseline gap-2">
+            <h3 className="text-sm font-semibold tracking-tight text-amber-200">Lotto of the Day</h3>
+            <span className="text-xs text-zinc-500">— one deliberate longshot, big payout</span>
+          </div>
+          <div className="lg:max-w-xl">
+            <LottoCard
+              pick={lotto}
+              outcome={modelPlayOutcome(lotto.play, gamesById.get(lotto.play.gameId), hrByKey)}
+            />
+          </div>
         </div>
       )}
     </section>
