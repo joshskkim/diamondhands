@@ -283,6 +283,30 @@ PT_WINDOW: int = 20            # team games of lineup history to look back over
 PT_RECENCY_DECAY: float = 0.90  # geometric weight per game into the past
 
 # ---------------------------------------------------------------------------
+# Minor-league equivalencies (MLEs)   [Phase 4]
+# ---------------------------------------------------------------------------
+# A debutant / recent call-up has no MLB history, so the Marcel prior falls back to the
+# flat league mean — the softest projection on the board exactly where prop lines are
+# also softest. MLEs translate a player's minor-league line to an MLB-equivalent one by
+# level: moving up, hit rate and ISO fall and K rate rises (tougher pitching). The
+# translated line feeds the prior as a synthetic prior season.
+#
+# Per-component multipliers by level (KATOH / Szymborski-MLE lineage). Conservative
+# PLACEHOLDERS — not fitted on our data; treat MLE projections as low-confidence and
+# validate before leaning on them. Keyed by level code (see mle.LEVEL_BY_SPORT_ID).
+MLE_LEVEL_FACTORS: dict[str, dict[str, float]] = {
+    #            hit-rate   ISO     K-rate
+    "AAA": {"hit": 0.92, "iso": 0.85, "k": 1.10},
+    "AA":  {"hit": 0.89, "iso": 0.78, "k": 1.18},
+    "A+":  {"hit": 0.86, "iso": 0.72, "k": 1.25},
+    "A":   {"hit": 0.83, "iso": 0.66, "k": 1.32},
+    "R":   {"hit": 0.80, "iso": 0.60, "k": 1.40},  # Rookie/complex
+}
+# How much to trust an MLE-derived prior season vs a real MLB one: scale its effective
+# PA down so a translated AAA line regresses harder toward league than a true MLB line.
+MLE_PA_DISCOUNT: float = 0.50
+
+# ---------------------------------------------------------------------------
 # Switch hitter rule (apply in pitcher_adj and park_adj)
 # ---------------------------------------------------------------------------
 # Treat switch hitters as batting from the side opposite the pitcher's throws:

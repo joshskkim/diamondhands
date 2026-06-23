@@ -200,3 +200,38 @@ def fetch_pitcher_season_stats(player_id: int, season: int) -> dict | None:
         "innings_pitched": _parse_innings(stat.get("inningsPitched")),
         "games_finished": stat.get("gamesFinished"),
     }
+
+
+def fetch_minor_league_hitting(player_id: int, season: int, sport_id: int) -> dict | None:
+    """One player's minor-league hitting line for a season at a level (sportId).
+
+    sportId codes: 11 AAA, 12 AA, 13 High-A, 14 Low-A, 16 Rookie (see mle.LEVEL_BY_SPORT_ID).
+    Returns the counting totals {pa, ab, hits, hr, tb, k} or None when the player has no
+    hitting split at that level/season (or on a network error). Used by the MLE pipeline
+    to project call-ups with no MLB history.
+    """
+    try:
+        resp = requests.get(
+            f"{MLB_BASE}/people/{player_id}/stats",
+            params={"stats": "season", "group": "hitting",
+                    "season": season, "sportId": sport_id},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        splits = (resp.json().get("stats") or [{}])[0].get("splits") or []
+        if not splits:
+            return None
+        stat = splits[0].get("stat", {})
+    except Exception:  # noqa: BLE001 — one bad fetch shouldn't break the pipeline
+        return None
+    pa = stat.get("plateAppearances")
+    if not pa:
+        return None
+    return {
+        "pa": pa,
+        "ab": stat.get("atBats"),
+        "hits": stat.get("hits"),
+        "hr": stat.get("homeRuns"),
+        "tb": stat.get("totalBases"),
+        "k": stat.get("strikeOuts"),
+    }
