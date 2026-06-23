@@ -273,6 +273,15 @@ PA_BY_ORDER: dict[int, float] = {
 # every projected starter, same as v1.
 EXPECTED_PA_PER_STARTER: float = 4.0
 
+# Playing-time / start-probability model (Phase 2c). Forward-looking, pre-lineup
+# estimate of P(start) and expected PA from each player's RECENT usage (game_lineups
+# over the team's last PT_WINDOW games), so picks can be made before lineups post and
+# expected PA isn't a flat 4.0. Recency-weighted (most recent game weight 1, decaying
+# by PT_RECENCY_DECAY each game back) so a player just moved into/out of the lineup is
+# reflected quickly.
+PT_WINDOW: int = 20            # team games of lineup history to look back over
+PT_RECENCY_DECAY: float = 0.90  # geometric weight per game into the past
+
 # ---------------------------------------------------------------------------
 # Switch hitter rule (apply in pitcher_adj and park_adj)
 # ---------------------------------------------------------------------------
