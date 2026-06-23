@@ -134,12 +134,13 @@ starter's exit). The net-new piece — dampening offense in blowouts (stars pull
 is speculative and calibration-sensitive, and would ship OFF-by-default needing a backtest to enable.
 Deferred until there's evidence it's worth the complexity; revisit via run-distribution calibration (CRPS).
 
-### 2c. Playing-time / lineup-slot projection
-Underrated for betting (a projection is worthless if the guy sits or bats 8th). For posted lineups we
-already use batting-order PA; add a **forward-looking / pre-lineup** PA-by-slot + start-probability model
-so picks can be made before lineups drop, and feed expected PA into the sim. Build from roster/recent
-usage; `PA_BY_ORDER` already exists as the deterministic backbone.
-Effort: **Medium.** Files: new `commands/refresh_roles.py` or extend lineups refresh; `runner.py`.
+### 2c. Playing-time / lineup-slot projection  ✅ BUILT (model + loader; runner wiring is the follow-up)
+Underrated for betting (a projection is worthless if the guy sits or bats 8th). Built
+`ingester/projection/playing_time.py`: recency-weighted `start_probability` / `compute_playing_time`
+(expected PA via `PA_BY_ORDER`) + `project_playing_time(conn, team_id, as_of)` reading recent
+`game_lineups` usage; `constants.PT_WINDOW`/`PT_RECENCY_DECAY`. Smoke-tested on the dev DB.
+**Follow-up:** wire it into `runner.py` so unconfirmed games project pre-lineup (replacing the flat
+4.0-PA deferral) and feed expected PA into the sim — changes live behavior, so do it deliberately.
 
 ---
 
