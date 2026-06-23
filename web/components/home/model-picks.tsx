@@ -504,6 +504,47 @@ export function ModelPicks() {
     (p) => p.bumpedAt != null && !liveKeys.has(liveKey(p)),
   )
 
+  let picksContent
+  if (isPending) {
+    picksContent = (
+      <div className="grid gap-4 lg:grid-cols-3">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Skeleton key={i} className="h-44 w-full rounded-xl" />
+        ))}
+      </div>
+    )
+  } else if (isError) {
+    picksContent = (
+      <p className="text-sm text-zinc-500 bg-[#0e1015] border border-white/10 rounded-xl px-5 py-4">
+        Couldn&apos;t load priced lines, so picks are unavailable right now.
+      </p>
+    )
+  } else if (rows.length === 0) {
+    picksContent = <NoOddsCard />
+  } else if (picks.length === 0) {
+    picksContent = <PassCard surveyed={rows.length} />
+  } else {
+    picksContent = (
+      <div
+        className={cn(
+          'grid gap-4',
+          picks.length === 1 && 'lg:max-w-xl',
+          picks.length === 2 && 'lg:grid-cols-2',
+          picks.length >= 3 && 'lg:grid-cols-3',
+        )}
+      >
+        {picks.map((pick, i) => (
+          <PickCard
+            key={`${pick.play.gameId}-${pick.play.market}-${pick.play.selection}`}
+            pick={pick}
+            rank={i + 1}
+            outcome={modelPlayOutcome(pick.play, gamesById.get(pick.play.gameId), hrByKey)}
+          />
+        ))}
+      </div>
+    )
+  }
+
   return (
     <section className="mb-10">
       <div className="mb-3">
@@ -517,58 +558,9 @@ export function ModelPicks() {
         </p>
       </div>
 
-      {isPending ? (
-        <div className="grid gap-4 lg:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-44 w-full rounded-xl" />
-          ))}
-        </div>
-      ) : isError ? (
-        <p className="text-sm text-zinc-500 bg-[#0e1015] border border-white/10 rounded-xl px-5 py-4">
-          Couldn&apos;t load priced lines, so picks are unavailable right now.
-        </p>
-      ) : rows.length === 0 ? (
-        <NoOddsCard />
-      ) : picks.length === 0 ? (
-        <PassCard surveyed={rows.length} />
-      ) : (
-        <div
-          className={cn(
-            'grid gap-4',
-            picks.length === 1 && 'lg:max-w-xl',
-            picks.length === 2 && 'lg:grid-cols-2',
-            picks.length >= 3 && 'lg:grid-cols-3',
-          )}
-        >
-          {picks.map((pick, i) => (
-            <PickCard
-              key={`${pick.play.gameId}-${pick.play.market}-${pick.play.selection}`}
-              pick={pick}
-              rank={i + 1}
-              outcome={modelPlayOutcome(pick.play, gamesById.get(pick.play.gameId), hrByKey)}
-            />
-          ))}
-        </div>
-      )}
+      {picksContent}
 
-<<<<<<< HEAD
-      {!isPending && !isError && lotto && (
-        <div className="mt-6">
-          <div className="mb-2 flex items-baseline gap-2">
-            <h3 className="text-sm font-semibold tracking-tight text-amber-200">Lotto of the Day</h3>
-            <span className="text-xs text-zinc-500">— one deliberate longshot, big payout</span>
-          </div>
-          <div className="lg:max-w-xl">
-            <LottoCard
-              pick={lotto}
-              outcome={modelPlayOutcome(lotto.play, gamesById.get(lotto.play.gameId), hrByKey)}
-            />
-          </div>
-        </div>
-      )}
-=======
       <EarlierPicks picks={earlier} gamesById={gamesById} hrByKey={hrByKey} />
->>>>>>> 5e71f02 (Adjust nightly timeline to accomodate user viewing and account for later games for picks)
     </section>
   )
 }
