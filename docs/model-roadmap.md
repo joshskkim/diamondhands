@@ -149,19 +149,24 @@ Underrated for betting (a projection is worthless if the guy sits or bats 8th). 
 Real but lift concentrated on tails / low-sample; likely Brier-neutral. Build for correctness + résumé
 craft, **not** as a claimed edge. Don't let these eat the roadmap ahead of Phases 0–1.
 
-### 3a. Aging curve
-**No new ingestion needed** — `players.birth_date` already exists (V29) with `backfill-birthdates`.
-Build a component-specific curve (separate for power / contact / K%), ideally a GAM/spline with a
-survivorship-bias correction (not naive delta), applied in the Marcel blend. Concentrate expectations on
-age tails (<24, >33).
-Effort: **Medium.** Files: `projection/prior.py`, `commands/refresh_priors.py`, `projection/constants.py`.
+### 3a. Aging curve  ✅ BUILT (component-specific, env-gated OFF)
+**No new ingestion needed** — `players.birth_date` already exists (V29). Built a component-specific
+multiplicative age factor (`aging_factor` in `prior.py`) on the regressed xwOBA (peak ~27) and ISO
+(peak ~29, slower decline); K-rate deliberately unaged. `constants.AGING_*`, gated
+`DIAMOND_AGING_ENABLED` (OFF). `refresh_priors` loads baseball age (birth_date as of Jul 1) and passes
+it through, so enabling is a flag flip. Effect concentrates on age tails. **Enable step:** leak-free
+backtest to fit the coefficients (current values are conservative placeholders) + re-tune. A GAM/spline
+with survivorship correction is a possible later refinement over the linear-by-peak form shipped here.
 
-### 3b. Empirical-Bayes reliability-weighted shrinkage
-Replace fixed Marcel regression constants with per-component EB shrinkage that scales to each player's
-own sample reliability. Most defensible *method* upgrade, zero new data. Note lift overlaps 3a / Phase
-2c / MLEs — don't double-count. Likely Brier-neutral → frame as "principled prior / better-calibrated
-uncertainty."
-Effort: **Medium.** Files: `projection/prior.py`, `metrics.py` (stabilization estimates), backtest.
+### 3b. Empirical-Bayes reliability-weighted shrinkage  🟢 ASSESSED — already effectively in place
+On reading the code: the Marcel `regression_pa` constants (`MARCEL_REGRESSION_PA_{XWOBA,K,ISO}`) are
+**already out-of-sample-tuned, per-metric shrinkage** — fit on 2023/24→2025 (v2.6.1) precisely so each
+metric is "regressed in proportion to how slowly it stabilizes" (K light, ISO heavy). That is fixed-form
+empirical Bayes (`regression_pa ≈ σ²_within/σ²_between`), and Marcel already scales the shrinkage by each
+player's PA (the dominant reliability signal). A further per-player EB layer needs a new population-
+variance calibration step for what the critic predicted is Brier-neutral, redundant-with-3a/2c lift.
+**Decision: not built** (avoid speculative redundant code on the live prior); revisit only if a backtest
+shows the fixed constants are miscalibrated for a specific cohort.
 
 ---
 
