@@ -118,23 +118,21 @@ optional `db/migrations/V56__*.sql`.
 These directly improve the Phase 1 niche by fixing where the sim is weakest (late innings / context),
 per the creative expert's "phantom PA" and starter-extrapolation critiques.
 
-### 2a. Arsenal-conditioned times-through-order (TTO) penalty
+### 2a. Arsenal-conditioned times-through-order (TTO) penalty  ✅ BUILT (mechanism, env-gated OFF)
 Robust, well-replicated, exogenous (low leak risk). Batter wOBA rises each turn through the order; the
 penalty is **larger for fastball-heavy starters** (~−47 wOBA pts by 3rd time vs ~−18 for low-FB arms).
-Build: compute TTO bucket = PA index / lineup turn (already have order + per-PA structure in the sim),
-scale the per-PA batter rate by a penalty conditioned on the starter's fastball share (we already ingest
-pitch arsenals via `matchup.py`). Apply inside `game_sim.py`'s inning loop and in `batter_model.py` for
-the marginal late-PA rate. Validate leak-free; claim **better projection**, not betting edge (pitcher
-props have no demonstrated edge yet — see memory).
-Effort: **Medium.** Files: `game_sim.py`, `projection/matchup.py`/`constants.py`, backtest flag.
+Built: `tto_multipliers`/`_apply_tto_probs`/`_tto_cum_stack` in `game_sim.py`; `_sim_team` tracks
+per-sim PAs and selects the 1st/2nd/3rd+ starter matrix per time-through; `simulate_game` threads
+`home/away_starter_fb_share`. `constants.TTO_*`, gated `DIAMOND_TTO_ENABLED` (OFF). Default path is
+bit-for-bit unchanged. **Enable step (remaining):** wire actual fb share in `runner.py`, re-tune the
+run-environment calibration, run a leak-free backtest to set the coefficients. Claim **better
+projection**, not betting edge (pitcher props have no demonstrated edge yet — see memory).
 
-### 2b. Bullpen-faced-PA reweighting + blowout/garbage-time realism
-The sim tunes rates to the starter then extrapolates; later PAs really face the bullpen, and blowouts
-pull stars / groove fastballs / sub in bench bats — manufacturing phantom PAs that bias **volume props
-toward overs**. Build: in `game_sim.py`, switch a hitter's rate to the bullpen-faced profile after the
-starter's projected exit (we already resolve bullpen skill, `resolve_pitcher_skill`), and add a simple
-late-game leverage/abandonment rule (cap or down-weight PAs once a sim's run differential is large).
-Effort: **Medium.** Files: `game_sim.py`, `runner.py`. Validate via run-distribution calibration (CRPS).
+### 2b. Bullpen-faced-PA reweighting + blowout/garbage-time realism  ⏸ DEFERRED
+Bullpen-faced reweighting is **already in the sim** (`_sim_team` switches to `bullpen_probs` after the
+starter's exit). The net-new piece — dampening offense in blowouts (stars pulled, leverage collapses) —
+is speculative and calibration-sensitive, and would ship OFF-by-default needing a backtest to enable.
+Deferred until there's evidence it's worth the complexity; revisit via run-distribution calibration (CRPS).
 
 ### 2c. Playing-time / lineup-slot projection
 Underrated for betting (a projection is worthless if the guy sits or bats 8th). For posted lineups we
