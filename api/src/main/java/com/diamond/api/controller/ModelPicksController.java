@@ -2,6 +2,7 @@ package com.diamond.api.controller;
 
 import com.diamond.api.dto.ModelPickResultDto;
 import com.diamond.api.service.ModelPicksService;
+import com.diamond.api.service.SlateService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -21,15 +22,17 @@ import java.util.List;
 public class ModelPicksController {
 
     private final ModelPicksService service;
+    private final SlateService slateService;
 
-    public ModelPicksController(ModelPicksService service) {
+    public ModelPicksController(ModelPicksService service, SlateService slateService) {
         this.service = service;
+        this.slateService = slateService;
     }
 
     @GetMapping
     public List<ModelPickResultDto> picks(
         @RequestParam(required = false)
         @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
-        return service.picks(date != null ? date : LocalDate.now());
+        return service.picks(date != null ? date : slateService.activeSlateDate());
     }
 }

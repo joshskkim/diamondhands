@@ -1,4 +1,4 @@
-import type { BestPlay, ModelPickResult, TodayGame } from './types'
+import type { ModelPickResult, TodayGame } from './types'
 import { MARKET_LABEL, teamForSide } from './odds'
 
 /** The minimal shape a pick title needs — satisfied by both BestPlay (live board)
@@ -128,10 +128,20 @@ export function nrfiOutcome(
   return (lean === 'YRFI') === yrfi ? 'won' : 'lost'
 }
 
+/** The fields live-grading needs — satisfied by both BestPlay (live board) and
+ *  ModelPickResult (persisted, for earlier/bumped picks not yet settled). */
+export interface GradablePlay {
+  market: string
+  side: string
+  line: number | null
+  playerId: number | null
+  gameId: number
+}
+
 /** A Model's Pick graded live: game markets from final scores, HR from batter results.
  *  `hrByKey` is keyed `${playerId}:${gameId}` → the player's home-run count. */
 export function modelPlayOutcome(
-  play: BestPlay,
+  play: GradablePlay,
   game: Pick<TodayGame, 'finalHomeScore' | 'finalAwayScore'> | undefined,
   hrByKey: Map<string, number | null>,
 ): PickOutcome | undefined {

@@ -2,6 +2,7 @@ package com.diamond.api.controller;
 
 import com.diamond.api.dto.PlayerResultsResponse;
 import com.diamond.api.service.ResultsService;
+import com.diamond.api.service.SlateService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -16,9 +17,11 @@ import java.time.LocalDate;
 public class ResultsController {
 
     private final ResultsService service;
+    private final SlateService slateService;
 
-    public ResultsController(ResultsService service) {
+    public ResultsController(ResultsService service, SlateService slateService) {
         this.service = service;
+        this.slateService = slateService;
     }
 
     @GetMapping("/players")
@@ -26,6 +29,6 @@ public class ResultsController {
         @RequestParam(required = false)
         @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
     ) {
-        return service.playerResults(date != null ? date : LocalDate.now());
+        return service.playerResults(date != null ? date : slateService.activeSlateDate());
     }
 }
