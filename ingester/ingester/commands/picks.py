@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from datetime import date, datetime, timedelta, timezone
 
 import requests
@@ -353,15 +354,24 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
                 int(home), int(away), int(prop_val) if prop_val is not None else None,
             )
             # CLV: compare our bet-time de-vigged prob to the closing line. Captured at
-            # scoring (the close exists by now); independent of win/loss.
-            close_am, close_dec, close_fair, captured_at = _closing_quote(
-                conn, game_id, market, side,
-                float(line) if line is not None else None, book, start_time,
-            )
-            clv = (round(close_fair - float(fair_prob), 4)
-                   if close_fair is not None and fair_prob is not None else None)
-            if clv is not None:
-                clv_n += 1
+            # scoring (the close exists by now); independent of win/loss. Isolated in a
+            # SAVEPOINT + try/except: CLV is a measurement nicety and must never roll back
+            # or block the pick's grade (a bad closing-odds read would otherwise poison the
+            # whole scoring transaction). On any failure we record the grade with CLV NULL.
+            close_am = close_dec = close_fair = clv = captured_at = None
+            try:
+                with conn.transaction():  # SAVEPOINT — a read error rolls back only this
+                    close_am, close_dec, close_fair, captured_at = _closing_quote(
+                        conn, game_id, market, side,
+                        float(line) if line is not None else None, book, start_time,
+                    )
+                if close_fair is not None and fair_prob is not None:
+                    clv = round(close_fair - float(fair_prob), 4)
+                    clv_n += 1
+            except Exception as exc:  # noqa: BLE001 — never let CLV break grading
+                close_am = close_dec = close_fair = clv = captured_at = None
+                print(f"[score-picks] CLV capture failed for rank {rank} "
+                      f"(grade still recorded): {exc}", file=sys.stderr)
             conn.execute(
                 "UPDATE model_picks SET result_value=%s, won=%s, scored_at=NOW(), "
                 "close_price_american=%s, close_price_decimal=%s, close_fair_prob=%s, "
