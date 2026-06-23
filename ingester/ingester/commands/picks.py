@@ -244,6 +244,10 @@ def _closing_quote(
     NOTE the de-vigged close uses the pick's single book on both sides, whereas the
     stored bet-time fair_prob came from OddsService's best-of-books de-vig — a small
     vig-basis difference, so CLV here is a close approximation, not an exact line-move.
+
+    Book match is case-insensitive: odds_snapshots.bookmaker stores the lowercase Odds-API
+    key ("fanduel") but model_picks.book is observed title-cased ("FanDuel"); LOWER() on
+    both bridges them so CLV doesn't silently capture nothing on a case mismatch.
     """
     scope = "prop" if market in ("hit", "hr") else "game"
     # player_id must match for props (multiple players share a market/line/book); it is
@@ -253,7 +257,7 @@ def _closing_quote(
         SELECT MAX(captured_at) FROM odds_snapshots
         WHERE game_id = %s AND scope = %s AND player_id IS NOT DISTINCT FROM %s
           AND market = %s AND side = %s
-          AND line IS NOT DISTINCT FROM %s AND bookmaker = %s
+          AND line IS NOT DISTINCT FROM %s AND LOWER(bookmaker) = LOWER(%s)
           AND captured_at < %s
         """,
         (game_id, scope, player_id, market, side, line, book, start_time),
@@ -267,7 +271,7 @@ def _closing_quote(
         """
         SELECT side, price_american, price_decimal FROM odds_snapshots
         WHERE game_id = %s AND scope = %s AND player_id IS NOT DISTINCT FROM %s
-          AND market = %s AND bookmaker = %s
+          AND market = %s AND LOWER(bookmaker) = LOWER(%s)
           AND line IS NOT DISTINCT FROM %s AND captured_at = %s
         """,
         (game_id, scope, player_id, market, book, line, captured_at),
