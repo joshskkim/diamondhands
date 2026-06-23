@@ -15,6 +15,7 @@ import {
 import { accuracyQueryOptions } from '@/lib/api'
 import type { MarketAccuracy } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { QueryError } from '@/components/ui/query-states'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
@@ -48,7 +49,7 @@ function skillClass(s: number | null) {
 
 export function AccuracyBoard() {
   const [days, setDays] = useState<number>(30)
-  const { data, isPending, isError } = useQuery(accuracyQueryOptions(days))
+  const { data, isPending, isError, refetch } = useQuery(accuracyQueryOptions(days))
 
   const markets: MarketAccuracy[] = data?.markets ?? []
 
@@ -90,7 +91,7 @@ export function AccuracyBoard() {
       </div>
 
       {isPending && <div className="text-sm text-zinc-500">Loading accuracy…</div>}
-      {isError && <div className="text-sm text-rose-300">Failed to load accuracy.</div>}
+      {isError && <QueryError message="Couldn’t load the calibration data." onRetry={refetch} />}
       {!isPending && !isError && markets.length === 0 && (
         <div className="text-sm text-zinc-500">
           No accuracy snapshots yet. Run <code className="text-zinc-400">compute-accuracy</code> for a

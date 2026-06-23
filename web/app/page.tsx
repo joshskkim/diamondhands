@@ -10,6 +10,7 @@ import { SlateProjectionsChart } from '@/components/home/slate-projections-chart
 import { GameSelectorBar } from '@/components/game/game-selector-bar'
 import { GamesBadge } from '@/components/games-badge'
 import { ProjectedBadge } from '@/components/projected-badge'
+import { QueryError } from '@/components/ui/query-states'
 import { todayGamesQueryOptions } from '@/lib/api'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -20,7 +21,7 @@ function Skeleton({ className = '' }: { className?: string }) {
 
 export default function SlatePage() {
   const today = format(new Date(), 'EEEE, MMMM d, yyyy')
-  const { data: games = [], isPending, isError } = useQuery(todayGamesQueryOptions())
+  const { data: games = [], isPending, isError, refetch } = useQuery(todayGamesQueryOptions())
 
   return (
     <main className="max-w-6xl mx-auto w-full px-4 py-8">
@@ -39,9 +40,7 @@ export default function SlatePage() {
       </div>
 
       {isError && (
-        <div className="text-rose-400 text-sm bg-rose-400/10 border border-rose-400/30 rounded-xl p-4">
-          Failed to load today&apos;s slate. Is the API running?
-        </div>
+        <QueryError message="Couldn’t load today’s slate. The API may be unreachable." onRetry={refetch} />
       )}
 
       {!isError && (

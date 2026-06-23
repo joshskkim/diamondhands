@@ -4,6 +4,7 @@ import { format } from 'date-fns'
 import { GameCard } from '@/components/home/game-card'
 import { BatterBoards, GameBoards } from '@/components/home/pick-boards'
 import { usePicks } from '@/components/home/use-picks'
+import { QueryError } from '@/components/ui/query-states'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
@@ -25,7 +26,7 @@ function BoardSkeleton() {
 
 export default function SlatePage() {
   const today = format(new Date(), 'EEEE, MMMM d, yyyy')
-  const { games, picks, isPending, isError, projectionsLoading } = usePicks()
+  const { games, picks, isPending, isError, projectionsLoading, refetch } = usePicks()
 
   const projectedGames = games.filter((g) => g.projection)
   const showBoards = picks.length > 0 || projectedGames.length > 0
@@ -50,9 +51,7 @@ export default function SlatePage() {
       </div>
 
       {isError && (
-        <div className="text-rose-400 text-sm bg-rose-400/10 border border-rose-400/30 rounded-xl p-4">
-          Failed to load today&apos;s slate. Is the API running?
-        </div>
+        <QueryError message="Couldn’t load today’s slate. The API may be unreachable." onRetry={refetch} />
       )}
 
       {!isError && (
