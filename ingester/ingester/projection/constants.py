@@ -448,6 +448,27 @@ OPENER_SEASON_IP_PER_APP_MIN: float = 4.0   # season IP/appearance below this is
 OPENER_RECENT_REAL_STARTS_OVERRIDE: int = 2  # this many real starts in-window vetoes the flag
 
 # ---------------------------------------------------------------------------
+# Times-through-the-order (TTO) penalty   [Phase 2a — env-gated OFF pending backtest]
+# ---------------------------------------------------------------------------
+# A starter loses effectiveness each time through the lineup, and the decay is LARGER
+# for fastball-heavy starters (SABR/Lichtman: ~+47 wOBA pts by the 3rd time through for
+# fastball-heavy arms vs ~+18 for low-fastball arsenals). In the sim we raise the
+# batter's offensive rates (and lower K) on the 2nd and 3rd+ times through the STARTER
+# only (the bullpen is unaffected), scaled by the starter's fastball-usage share.
+#
+# OFF by default: enabling it raises early-inning offense, so the sim's run-environment
+# calibration (tuned to ~4.4 R/9) must be re-tuned and a LEAK-FREE backtest must set
+# these coefficients before TTO is turned on or claimed as an improvement. The defaults
+# below are conservative placeholders, not validated values.
+TTO_ENABLED: bool = os.environ.get("DIAMOND_TTO_ENABLED", "0") == "1"
+TTO_OFFENSE_DELTA_2ND: float = 0.03   # +3% offensive rate, 2nd time through (at league-avg FB share)
+TTO_OFFENSE_DELTA_3RD: float = 0.07   # +7% offensive rate, 3rd+ time through
+TTO_K_RELIEF_FRACTION: float = 0.5    # K rate falls by this fraction of the offensive rise
+TTO_FB_REFERENCE: float = 0.55        # league-avg fastball (4-seam+sinker+cutter) usage share
+TTO_FB_FACTOR_MIN: float = 0.4        # clamp on fb_share / reference so extremes stay bounded
+TTO_FB_FACTOR_MAX: float = 1.8
+
+# ---------------------------------------------------------------------------
 # Probability output
 # ---------------------------------------------------------------------------
 
