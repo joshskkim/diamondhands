@@ -457,6 +457,30 @@ OPENER_SEASON_IP_PER_APP_MIN: float = 4.0   # season IP/appearance below this is
 OPENER_RECENT_REAL_STARTS_OVERRIDE: int = 2  # this many real starts in-window vetoes the flag
 
 # ---------------------------------------------------------------------------
+# Aging curve   [Phase 3a — env-gated OFF pending backtest]
+# ---------------------------------------------------------------------------
+# The Marcel prior is built from prior-season rates but never ages them forward to the
+# target season. Players below their peak age are projected too low, above it too high.
+# We apply a component-specific multiplicative age factor to the projected rate, with
+# peak ages from the aging-curve literature: overall offense (xwOBA) peaks ~27, power
+# (ISO) later ~29 and declines more slowly. K-rate aging is deliberately NOT modeled —
+# the literature is murky and K already rides inside xwOBA.
+#
+# `birth_date` is in the DB (V29) so no new ingestion is needed. OFF by default: this
+# shifts every aged player's projection, so it must be validated leak-free (and the
+# coefficients are conservative placeholders, not fitted values) before being enabled
+# or claimed. Effect concentrates on age tails (<24, >33).
+AGING_ENABLED: bool = os.environ.get("DIAMOND_AGING_ENABLED", "0") == "1"
+AGING_PEAK_AGE_XWOBA: float = 27.0
+AGING_XWOBA_UP_PER_YEAR: float = 0.004    # improvement/yr below peak
+AGING_XWOBA_DOWN_PER_YEAR: float = 0.006  # decline/yr above peak (steeper)
+AGING_XWOBA_CLAMP: tuple[float, float] = (0.90, 1.06)
+AGING_PEAK_AGE_ISO: float = 29.0
+AGING_ISO_UP_PER_YEAR: float = 0.006
+AGING_ISO_DOWN_PER_YEAR: float = 0.007
+AGING_ISO_CLAMP: tuple[float, float] = (0.88, 1.10)
+
+# ---------------------------------------------------------------------------
 # Times-through-the-order (TTO) penalty   [Phase 2a — env-gated OFF pending backtest]
 # ---------------------------------------------------------------------------
 # A starter loses effectiveness each time through the lineup, and the decay is LARGER
