@@ -1,7 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useRef } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Flame, Ticket } from 'lucide-react'
 import {
   bestPlaysQueryOptions,
@@ -9,7 +10,10 @@ import {
   modelPicksQueryOptions,
   mostLikelyQueryOptions,
   playerResultsQueryOptions,
+  queryKeys,
+  reconcileModelPicks,
   todayGamesQueryOptions,
+  type PickKey,
 } from '@/lib/api'
 import type { BestPlay, HitRate, ModelPickResult, MostLikely, TodayGame } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -497,12 +501,54 @@ export function ModelPicks() {
   const gridRows = lotto ? rows.filter((p) => p !== lotto.play) : rows
   const picks = buildPicks(gridRows, sim, hitRates)
 
-  // Bumped picks not currently in the live top set (dedupe by identity in case the
-  // recorded snapshot lags the live board on a refresh).
-  const liveKeys = new Set(picks.map((c) => liveKey(c.play)))
+  // The plays currently on the board: the value grid plus the Lotto (one shown set).
+  const livePlays = [...picks.map((c) => c.play), ...(lotto ? [lotto.play] : [])]
+
+  // "Earlier today" = any recorded pick we genuinely showed that the live board has since
+  // dropped from its top set. We derive this from the live divergence rather than waiting for
+  // the server's bumped_at (which the record-picks cron only sets on its sparse schedule, and
+  // never once a game has started) so a replaced pick surfaces here immediately. The reconcile
+  // POST below mirrors the same decision server-side so the track-record agrees.
+  const liveKeys = new Set(livePlays.map(liveKey))
   const earlier = (recorded ?? []).filter(
-    (p) => p.bumpedAt != null && !liveKeys.has(liveKey(p)),
+    (p) => p.firstShownAt != null && !liveKeys.has(liveKey(p)),
   )
+
+  // Record that divergence server-side so the persisted snapshot (and the track-record that
+  // reads it) agrees with what the board shows — bumping picks a better play displaced and
+  // re-promoting any that returned. Only fires when the live set actually differs from what's
+  // recorded (steady state = no write); the cache eviction + query invalidation then refetch the
+  // reconciled snapshot. Firing on every pre-game view lands the bump before first pitch, so a
+  // displaced pick never has to wait for the sparse cron.
+  const boardLoaded = rows.length > 0
+  const liveSig = livePlays.map(liveKey).sort().join(',')
+  const queryClient = useQueryClient()
+  const reconcile = useMutation({
+    mutationFn: (vars: { activeKeys: PickKey[]; boardLoaded: boolean }) =>
+      reconcileModelPicks(vars.activeKeys, vars.boardLoaded),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.modelPicks() }),
+  })
+  const lastReconciledSig = useRef<string | null>(null)
+  useEffect(() => {
+    if (recorded === undefined || !boardLoaded) return
+    const live = new Set(livePlays.map(liveKey))
+    const needsBump = recorded.some((p) => p.active && !live.has(liveKey(p)))
+    const needsPromote = recorded.some((p) => !p.active && live.has(liveKey(p)))
+    if (!needsBump && !needsPromote) return
+    if (reconcile.isPending || lastReconciledSig.current === liveSig) return
+    lastReconciledSig.current = liveSig
+    reconcile.mutate({
+      activeKeys: livePlays.map((p) => ({
+        gameId: p.gameId,
+        market: p.market,
+        side: p.side,
+        playerId: p.playerId,
+      })),
+      boardLoaded: true,
+    })
+    // livePlays is recomputed each render but its identity is captured by liveSig.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recorded, boardLoaded, liveSig])
 
   let picksContent
   if (isPending) {
@@ -559,6 +605,21 @@ export function ModelPicks() {
       </div>
 
       {picksContent}
+
+      {!isPending && !isError && lotto && (
+        <div className="mt-6">
+          <div className="mb-2 flex items-baseline gap-2">
+            <h3 className="text-sm font-semibold tracking-tight text-amber-200">Lotto of the Day</h3>
+            <span className="text-xs text-zinc-500">— one deliberate longshot, big payout</span>
+          </div>
+          <div className="lg:max-w-xl">
+            <LottoCard
+              pick={lotto}
+              outcome={modelPlayOutcome(lotto.play, gamesById.get(lotto.play.gameId), hrByKey)}
+            />
+          </div>
+        </div>
+      )}
 
       <EarlierPicks picks={earlier} gamesById={gamesById} hrByKey={hrByKey} />
     </section>

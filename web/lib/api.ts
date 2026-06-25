@@ -275,6 +275,27 @@ export function fetchModelPicks(date?: string): Promise<ModelPickResult[]> {
   return apiGet<ModelPickResult[]>(`/api/model-picks${qs ? `?${qs}` : ''}`)
 }
 
+/** Identity of a pick on the live board, matching the server's reconcile PickKey. */
+export interface PickKey {
+  gameId: number
+  market: string
+  side: string
+  playerId: number | null
+}
+
+/**
+ * Tell the server which picks the live board is currently showing so it can record promptly
+ * which earlier picks a better late play has displaced (and re-promote any that returned),
+ * without waiting for the record-picks cron. boardLoaded=false (odds unavailable) is a no-op.
+ */
+export function reconcileModelPicks(
+  activeKeys: PickKey[],
+  boardLoaded: boolean,
+  date?: string,
+): Promise<void> {
+  return apiPost<void>('/api/model-picks/reconcile', { date, activeKeys, boardLoaded })
+}
+
 export function fetchPlayerResults(date?: string): Promise<PlayerResults> {
   const params = new URLSearchParams()
   if (date) params.set('date', date)
