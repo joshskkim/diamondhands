@@ -560,6 +560,21 @@ export function ModelPicks() {
 
       {picksContent}
 
+      {!isPending && !isError && lotto && (
+        <div className="mt-6">
+          <div className="mb-2 flex items-baseline gap-2">
+            <h3 className="text-sm font-semibold tracking-tight text-amber-200">Lotto of the Day</h3>
+            <span className="text-xs text-zinc-500">— one deliberate longshot, big payout</span>
+          </div>
+          <div className="lg:max-w-xl">
+            <LottoCard
+              pick={lotto}
+              outcome={modelPlayOutcome(lotto.play, gamesById.get(lotto.play.gameId), hrByKey)}
+            />
+          </div>
+        </div>
+      )}
+
       <EarlierPicks picks={earlier} gamesById={gamesById} hrByKey={hrByKey} />
     </section>
   )
