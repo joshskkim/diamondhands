@@ -111,8 +111,16 @@ def cmd_daily(args: argparse.Namespace) -> None:
     # Each step is (name, fn, fatal). Only the core path (get the slate, project it) is
     # fatal; enhancement steps (weather, umpires, bullpen, odds, accuracy) warn and continue
     # so one flaky external API can't block the day's projections.
+    #
+    # The quick loop re-runs daily-slate first: probable pitchers are absent until ~24h
+    # (often only a few hours) before first pitch, and daily-slate is the ONLY command that
+    # persists games.{home,away}_probable_pitcher_id. Without it, a late game whose probable
+    # posts after the 9am full run stays "missing probable pitcher" and the projector skips
+    # it all day — so late (e.g. West Coast night) games never got projected. It's idempotent
+    # and non-fatal so a flaky MLB API call can't block the (fatal) project step.
     if getattr(args, "quick", False):
         steps = [
+            ("daily-slate", cmd_daily_slate, False),
             ("refresh-lineups", cmd_refresh_lineups, False),
             ("project", cmd_project, True),
             ("refresh-odds", cmd_refresh_odds, False),
