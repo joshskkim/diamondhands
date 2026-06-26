@@ -414,6 +414,9 @@ export interface PropBoardPick {
   /** Fence distance/wall height on the batter's pull side; null for switch hitters. */
   pullFenceFt: number | null
   pullWallFt: number | null
+  /** Projected HR carry (ft) in this game's park/weather — the long-ball-upside axis on the
+   *  HR card. Orthogonal to the HR likelihood; null when the batter has no HR-distance sample. */
+  hrDistanceFt: number | null
   rateL10: number | null
   rateSeason: number | null
   nSeason: number | null

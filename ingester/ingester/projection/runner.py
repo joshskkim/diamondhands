@@ -34,7 +34,9 @@ from ingester.projection.workload import (
 from ingester.projection.constants import (
     DEAD_GAME_STATUSES,
     EXPECTED_PA_PER_STARTER,
+    HR_DISTANCE_SHRINK_HR,
     LEAGUE_BB_PER_PA,
+    LEAGUE_HR_DISTANCE_P90_FT,
     LINEUP_SIZE_HITTERS,
     LINEUP_STARTERS,
     MIN_PLATOON_PA,
@@ -484,6 +486,30 @@ def _load_batted_ball_profile(
     )
 
 
+def _shrunk_hr_distance(p90: float, hr_n: float) -> float:
+    """Batter's p90 HR distance regressed toward the league p90 by sample size (thin samples
+    lean league-average, big samples keep their own tail). Pure — unit-tested."""
+    return (hr_n * p90 + HR_DISTANCE_SHRINK_HR * LEAGUE_HR_DISTANCE_P90_FT) / (
+        hr_n + HR_DISTANCE_SHRINK_HR
+    )
+
+
+def _projected_hr_carry_ft(
+    conn: psycopg.Connection, player_id: int, season: int, d_carry: float
+) -> float | None:
+    """Projected HR carry for this game: the batter's shrunk p90 HR distance plus today's
+    park/weather carry delta (feet). None when the batter has no measured HR-distance sample
+    — no power signal to surface."""
+    row = conn.execute(
+        "SELECT hr_n, p90_distance_ft FROM batter_hr_distance "
+        "WHERE player_id = %s AND season = %s",
+        (player_id, season),
+    ).fetchone()
+    if row is None or row[1] is None:
+        return None
+    return round(_shrunk_hr_distance(float(row[1]), float(row[0])) + d_carry, 1)
+
+
 def _load_pitcher_splits(
     conn: psycopg.Connection, pitcher_id: int, season: int
 ) -> list[PitcherHandSplit]:
@@ -678,6 +704,7 @@ def _upsert_batter_projection(
     lineup_confirmed: bool,
     matchup_xwoba: float | None,
     matchup_quality: str | None,
+    hr_distance_ft: float | None,
 ) -> None:
     conn.execute(
         """
@@ -690,6 +717,7 @@ def _upsert_batter_projection(
             pitcher_data_quality,
             lineup_position, lineup_confirmed,
             matchup_xwoba, matchup_quality,
+            hr_distance_ft,
             computed_at
         )
         VALUES (
@@ -701,6 +729,7 @@ def _upsert_batter_projection(
             %s,
             %s, %s,
             %s, %s,
+            %s,
             NOW()
         )
         ON CONFLICT (game_id, player_id) DO UPDATE SET
@@ -724,6 +753,7 @@ def _upsert_batter_projection(
             lineup_confirmed      = EXCLUDED.lineup_confirmed,
             matchup_xwoba         = EXCLUDED.matchup_xwoba,
             matchup_quality       = EXCLUDED.matchup_quality,
+            hr_distance_ft        = EXCLUDED.hr_distance_ft,
             computed_at           = NOW()
         """,
         (
@@ -749,6 +779,7 @@ def _upsert_batter_projection(
             lineup_confirmed,
             matchup_xwoba,
             matchup_quality,
+            hr_distance_ft,
         ),
     )
 
@@ -972,6 +1003,10 @@ def _project_team_side(
             _effective_bat_side(hitter.bats, pitcher_throws),
             d_carry,
         )
+        # Long-ball-upside tiebreaker: how far this batter's HR would carry in today's park
+        # & weather (his shrunk p90 + the carry delta). Orthogonal to p_hr — used only to
+        # rank HR picks by their shot at the day's longest HR.
+        hr_distance_ft = _projected_hr_carry_ft(conn, hitter.player_id, season, d_carry)
 
         # v2.1: the matchup drives the batter's hit/K/HR rates and is stored for audit/UI.
         matchup = _resolve_matchup(
@@ -1016,6 +1051,7 @@ def _project_team_side(
             hitter.lineup_confirmed,
             matchup.xwoba,
             matchup.quality,
+            hr_distance_ft,
         )
         summary.batter_rows += 1
 
