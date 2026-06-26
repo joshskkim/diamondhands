@@ -50,6 +50,9 @@ public record PropBoardPickDto(
     Double avgLaunchSpeed,
     Double pullFenceFt,
     Double pullWallFt,
+    // Projected HR carry (ft) in this game's park/weather: the long-ball-upside axis on the
+    // HR card. Orthogonal to {@code prob} (HR likelihood); null when no HR-distance sample.
+    Double hrDistanceFt,
     Double rateL10,
     Double rateSeason,
     Integer nSeason,

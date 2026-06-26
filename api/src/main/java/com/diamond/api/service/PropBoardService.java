@@ -411,6 +411,7 @@ public class PropBoardService {
             r.stadium(),
             r.bats(), r.pullPct(), r.fbPct(), r.avgLaunchSpeed(),
             pullFence, pullWall,
+            r.hrDistanceFt(),
             rateFor(m.key(), rates, true),
             rateFor(m.key(), rates, false),
             rates == null ? null : rates.nSeason(),
