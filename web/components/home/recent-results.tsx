@@ -1,8 +1,9 @@
 'use client'
 
 import Link from 'next/link'
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { History } from 'lucide-react'
+import { ChevronDown, ChevronRight, History } from 'lucide-react'
 import { format } from 'date-fns'
 import { modelPicksQueryOptions } from '@/lib/api'
 import type { ModelPickResult } from '@/lib/types'
@@ -58,6 +59,7 @@ function ResultRow({ p }: { p: ModelPickResult }) {
  * the running track record. Hidden entirely until a prior slate has graded picks.
  */
 export function RecentResults() {
+  const [showEarlier, setShowEarlier] = useState(false)
   const slate = easternDateStr(-1)
   const { data } = useQuery(modelPicksQueryOptions(slate))
   const picks = data ?? []
@@ -67,6 +69,11 @@ export function RecentResults() {
 
   const won = settled.filter((p) => p.won === true).length
   const lost = settled.filter((p) => p.won === false).length
+
+  // Picks arrive active-first (rank ASC), so the leading three are the final board; the
+  // rest are earlier plays bumped by better late entries — collapsed behind a toggle.
+  const visible = picks.slice(0, 3)
+  const earlier = picks.slice(3)
 
   return (
     <section className="mb-10">
@@ -82,10 +89,30 @@ export function RecentResults() {
         </p>
       </div>
       <div className="grid gap-2">
-        {picks.map((p) => (
+        {visible.map((p) => (
           <ResultRow key={`${p.gameId}-${p.market}-${p.side}-${p.playerId ?? ''}`} p={p} />
         ))}
       </div>
+      {earlier.length > 0 && (
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={() => setShowEarlier((o) => !o)}
+            aria-expanded={showEarlier}
+            className="inline-flex items-center gap-1 text-[11px] uppercase tracking-[0.12em] font-medium text-zinc-500 hover:text-cyan-400 transition-colors"
+          >
+            {showEarlier ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            {showEarlier ? 'Hide earlier picks' : `Show ${earlier.length} earlier pick${earlier.length === 1 ? '' : 's'}`}
+          </button>
+          {showEarlier && (
+            <div className="mt-2 grid gap-2">
+              {earlier.map((p) => (
+                <ResultRow key={`${p.gameId}-${p.market}-${p.side}-${p.playerId ?? ''}`} p={p} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </section>
   )
 }
