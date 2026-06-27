@@ -397,6 +397,11 @@ export interface PropBoardPick {
   opposingPitcher: string | null
   /** 'matchup' | 'overall' | 'league_avg' */
   pitcherDataQuality: string | null
+  /** Opposing starter's season walk rate (per PA, BF-weighted across handedness) — the
+   *  walk card's driver. Null for a TBD starter or one with no skill row. */
+  opposingPitcherBbRate: number | null
+  /** Opposing starter's season K rate (per PA) — lets the walk card flag a contact arm. */
+  opposingPitcherKRate: number | null
   matchupXwoba: number | null
   /** 'matchup' | 'fallback_overall' */
   matchupQuality: string | null

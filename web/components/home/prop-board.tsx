@@ -29,6 +29,17 @@ const ADJ_NOTEWORTHY = 0.03
 // actual distance in tonight's park/weather, so a masher in a dead park can drop below it.
 const LONG_BALL_UPSIDE_FT = 430
 
+// League-average pitcher rates (per PA) for framing the walk card's control narrative.
+// Mirror the model's constants in ingester/ingester/projection/constants.py.
+const LEAGUE_PITCHER_BB_RATE = 0.085
+const LEAGUE_PITCHER_K_RATE = 0.225
+// How far the pitcher's walk rate must sit from league (±) before we call it wildness or
+// strong control rather than league-average — below this it's noise, not narrative.
+const BB_CONTROL_BAND = 0.15
+// A starter whose K rate is this far below league is a pitch-to-contact arm — worth noting
+// on the walk card since contact pitchers tend not to give away free passes.
+const CONTACT_ARM_BAND = 0.15
+
 const MARKET_META: Record<string, { chip: string; verb: string }> = {
   hit: { chip: 'Hit', verb: 'to record a hit' },
   hr: { chip: 'Home Run', verb: 'to homer' },
@@ -71,6 +82,29 @@ function ordinal(n: number) {
   return n + (s[(v - 20) % 10] ?? s[v] ?? s[0])
 }
 
+// The walk card's reasoning: the opposing starter's control. Drawing a walk is mostly a
+// function of how freely the pitcher gives them away, so we frame his walk rate against the
+// league and characterize him — wild (tailwind for the over), strong control (headwind), or
+// league-average. A notably low K rate flags a pitch-to-contact arm, which usually means
+// even fewer free passes.
+function walkControlReason(pitcher: string, bbRate: number, kRate: number | null): string {
+  const delta = bbRate / LEAGUE_PITCHER_BB_RATE - 1
+  const rel = `${signedPctFromAdj(bbRate / LEAGUE_PITCHER_BB_RATE)} vs. the league average`
+  let read: string
+  if (delta >= BB_CONTROL_BAND) {
+    read = `${rel}, so he hands out free passes (a tailwind for this over)`
+  } else if (delta <= -BB_CONTROL_BAND) {
+    read = `${rel} — strong control, so he rarely walks anyone (a headwind here)`
+  } else {
+    read = `${rel}, roughly league-average control`
+  }
+  const contact =
+    kRate != null && kRate <= LEAGUE_PITCHER_K_RATE * (1 - CONTACT_ARM_BAND)
+      ? ` He's a pitch-to-contact arm (${pct(kRate)} K rate), which tends to mean even fewer walks.`
+      : ''
+  return `Faces ${pitcher}: he walks ${pct(bbRate)} of batters — ${read}.${contact}`
+}
+
 // The reasoning bullets, built from the projection's own factors — no odds required.
 function buildReasons(p: PropBoardPick): string[] {
   const reasons: string[] = []
@@ -84,9 +118,11 @@ function buildReasons(p: PropBoardPick): string[] {
   }
 
   if (p.opposingPitcher) {
-    // matchup xwOBA is a hit/power signal — irrelevant to drawing a walk, so the
-    // walk card just names the pitcher.
-    if (p.market !== 'bb' && p.matchupXwoba != null) {
+    // The walk card's driver is the pitcher's CONTROL, not matchup xwOBA (a hit/power
+    // signal, irrelevant to drawing a walk). The hit/HR/K cards keep the xwOBA line.
+    if (p.market === 'bb' && p.opposingPitcherBbRate != null) {
+      reasons.push(walkControlReason(p.opposingPitcher, p.opposingPitcherBbRate, p.opposingPitcherKRate))
+    } else if (p.market !== 'bb' && p.matchupXwoba != null) {
       const basis =
         p.matchupQuality === 'matchup'
           ? 'his swing profile against this exact pitch mix'
