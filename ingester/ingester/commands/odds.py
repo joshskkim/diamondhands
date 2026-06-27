@@ -112,20 +112,24 @@ def _games_needing_props(conn, game_date) -> set[int]:
 
 
 def _game_roster(conn, game_id: int) -> dict[str, int]:
-    """{normalized player name: player_id} for batters + probable pitchers in this game."""
+    """{normalized player name: player_id} for everyone on either team in this game.
+
+    Resolves against the two teams' rosters (players.team_id, refreshed nightly from the MLB
+    roster) plus the probable pitchers — NOT the projected lineup. Books post props (and we
+    want to store them) hours before confirmed lineups land, so keying off batter_projections
+    meant an unprojected game's props were all "unmatched player" and discarded, then re-pulled
+    every tick. Team rosters let a prop store on the first pull regardless of projection, which
+    also drops the game out of `_games_needing_props` so the per-tick re-pull loop stops.
+    """
     rows = conn.execute(
         """
         SELECT p.id, p.full_name
         FROM players p
-        WHERE p.id IN (
-            SELECT player_id FROM batter_projections WHERE game_id = %s
-            UNION
-            SELECT home_probable_pitcher_id FROM games WHERE id = %s
-            UNION
-            SELECT away_probable_pitcher_id FROM games WHERE id = %s
-        )
+        JOIN games g ON g.id = %s
+        WHERE p.team_id IN (g.home_team_id, g.away_team_id)
+           OR p.id IN (g.home_probable_pitcher_id, g.away_probable_pitcher_id)
         """,
-        (game_id, game_id, game_id),
+        (game_id,),
     ).fetchall()
     return {_norm_name(name): pid for pid, name in rows}
 
