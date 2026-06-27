@@ -8,32 +8,16 @@ import java.time.LocalDate;
 /**
  * Resolves which slate the home board should show. The board used to scope to the raw
  * calendar date, so it flipped at midnight ET and dumped late-finishing games (and their
- * grades). Instead we hold the most recent slate that is actually "ready" — has at least
- * one game with a confirmed lineup AND a projection — so yesterday stays up overnight and
- * through the morning, then flips only once today's first lineup posts.
+ * grades). Instead we hold the most recent slate that actually has games — which means
+ * yesterday stays up overnight, then flips to today the moment the morning slate is pulled
+ * (the ingester inserts today's {@code games} rows ~9am ET). The flip does not wait for
+ * lineups or projections; those land later in the afternoon and populate the board in place.
  */
 @Repository
 public class SlateRepository {
 
-    // Most recent game_date (on or before ET today) with a confirmed 9-man lineup and a
-    // batter projection on at least one game. The model projects same-day and lineups
-    // confirm a few hours before first pitch, so a future date can't qualify early.
-    private static final String LATEST_READY_SQL = """
-        SELECT MAX(g.game_date)
-        FROM games g
-        WHERE g.game_date <= ?
-          AND EXISTS (
-              SELECT 1 FROM game_lineups gl
-              WHERE gl.game_id = g.id
-              GROUP BY gl.game_id HAVING COUNT(*) >= 9
-          )
-          AND EXISTS (
-              SELECT 1 FROM batter_projections bp WHERE bp.game_id = g.id
-          )
-        """;
-
-    // Fallback when nothing is "ready" yet (e.g. before the first lineup of the season):
-    // the most recent date that has any games at all.
+    // Most recent game_date (on or before ET today) that has any games. Future dates can't
+    // qualify because the ingester pulls only the current day's schedule, day-of.
     private static final String LATEST_WITH_GAMES_SQL = """
         SELECT MAX(g.game_date) FROM games g WHERE g.game_date <= ?
         """;
@@ -42,10 +26,6 @@ public class SlateRepository {
 
     public SlateRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
-    }
-
-    public LocalDate latestReadySlate(LocalDate etToday) {
-        return jdbc.queryForObject(LATEST_READY_SQL, LocalDate.class, etToday);
     }
 
     public LocalDate latestSlateWithGames(LocalDate etToday) {

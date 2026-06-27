@@ -9,12 +9,17 @@ import java.time.ZoneId;
 /**
  * Single source of truth for "which slate is the board showing right now". Every
  * today-scoped endpoint resolves its default date here instead of {@code LocalDate.now()}
- * (which used the server's UTC clock and flipped at the wrong instant). See
- * {@link SlateRepository} for the "ready" definition.
+ * (which used the server's UTC clock and flipped at the wrong instant).
+ *
+ * <p>The board holds yesterday's slate overnight and flips to the new day when the
+ * <em>morning slate is pulled</em> — i.e. as soon as today's {@code games} rows exist
+ * (the ingester's {@code daily-slate} step, ~9am ET). It does not wait for lineups or
+ * projections, so the board may show its "projections fill in soon" placeholder through
+ * the morning until each game's lineup posts in the afternoon. See {@link SlateRepository}.
  *
  * <p>Memoized in-process for {@value #TTL_MS} ms (not the Redis cache: a flip should
  * propagate within a minute, and a bare LocalDate isn't worth a JSON cache round-trip)
- * so the resolver's two MAX queries don't run on every today-scoped request.
+ * so the resolver's MAX query doesn't run on every today-scoped request.
  */
 @Service
 public class SlateService {
@@ -44,10 +49,6 @@ public class SlateService {
 
     private LocalDate resolve() {
         LocalDate et = LocalDate.now(EASTERN);
-        LocalDate ready = slateRepository.latestReadySlate(et);
-        if (ready != null) {
-            return ready;
-        }
         LocalDate latest = slateRepository.latestSlateWithGames(et);
         return latest != null ? latest : et;
     }
