@@ -49,7 +49,8 @@ public class PropBoardRepository {
                s.name AS stadium,
                COALESCE(p.bats, 'R') AS bats,
                s.lf_line_ft, s.lf_wall_ft, s.rf_line_ft, s.rf_wall_ft,
-               bb.pull_pct, bb.fb_pct, bb.avg_launch_speed
+               bb.pull_pct, bb.fb_pct, bb.avg_launch_speed,
+               bp.hr_distance_ft
         FROM batter_projections bp
         JOIN games g    ON g.id  = bp.game_id
         JOIN players p  ON p.id  = bp.player_id
@@ -349,7 +350,8 @@ public class PropBoardRepository {
             dbl(rs, "rf_wall_ft"),
             dbl(rs, "pull_pct"),
             dbl(rs, "fb_pct"),
-            dbl(rs, "avg_launch_speed"));
+            dbl(rs, "avg_launch_speed"),
+            dbl(rs, "hr_distance_ft"));
     }
 
     private ClearRates mapRates(ResultSet rs) throws SQLException {
@@ -390,7 +392,9 @@ public class PropBoardRepository {
         Integer opposingPitcherId, String opposingPitcher, String stadium,
         String bats,
         Double lfLineFt, Double lfWallFt, Double rfLineFt, Double rfWallFt,
-        Double pullPct, Double fbPct, Double avgLaunchSpeed
+        Double pullPct, Double fbPct, Double avgLaunchSpeed,
+        // Projected HR carry (ft) in this game's park/weather — the long-ball-upside axis.
+        Double hrDistanceFt
     ) {}
 
     public record ClearRates(

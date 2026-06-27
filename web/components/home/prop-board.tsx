@@ -24,6 +24,10 @@ function pitchName(code: string) {
 
 // Park/weather multipliers within this band of 1.0 are noise, not narrative.
 const ADJ_NOTEWORTHY = 0.03
+// Projected HR carry (ft) at/above which we flag a HR pick as "long-ball upside" — a real shot
+// at the day's longest-HR bonus. Absolute (not slate-relative) on purpose: the bonus is about
+// actual distance in tonight's park/weather, so a masher in a dead park can drop below it.
+const LONG_BALL_UPSIDE_FT = 430
 
 const MARKET_META: Record<string, { chip: string; verb: string }> = {
   hit: { chip: 'Hit', verb: 'to record a hit' },
@@ -145,6 +149,18 @@ function buildReasons(p: PropBoardPick): string[] {
     )
   }
 
+  // Long-ball upside (HR card only): how far this HR would carry in tonight's park & weather —
+  // the distance axis behind Fanatics' longest-HR bonus, separate from how LIKELY the HR is.
+  // High variance, so it's framed as a tiebreaker, never a call on the day's longest.
+  if (p.market === 'hr' && p.hrDistanceFt != null) {
+    const tier = p.hrDistanceFt >= LONG_BALL_UPSIDE_FT ? ' — top-tier carry' : ''
+    reasons.push(
+      `Long-ball upside: this HR projects to carry ~${Math.round(
+        p.hrDistanceFt,
+      )} ft in tonight's park & weather${tier}. Fanatics pays extra if it's the day's longest HR — high variance, so weigh it as a tiebreaker.`,
+    )
+  }
+
   // Season rate leads — it's the meaningful base rate. The last-10 count is
   // appended as context only (short windows are hot-hand noise, not signal).
   if (p.rateSeason != null && p.nSeason != null) {
@@ -214,6 +230,16 @@ function PropCard({ pick, outcome }: { pick: PropBoardPick; outcome?: PickOutcom
         <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-cyan-300 border-cyan-400/40 bg-cyan-500/10">
           {meta.chip}
         </span>
+        {pick.market === 'hr' &&
+          pick.hrDistanceFt != null &&
+          pick.hrDistanceFt >= LONG_BALL_UPSIDE_FT && (
+            <span
+              title={`Projects to carry ~${Math.round(pick.hrDistanceFt)} ft tonight — a real shot at the day's longest-HR bonus`}
+              className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-300 border-amber-400/40 bg-amber-500/10"
+            >
+              🚀 Long-ball upside
+            </span>
+          )}
         {outcome && <OutcomeBadge outcome={outcome} iconOnly />}
         <Link
           href={`/mlb/games/${pick.gameId}`}

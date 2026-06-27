@@ -54,6 +54,12 @@ LEAGUE_BB_PER_PA: float = 0.085
 LEAGUE_ISO: float = 0.155
 LEAGUE_BARREL_RATE: float = 0.078  # mean barrels / batted-ball-in-play (population)
 
+# Home-run distance, for the "longest-HR upside" tiebreaker on HR picks. P90 (not mean)
+# because the day's longest HR is a tail event. A thin-sample batter's own p90 is shrunk
+# toward the league value by HR_DISTANCE_SHRINK_HR pseudo-HRs.
+LEAGUE_HR_DISTANCE_P90_FT: float = 425.0
+HR_DISTANCE_SHRINK_HR: float = 10.0
+
 # ---------------------------------------------------------------------------
 # Empirical-Bayes regression to the mean (v1.6.0)
 # ---------------------------------------------------------------------------

@@ -168,8 +168,15 @@ def cmd_daily_slate(args: argparse.Namespace) -> None:
                 SET status                   = EXCLUDED.status,
                     detailed_status          = EXCLUDED.detailed_status,
                     start_time_utc           = EXCLUDED.start_time_utc,
-                    home_probable_pitcher_id = EXCLUDED.home_probable_pitcher_id,
-                    away_probable_pitcher_id = EXCLUDED.away_probable_pitcher_id
+                    -- Keep a probable once known: a transient schedule fetch that omits
+                    -- probablePitcher would otherwise NULL it out and un-project the game
+                    -- on the next tick (the quick loop re-upserts every 30 min). Probables
+                    -- don't revert to "unknown" same-day, so COALESCE only guards against
+                    -- API flakiness — a *changed* probable still arrives non-null and wins.
+                    home_probable_pitcher_id = COALESCE(EXCLUDED.home_probable_pitcher_id,
+                                                        games.home_probable_pitcher_id),
+                    away_probable_pitcher_id = COALESCE(EXCLUDED.away_probable_pitcher_id,
+                                                        games.away_probable_pitcher_id)
             """,
             (
                 game_pk,

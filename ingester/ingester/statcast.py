@@ -815,3 +815,41 @@ def agg_batter_spray_bins(chunks: list[pd.DataFrame]) -> list[dict]:
             if d["dist_cnt"] > 0 else None,
         })
     return rows
+
+
+def agg_batter_hr_distance(chunks: list[pd.DataFrame]) -> list[dict]:
+    """Aggregate per-batter home-run distance from Statcast chunks.
+
+    Only batted balls whose event is a home run AND that carry a Statcast distance count.
+    Unlike batter_spray_bins.avg_distance_ft (averaged over every ball in play), this is
+    HR-only: per batter, the number of measured HRs, their mean distance, and the 90th-
+    percentile distance — the tail that decides "longest HR of the day". One dict per batter
+    with at least one measured HR.
+    """
+    per_batter: dict[int, list[float]] = {}
+    for df in chunks:
+        if df is None or df.empty:
+            continue
+        cols = ["batter", "events", "hit_distance_sc"]
+        if not all(c in df.columns for c in cols):
+            continue
+        sub = df[cols].copy()
+        sub = sub[sub["events"].astype(str).eq("home_run")]
+        if sub.empty:
+            continue
+        bid = pd.to_numeric(sub["batter"], errors="coerce")
+        dist = _to_float64(sub["hit_distance_sc"])
+        keep = bid.notna() & dist.notna()
+        for b, d in zip(bid[keep].astype("int64").to_numpy(), dist[keep].to_numpy()):
+            per_batter.setdefault(int(b), []).append(float(d))
+
+    rows: list[dict] = []
+    for bid, dists in per_batter.items():
+        arr = np.asarray(dists, dtype="float64")
+        rows.append({
+            "player_id": bid,
+            "hr_n": int(arr.size),
+            "avg_distance_ft": round(float(arr.mean()), 1),
+            "p90_distance_ft": round(float(np.percentile(arr, 90)), 1),
+        })
+    return rows
