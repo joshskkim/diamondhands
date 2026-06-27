@@ -4,7 +4,27 @@ from __future__ import annotations
 import math
 
 from ingester import odds_api
-from ingester.commands.odds import _norm_name, odds_input_hash
+from ingester.commands.odds import _game_roster, _norm_name, odds_input_hash
+
+
+class _FakeCursor:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+class _FakeConn:
+    """Minimal psycopg-like stand-in: records execute() calls, returns canned rows."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.calls: list[tuple] = []
+
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+        return _FakeCursor(self._rows)
 
 
 class TestOddsMath:
@@ -95,6 +115,24 @@ class TestParseGameMarkets:
         assert by[("moneyline_f5", "away")]["price_american"] == 110
         assert by[("run_line_f5", "home")]["line"] == -0.5
         assert by[("total_f1", "over")]["line"] == 0.5  # YRFI market
+
+
+class TestGameRoster:
+    """The prop name→id map now resolves off the two teams' rosters (one game-keyed
+    query), so props store before a game is projected — see _game_roster."""
+
+    def test_builds_normalized_name_map(self):
+        conn = _FakeConn([(660271, "Mike Trout"), (605483, "Ronald Acuña Jr.")])
+        roster = _game_roster(conn, 12345)
+        assert roster == {"mike trout": 660271, "ronald acuna jr": 605483}
+
+    def test_single_query_keyed_only_by_game_id(self):
+        # The behavioral change: one parameter (game_id), not the old projection-dependent
+        # three-game_id UNION — team rosters + probables are resolved in SQL.
+        conn = _FakeConn([(1, "A B")])
+        _game_roster(conn, 999)
+        assert len(conn.calls) == 1
+        assert conn.calls[0][1] == (999,)
 
 
 class TestParsePropMarkets:
