@@ -405,6 +405,7 @@ public class PropBoardService {
             round(prob, 4),
             round(rawProb, 4),
             r.opposingPitcherId(), r.opposingPitcher(), r.pitcherDataQuality(),
+            round(r.oppPitcherBbRate(), 4), round(r.oppPitcherKRate(), 4),
             r.matchupXwoba(), r.matchupQuality(),
             r.adjPark(), r.adjPitcher(), m.weather().apply(r),
             r.adjDefense(),

@@ -50,7 +50,8 @@ public class PropBoardRepository {
                COALESCE(p.bats, 'R') AS bats,
                s.lf_line_ft, s.lf_wall_ft, s.rf_line_ft, s.rf_wall_ft,
                bb.pull_pct, bb.fb_pct, bb.avg_launch_speed,
-               bp.hr_distance_ft
+               bp.hr_distance_ft,
+               opk.opp_pitcher_bb_rate, opk.opp_pitcher_k_rate
         FROM batter_projections bp
         JOIN games g    ON g.id  = bp.game_id
         JOIN players p  ON p.id  = bp.player_id
@@ -64,6 +65,16 @@ public class PropBoardRepository {
         LEFT JOIN batter_batted_ball bb
                ON bb.player_id = bp.player_id
               AND bb.season = EXTRACT(YEAR FROM g.game_date)::int
+        -- Walk-card driver: the opposing starter's control, BF-weighted across handedness
+        -- (filter season — pitcher_skill keeps multiple seasons at one key). Same pattern as
+        -- the pitcher-prop query's `pk` lateral.
+        LEFT JOIN LATERAL (
+            SELECT SUM(ps.bb_rate * ps.batters_faced) / NULLIF(SUM(ps.batters_faced), 0) AS opp_pitcher_bb_rate,
+                   SUM(ps.k_rate  * ps.batters_faced) / NULLIF(SUM(ps.batters_faced), 0) AS opp_pitcher_k_rate
+            FROM pitcher_skill ps
+            WHERE ps.player_id = bp.opposing_pitcher_id
+              AND ps.season = EXTRACT(YEAR FROM g.game_date)::int
+        ) opk ON TRUE
         WHERE g.game_date = ?
           AND %s
         """.formatted(GameStatus.livePredicate("g"));
@@ -351,7 +362,9 @@ public class PropBoardRepository {
             dbl(rs, "pull_pct"),
             dbl(rs, "fb_pct"),
             dbl(rs, "avg_launch_speed"),
-            dbl(rs, "hr_distance_ft"));
+            dbl(rs, "hr_distance_ft"),
+            dbl(rs, "opp_pitcher_bb_rate"),
+            dbl(rs, "opp_pitcher_k_rate"));
     }
 
     private ClearRates mapRates(ResultSet rs) throws SQLException {
@@ -394,7 +407,10 @@ public class PropBoardRepository {
         Double lfLineFt, Double lfWallFt, Double rfLineFt, Double rfWallFt,
         Double pullPct, Double fbPct, Double avgLaunchSpeed,
         // Projected HR carry (ft) in this game's park/weather — the long-ball-upside axis.
-        Double hrDistanceFt
+        Double hrDistanceFt,
+        // Opposing starter's control, BF-weighted across handedness — the walk-card driver.
+        // Null when the pitcher has no skill row (e.g. TBD starter).
+        Double oppPitcherBbRate, Double oppPitcherKRate
     ) {}
 
     public record ClearRates(

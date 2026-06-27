@@ -414,6 +414,10 @@ export function todayGamesQueryOptions() {
   return queryOptions({
     queryKey: queryKeys.games.today(),
     queryFn: fetchTodayGames,
+    // The slate updates through the day as the server re-projects games (lineups post on
+    // the ~30-min cron). Poll so the home board — and the "X/Y projected" badge — climb on
+    // their own without a manual reload. Cheap: one cached endpoint, deduped by key.
+    refetchInterval: 5 * 60 * 1000,
   })
 }
 

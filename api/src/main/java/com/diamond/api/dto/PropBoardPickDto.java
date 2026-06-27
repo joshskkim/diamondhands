@@ -37,6 +37,11 @@ public record PropBoardPickDto(
     Integer opposingPitcherId,
     String opposingPitcher,
     String pitcherDataQuality,
+    // The opposing starter's control profile (season, BF-weighted across handedness):
+    // walk rate drives the walk card's reasoning, K rate lets the client flag a
+    // pitch-to-contact arm. Null when the pitcher has no skill row (e.g. TBD starter).
+    Double opposingPitcherBbRate,
+    Double opposingPitcherKRate,
     Double matchupXwoba,
     String matchupQuality,
     Double adjPark,
