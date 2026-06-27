@@ -24,9 +24,17 @@ ODDS_BASE = "https://api.the-odds-api.com/v4"
 SPORT_KEY = "baseball_mlb"
 # We only care about these books. The Odds API `bookmakers` param supersedes `regions`
 # and returns just these, trimming payload + the credit cost of books we never display.
-# (Fanatics/FanDuel may serve game markets only, not batter props — the prop board picks
-# the best price across whichever of these posted a line, so coverage degrades gracefully.)
-BOOKMAKERS = "fanduel,draftkings,fanatics"
+# Per-book batter-prop coverage via the API (verified live 2026-06-27, NOT the same as
+# what each book shows in its own app):
+#   - fanduel    : NO batter props at all (game markets only)
+#   - draftkings : batter_hits + batter_walks, but NO batter_home_runs
+#   - fanatics   : batter_hits + batter_walks, but NO batter_home_runs
+#   - betrivers  : batter_home_runs (+ hits) — the only API source of HR props
+#   - williamhill_us : batter_home_runs (+ walks)
+# So betrivers + williamhill_us are required for HR props to exist at all; without them
+# the HR card is always "no line". They're US books (same region), so the markets×regions
+# credit cost is unchanged. The prop board picks the best price across whichever posted.
+BOOKMAKERS = "fanduel,draftkings,fanatics,betrivers,williamhill_us"
 ODDS_FORMAT = "american"
 
 # Provider game-market key -> canonical market key.
