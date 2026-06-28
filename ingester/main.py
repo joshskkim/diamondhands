@@ -33,6 +33,7 @@ from ingester.commands.daily import cmd_daily
 from ingester.commands.odds import cmd_refresh_odds
 from ingester.commands.lineups import cmd_backfill_lineups, cmd_refresh_lineups
 from ingester.commands.scores import cmd_backfill_scores
+from ingester.commands.live import cmd_live_refresh
 from ingester.commands.backfill_pitcher_starts import cmd_backfill_pitcher_starts
 from ingester.commands.backfill_batter_lines import cmd_backfill_batter_lines
 from ingester.commands.backfill_weather import cmd_backfill_weather
@@ -354,6 +355,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_bf_scores.add_argument("--start", metavar="YYYY-MM-DD", type=_date_arg, required=True)
     p_bf_scores.add_argument("--end", metavar="YYYY-MM-DD", type=_date_arg, required=True)
 
+    p_live = sub.add_parser(
+        "live-refresh",
+        help="High-cadence in-game state (running score + inning) into games.live_*",
+    )
+    p_live.add_argument("--date", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+                        help="Slate date (default: today, Eastern)")
+    p_live.add_argument("--loop", action="store_true", default=False,
+                        help="Poll repeatedly for a bounded window instead of a single tick")
+    p_live.add_argument("--for-minutes", type=int, default=30, dest="for_minutes",
+                        help="With --loop: total minutes to keep polling (default 30)")
+    p_live.add_argument("--interval-seconds", type=int, default=30, dest="interval_seconds",
+                        help="With --loop: seconds between ticks (default 30)")
+
     p_bf_starts = sub.add_parser(
         "backfill-pitcher-starts",
         help="Backfill per-start pitcher workload lines (outs/BF/K/ER/pitches) from boxscores",
@@ -556,6 +570,7 @@ COMMANDS = {
     "refresh-lineups":          cmd_refresh_lineups,
     "backfill-lineups":         cmd_backfill_lineups,
     "backfill-scores":          cmd_backfill_scores,
+    "live-refresh":             cmd_live_refresh,
     "backfill-pitcher-starts":  cmd_backfill_pitcher_starts,
     "backfill-batter-lines":    cmd_backfill_batter_lines,
     "backfill-weather":         cmd_backfill_weather,

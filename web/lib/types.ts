@@ -66,6 +66,24 @@ export interface TodayGame {
    *  drives the NRFI/YRFI hit/miss marker on the Sim Signals board. */
   finalHomeFirstInningRuns: number | null
   finalAwayFirstInningRuns: number | null
+  /** Live in-game state (null for scheduled games), hydrated on load and then patched in
+   *  place by the SSE stream (see use-live-stream). Distinct from the Final score above. */
+  liveHomeScore: number | null
+  liveAwayScore: number | null
+  liveCurrentInning: number | null
+  liveInningState: string | null
+  liveIsTop: boolean | null
+}
+
+/** GET /api/games/live/stream — a lean live-state delta pushed over SSE. */
+export interface LiveGame {
+  gameId: number
+  status: string
+  liveHomeScore: number | null
+  liveAwayScore: number | null
+  liveCurrentInning: number | null
+  liveInningState: string | null
+  liveIsTop: boolean | null
 }
 
 /** GET /api/model-picks — a persisted Model's Pick with its graded outcome. */

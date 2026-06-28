@@ -6,10 +6,15 @@ import Link from 'next/link'
 import type { GameOddsSummary, TodayGame, Weather } from '@/lib/types'
 import { cn, parseApiDate } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
-import { favoriteOutcome } from '@/lib/picks'
-import { OutcomeBadge } from './outcome-badge'
+import { favoriteOutcome, liveTotalPace } from '@/lib/picks'
+import { OutcomeBadge, LiveProgress } from './outcome-badge'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
+
+const ORDINALS = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th']
+function inningLabel(inning: number): string {
+  return ORDINALS[inning] ?? `${inning}th`
+}
 
 // MLB detailedState values for a game that won't be played as scheduled — mirrors the
 // ingester's _DEAD_GAME_STATUSES. We keep the card (badged) but drop projections/picks;
@@ -96,6 +101,11 @@ export function GameCard({ game }: { game: TodayGame }) {
   const isFinal = game.finalHomeScore != null && game.finalAwayScore != null
   const outcome = favoriteOutcome(homeRuns >= awayRuns, game.finalHomeScore, game.finalAwayScore)
   const dead = game.detailedStatus != null && DEAD_STATUSES.has(game.detailedStatus)
+  const liveTotal =
+    game.liveHomeScore != null && game.liveAwayScore != null
+      ? game.liveHomeScore + game.liveAwayScore
+      : null
+  const isLive = !dead && !isFinal && (game.status === 'Live' || liveTotal != null)
 
   return (
     <Link
@@ -116,6 +126,17 @@ export function GameCard({ game }: { game: TodayGame }) {
               {game.away.abbr} {game.finalAwayScore}–{game.finalHomeScore} {game.home.abbr}
             </span>
             {outcome && <OutcomeBadge outcome={outcome} iconOnly />}
+          </span>
+        ) : isLive ? (
+          <span className="flex items-center gap-2">
+            <span className="text-sm font-mono tabular-nums text-zinc-100">
+              {game.away.abbr} {game.liveAwayScore}–{game.liveHomeScore} {game.home.abbr}
+            </span>
+            {game.liveCurrentInning != null && (
+              <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold rounded px-1.5 py-0.5 text-cyan-300 border border-cyan-400/40 bg-cyan-500/10">
+                {game.liveIsTop ? '▲' : '▼'} {inningLabel(game.liveCurrentInning)}
+              </span>
+            )}
           </span>
         ) : (
           <span className="text-sm text-zinc-500 font-mono tabular-nums">{localTime}</span>
@@ -159,6 +180,16 @@ export function GameCard({ game }: { game: TodayGame }) {
             <div className="bg-cyan-500" style={{ width: `${homePct}%` }} />
             <div className="bg-zinc-700" style={{ width: `${100 - homePct}%` }} />
           </div>
+          {isLive && liveTotal != null && game.odds?.totalLine != null && (
+            <div className="mt-2 flex items-center justify-between">
+              <span className={microLabel}>Live total vs O/U</span>
+              <LiveProgress
+                actual={liveTotal}
+                line={game.odds.totalLine}
+                onPace={liveTotalPace(liveTotal, game.liveCurrentInning, game.liveIsTop)}
+              />
+            </div>
+          )}
         </>
       ) : (
         <p className="text-xs text-amber-300 bg-amber-400/10 border border-amber-400/30 rounded px-2 py-1.5">

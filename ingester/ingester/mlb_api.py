@@ -90,6 +90,39 @@ def parse_game_first_inning(game: dict) -> tuple[int, int] | None:
     return int(h), int(a)
 
 
+def parse_game_linescore_live(game: dict) -> dict | None:
+    """Return the live in-game state from a game hydrated with ``linescore``, or None
+    when there's nothing live yet (Scheduled/Preview, or no linescore present).
+
+    Unlike ``parse_game_score`` this does NOT gate on Final — it returns the running
+    state for in-progress games so the home board can track them live. Final games are
+    still returned (the linescore carries the final running total), but the Final
+    home_score/away_score columns remain the source of truth for grading.
+
+    Shape returned:
+        {"home": int, "away": int,            # running runs each side
+         "inning": int | None,                # currentInning
+         "inning_state": str | None,          # 'Top' | 'Middle' | 'Bottom' | 'End'
+         "is_top": bool | None}               # isTopInning
+    """
+    state = (game.get("status") or {}).get("abstractGameState")
+    if state in (None, "Scheduled", "Preview"):
+        return None
+    ls = game.get("linescore") or {}
+    teams = ls.get("teams") or {}
+    h = (teams.get("home") or {}).get("runs")
+    a = (teams.get("away") or {}).get("runs")
+    if h is None or a is None:
+        return None
+    return {
+        "home": int(h),
+        "away": int(a),
+        "inning": ls.get("currentInning"),
+        "inning_state": ls.get("inningState"),
+        "is_top": ls.get("isTopInning"),
+    }
+
+
 def parse_home_plate_umpire(game: dict) -> tuple[int, str] | None:
     """
     Extract the home-plate umpire from a schedule game hydrated with ``officials``.
