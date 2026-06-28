@@ -4,6 +4,7 @@ package com.diamond.api.dto;
 public record BatterResultDto(
     int playerId,
     long gameId,
+    Integer atBats,
     Integer hits,
     Integer homeRuns,
     Integer strikeouts,

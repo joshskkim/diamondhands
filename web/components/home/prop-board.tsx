@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
 import { liveCountOutcome, overUnderOutcome, propOutcome, type PickOutcome } from '@/lib/picks'
 import { OutcomeBadge } from './outcome-badge'
-import { LivePickTracker, gameIsLive } from './live-tracker'
+import { LivePropTracker, gameIsLive } from './live-tracker'
 import { WhyDisclosure } from './why-disclosure'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -52,6 +52,9 @@ const MARKET_META: Record<string, { chip: string; verb: string }> = {
   k: { chip: 'Strikeout', verb: 'to strike out at least once' },
   bb: { chip: 'Walk', verb: 'to draw a walk' },
 }
+
+// Stat unit shown in the live prop tracker, per batter market.
+const BATTER_UNIT: Record<string, string> = { hit: 'H', hr: 'HR', k: 'K', bb: 'BB' }
 
 const PITCHER_MARKET_META: Record<string, { chip: string; unit: string; noun: string }> = {
   pitcher_k: { chip: 'Pitcher Ks', unit: 'K', noun: 'strikeouts' },
@@ -270,12 +273,14 @@ function PropCard({
   game,
   liveCount,
   liveOutcome,
+  liveBatterLine,
 }: {
   pick: PropBoardPick
   outcome?: PickOutcome
   game?: TodayGame
   liveCount?: number | null
   liveOutcome?: PickOutcome
+  liveBatterLine?: { hits: number | null; atBats: number | null } | null
 }) {
   const meta = MARKET_META[pick.market] ?? { chip: pick.market, verb: pick.market }
   return (
@@ -333,7 +338,14 @@ function PropCard({
         />
       </div>
 
-      <LivePickTracker game={game} market={pick.market} side="over" line={pick.line} outcome={liveOutcome} count={liveCount} />
+      <LivePropTracker
+        game={game}
+        line={pick.line}
+        outcome={liveOutcome}
+        count={liveCount}
+        unit={BATTER_UNIT[pick.market] ?? 'H'}
+        batterLine={liveBatterLine}
+      />
 
       <WhyDisclosure reasons={buildReasons(pick)} />
 
@@ -487,12 +499,14 @@ function PitcherCard({
   game,
   liveCount,
   liveOutcome,
+  liveOuts,
 }: {
   pick: PitcherPropPick
   outcome?: PickOutcome
   game?: TodayGame
   liveCount?: number | null
   liveOutcome?: PickOutcome
+  liveOuts?: number | null
 }) {
   const meta =
     PITCHER_MARKET_META[pick.market] ?? { chip: pick.market, unit: '', noun: pick.market }
@@ -531,7 +545,14 @@ function PitcherCard({
 
       <BestPick pick={pick} unit={meta.unit} />
 
-      <LivePickTracker game={game} market={pick.market} side={pick.bestSide ?? 'over'} line={pick.bestLine} outcome={liveOutcome} count={liveCount} />
+      <LivePropTracker
+        game={game}
+        line={pick.bestLine}
+        outcome={liveOutcome}
+        count={liveCount}
+        unit={meta.unit}
+        outs={liveOuts}
+      />
 
       <WhyDisclosure reasons={reasons} />
 
@@ -652,6 +673,7 @@ export function PropBoard() {
         >
           {data.picks.map((pick) => {
             const liveCount = batterLiveCount(pick)
+            const liveBatter = liveBatterByKey.get(`${pick.playerId}:${pick.gameId}`)
             return (
               <PropCard
                 key={pick.market}
@@ -660,6 +682,9 @@ export function PropBoard() {
                 game={gamesById.get(pick.gameId)}
                 liveCount={liveCount}
                 liveOutcome={liveCountOutcome('over', pick.line, liveCount)}
+                liveBatterLine={
+                  liveBatter ? { hits: liveBatter.hits, atBats: liveBatter.atBats } : null
+                }
               />
             )
           })}
@@ -680,6 +705,7 @@ export function PropBoard() {
           >
             {data.pitcherPicks.map((pick) => {
               const liveCount = pitcherLiveCount(pick)
+              const livePitcher = livePitcherByKey.get(`${pick.pitcherId}:${pick.gameId}`)
               return (
                 <PitcherCard
                   key={pick.market}
@@ -688,6 +714,7 @@ export function PropBoard() {
                   game={gamesById.get(pick.gameId)}
                   liveCount={liveCount}
                   liveOutcome={liveCountOutcome(pick.bestSide, pick.bestLine, liveCount)}
+                  liveOuts={livePitcher?.outs}
                 />
               )
             })}

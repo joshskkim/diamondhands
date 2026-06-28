@@ -19,7 +19,7 @@ import java.util.List;
 public class ResultsRepository {
 
     private static final String BATTERS_SQL = """
-        SELECT player_id, game_id, hits, home_runs, strikeouts, walks
+        SELECT player_id, game_id, at_bats, hits, home_runs, strikeouts, walks
         FROM player_game_stats
         WHERE game_date = ? AND game_id IS NOT NULL
         """;
@@ -33,7 +33,7 @@ public class ResultsRepository {
     // Live (in-progress) counts from player_game_live — same DTO shapes as the Final reads
     // so the client grades/tracks them identically. pitcher_strikeouts aliased to strikeouts.
     private static final String LIVE_BATTERS_SQL = """
-        SELECT player_id, game_id, hits, home_runs, strikeouts, walks
+        SELECT player_id, game_id, at_bats, hits, home_runs, strikeouts, walks
         FROM player_game_live
         WHERE game_date = ? AND plate_appearances IS NOT NULL
         """;
@@ -70,6 +70,7 @@ public class ResultsRepository {
         return new BatterResultDto(
             rs.getInt("player_id"),
             rs.getLong("game_id"),
+            nullableInt(rs, "at_bats"),
             nullableInt(rs, "hits"),
             nullableInt(rs, "home_runs"),
             nullableInt(rs, "strikeouts"),
