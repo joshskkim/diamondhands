@@ -31,4 +31,13 @@ public class ResultsController {
     ) {
         return service.playerResults(date != null ? date : slateService.activeSlateDate());
     }
+
+    /** In-progress player counts for the prop board's live trackers. */
+    @GetMapping("/players/live")
+    public PlayerResultsResponse playersLive(
+        @RequestParam(required = false)
+        @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
+    ) {
+        return service.livePlayerResults(date != null ? date : slateService.activeSlateDate());
+    }
 }

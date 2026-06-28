@@ -149,6 +149,20 @@ export function liveTotalOutcome(
   return 'live'
 }
 
+/** Live grade of a player count (pitcher K/outs/ER/H, batter H/HR) against its line.
+ *  Monotonic-safe like liveTotalOutcome: `over` settles 'won' once the count clears the
+ *  line, `under` settles 'lost' once it's exceeded; otherwise 'live'. A count can only
+ *  climb, so the other direction is never settled early. Returns undefined with no count. */
+export function liveCountOutcome(
+  side: 'over' | 'under' | null,
+  line: number | null,
+  actual: number | null | undefined,
+): PickOutcome | undefined {
+  if (side == null || line == null || actual == null) return undefined
+  if (actual > line) return side === 'over' ? 'won' : 'lost'
+  return 'live'
+}
+
 /** Projected 9-inning total from the current running total and inning, for an on-pace
  *  read. Returns null until at least a half-inning has been played. */
 export function liveTotalPace(
