@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
 import { modelPlayOutcome, pickOutcome, pickTitle, type PickOutcome } from '@/lib/picks'
 import { OutcomeBadge } from './outcome-badge'
+import { LivePickTracker } from './live-tracker'
 import { WhyDisclosure } from './why-disclosure'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -244,10 +245,12 @@ function PickCard({
   pick,
   rank,
   outcome,
+  game,
 }: {
   pick: ModelPick
   rank: number
   outcome?: PickOutcome
+  game?: TodayGame
 }) {
   const p = pick.play
   return (
@@ -306,12 +309,14 @@ function PickCard({
         <Stat label="EV" value={signedPct(p.evPct)} className="text-emerald-300" />
       </div>
 
+      <LivePickTracker game={game} market={p.market} side={p.side} line={p.line} />
+
       <WhyDisclosure reasons={pick.reasons} />
     </div>
   )
 }
 
-function LottoCard({ pick, outcome }: { pick: ModelPick; outcome?: PickOutcome }) {
+function LottoCard({ pick, outcome, game }: { pick: ModelPick; outcome?: PickOutcome; game?: TodayGame }) {
   const p = pick.play
   return (
     <div className="rounded-xl border border-amber-400/30 bg-gradient-to-br from-amber-500/10 to-[#0e1015] px-5 py-4 flex flex-col gap-3">
@@ -352,6 +357,8 @@ function LottoCard({ pick, outcome }: { pick: ModelPick; outcome?: PickOutcome }
         <Stat label="Edge" value={signedPct(pick.edge)} className="text-emerald-400" />
         <Stat label="EV" value={signedPct(p.evPct)} className="text-emerald-300" />
       </div>
+
+      <LivePickTracker game={game} market={p.market} side={p.side} line={p.line} />
 
       <WhyDisclosure reasons={pick.reasons} />
     </div>
@@ -585,6 +592,7 @@ export function ModelPicks() {
             pick={pick}
             rank={i + 1}
             outcome={modelPlayOutcome(pick.play, gamesById.get(pick.play.gameId), hrByKey)}
+            game={gamesById.get(pick.play.gameId)}
           />
         ))}
       </div>
@@ -616,6 +624,7 @@ export function ModelPicks() {
             <LottoCard
               pick={lotto}
               outcome={modelPlayOutcome(lotto.play, gamesById.get(lotto.play.gameId), hrByKey)}
+              game={gamesById.get(lotto.play.gameId)}
             />
           </div>
         </div>
