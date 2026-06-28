@@ -5,11 +5,17 @@ import { useQuery } from '@tanstack/react-query'
 import { mostLikelyQueryOptions, todayGamesQueryOptions } from '@/lib/api'
 import type { MostLikely } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { nrfiOutcome, runLineOutcome, totalLeanOutcome, type PickOutcome } from '@/lib/picks'
+import {
+  liveTotalOutcome,
+  nrfiOutcome,
+  runLineOutcome,
+  totalLeanOutcome,
+  type PickOutcome,
+} from '@/lib/picks'
 import { BoardCard, Rank } from './pick-boards'
 import { OutcomeBadge } from './outcome-badge'
 
-// Final scores + first-inning runs per game, for live ✓/✗ grading of the sim leans.
+// Final scores + first-inning runs (and live state) per game, for live ✓/✗ grading.
 interface GameResult {
   finalHome: number | null
   finalAway: number | null
@@ -17,6 +23,11 @@ interface GameResult {
   away1st: number | null
   homeAbbr: string
   awayAbbr: string
+  liveTotal: number | null
+  liveHome: number | null
+  liveAway: number | null
+  isFinal: boolean
+  isLive: boolean
 }
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -80,7 +91,10 @@ function TotalsCard({ data, games }: { data: MostLikely['totals']; games: Map<nu
       {rows.length === 0 && <Empty />}
       {rows.map((t, i) => {
         const g = games.get(t.gameId)
-        const outcome = totalLeanOutcome(t.lean, t.bookLine, g?.finalHome ?? null, g?.finalAway ?? null)
+        const lean = t.lean === 'over' || t.lean === 'under' ? t.lean : null
+        const outcome =
+          totalLeanOutcome(t.lean, t.bookLine, g?.finalHome ?? null, g?.finalAway ?? null) ??
+          liveTotalOutcome(lean, t.bookLine, g?.liveTotal, g?.isFinal ?? false)
         return (
         <div key={t.gameId} className="flex items-center gap-3 px-4 py-2 hover:bg-white/[0.03] transition-colors">
           <Rank n={i + 1} />
@@ -126,7 +140,8 @@ function RunLineCard({ data, games }: { data: MostLikely['runLine']; games: Map<
       {rows.map((r, i) => {
         const g = games.get(r.gameId)
         const outcome = g
-          ? runLineOutcome(r.favorite === g.homeAbbr, g.finalHome, g.finalAway)
+          ? runLineOutcome(r.favorite === g.homeAbbr, g.finalHome, g.finalAway) ??
+            (g.isLive ? 'live' : undefined)
           : undefined
         return (
         <div key={r.gameId} className="flex items-center gap-3 px-4 py-2 hover:bg-white/[0.03] transition-colors">
@@ -232,17 +247,29 @@ export function SimBoards() {
   // each lean ✓/✗ once its game is final — same source the projected-favorites badge uses.
   const { data: games } = useQuery(todayGamesQueryOptions())
   const gamesById = new Map<number, GameResult>(
-    (games ?? []).map((g) => [
-      g.gameId,
-      {
-        finalHome: g.finalHomeScore,
-        finalAway: g.finalAwayScore,
-        home1st: g.finalHomeFirstInningRuns,
-        away1st: g.finalAwayFirstInningRuns,
-        homeAbbr: g.home.abbr,
-        awayAbbr: g.away.abbr,
-      },
-    ]),
+    (games ?? []).map((g) => {
+      const isFinal = g.finalHomeScore != null && g.finalAwayScore != null
+      const liveTotal =
+        g.liveHomeScore != null && g.liveAwayScore != null
+          ? g.liveHomeScore + g.liveAwayScore
+          : null
+      return [
+        g.gameId,
+        {
+          finalHome: g.finalHomeScore,
+          finalAway: g.finalAwayScore,
+          home1st: g.finalHomeFirstInningRuns,
+          away1st: g.finalAwayFirstInningRuns,
+          homeAbbr: g.home.abbr,
+          awayAbbr: g.away.abbr,
+          liveTotal,
+          liveHome: g.liveHomeScore,
+          liveAway: g.liveAwayScore,
+          isFinal,
+          isLive: !isFinal && (g.status === 'Live' || liveTotal != null),
+        },
+      ]
+    }),
   )
 
   // While the sim loads, hold the section's shape with skeletons so the page

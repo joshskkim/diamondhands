@@ -11,6 +11,7 @@ import { GameSelectorBar } from '@/components/game/game-selector-bar'
 import { GamesBadge } from '@/components/games-badge'
 import { ProjectedBadge } from '@/components/projected-badge'
 import { QueryError } from '@/components/ui/query-states'
+import { useLiveStream } from '@/components/home/use-live-stream'
 import { todayGamesQueryOptions } from '@/lib/api'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -22,6 +23,9 @@ function Skeleton({ className = '' }: { className?: string }) {
 export default function SlatePage() {
   const today = format(new Date(), 'EEEE, MMMM d, yyyy')
   const { data: games = [], isPending, isError, refetch } = useQuery(todayGamesQueryOptions())
+  // Open one SSE connection while any game is in progress; patches live state into the
+  // todayGames cache that every board below reads.
+  useLiveStream(games)
 
   return (
     <main className="max-w-6xl mx-auto w-full px-4 py-8">

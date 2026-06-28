@@ -22,5 +22,14 @@ public record TodayGameDto(
     // First-inning runs per side, set once the 1st completes (null otherwise) — drives
     // the NRFI/YRFI hit/miss marker on the Sim Signals board.
     Integer finalHomeFirstInningRuns,
-    Integer finalAwayFirstInningRuns
+    Integer finalAwayFirstInningRuns,
+    // Live in-game state (games.live_*), populated by the `live-refresh` ingester while a
+    // game is in progress; null for scheduled games. Drives the home board's real-time
+    // trackers and is streamed as deltas over /api/games/live/stream. Kept distinct from
+    // the Final score above so live data never feeds the grading path.
+    Integer liveHomeScore,
+    Integer liveAwayScore,
+    Integer liveCurrentInning,
+    String liveInningState,
+    Boolean liveIsTop
 ) {}

@@ -46,7 +46,7 @@ export function pickKey(p: {
   return `${p.gameId}|${p.market}|${p.side}|${p.line ?? ''}|${p.playerId ?? ''}`
 }
 
-export type PickOutcome = 'won' | 'lost' | 'push' | 'pending'
+export type PickOutcome = 'won' | 'lost' | 'push' | 'pending' | 'live'
 
 /** ✓/✗/push for the projected favorite given the final score (undefined while unplayed). */
 export function favoriteOutcome(
@@ -128,6 +128,51 @@ export function nrfiOutcome(
   return (lean === 'YRFI') === yrfi ? 'won' : 'lost'
 }
 
+// ── live, in-progress trackers (monotonic-safe early settlement) ─────────────────
+// These run off the streamed games.live_* state while a game is being played. They only
+// ever settle the direction that CAN'T reverse (a total can only climb), so an under can
+// flip to 'lost' the instant the line is exceeded but never to 'won' before Final — the
+// winning side is left to the Final helpers above. Otherwise they return 'live' so the
+// board can show an in-progress indicator instead of a clock.
+
+/** Live grade of a total against the running score. `over` settles 'won' once the line is
+ *  cleared; `under` settles 'lost' once it's exceeded; otherwise 'live'. Returns undefined
+ *  when there's no live total (or the game is final — let the Final helper grade it). */
+export function liveTotalOutcome(
+  side: 'over' | 'under' | null,
+  line: number | null,
+  liveTotal: number | null | undefined,
+  isFinal: boolean,
+): PickOutcome | undefined {
+  if (isFinal || side == null || line == null || liveTotal == null) return undefined
+  if (liveTotal > line) return side === 'over' ? 'won' : 'lost'
+  return 'live'
+}
+
+/** Projected 9-inning total from the current running total and inning, for an on-pace
+ *  read. Returns null until at least a half-inning has been played. */
+export function liveTotalPace(
+  liveTotal: number | null | undefined,
+  currentInning: number | null | undefined,
+  isTop: boolean | null | undefined,
+): number | null {
+  if (liveTotal == null || currentInning == null || currentInning < 1) return null
+  const elapsed = currentInning - 1 + (isTop ? 0.5 : 1)
+  if (elapsed < 0.5) return null
+  return (liveTotal / elapsed) * 9
+}
+
+/** Live signed margin from the favorite's perspective (positive = favorite ahead), for a
+ *  run-line "covering / not covering" read. Final grading stays with runLineOutcome. */
+export function liveRunLineMargin(
+  favHome: boolean,
+  liveHome: number | null | undefined,
+  liveAway: number | null | undefined,
+): number | null {
+  if (liveHome == null || liveAway == null) return null
+  return favHome ? liveHome - liveAway : liveAway - liveHome
+}
+
 /** The fields live-grading needs — satisfied by both BestPlay (live board) and
  *  ModelPickResult (persisted, for earlier/bumped picks not yet settled). */
 export interface GradablePlay {
@@ -138,33 +183,58 @@ export interface GradablePlay {
   gameId: number
 }
 
-/** A Model's Pick graded live: game markets from final scores, HR from batter results.
- *  `hrByKey` is keyed `${playerId}:${gameId}` → the player's home-run count. */
+/** The game-state fields modelPlayOutcome reads — Final score for grading plus the live
+ *  state for in-progress trackers. Satisfied by TodayGame. */
+type GradableGame = Pick<
+  TodayGame,
+  | 'finalHomeScore'
+  | 'finalAwayScore'
+  | 'liveHomeScore'
+  | 'liveAwayScore'
+  | 'status'
+>
+
+/** A Model's Pick graded live: game markets settle from the Final score, and while a game
+ *  is in progress they early-settle the monotonic-safe direction (a total can only climb)
+ *  or show a 'live' indicator. HR (player) markets stay pending until Final — that's a
+ *  later phase. `hrByKey` is keyed `${playerId}:${gameId}` → the player's home-run count. */
 export function modelPlayOutcome(
   play: GradablePlay,
-  game: Pick<TodayGame, 'finalHomeScore' | 'finalAwayScore'> | undefined,
+  game: GradableGame | undefined,
   hrByKey: Map<string, number | null>,
 ): PickOutcome | undefined {
   const home = game?.finalHomeScore
   const away = game?.finalAwayScore
+  const isFinal = home != null && away != null
+  const liveHome = game?.liveHomeScore
+  const liveAway = game?.liveAwayScore
+  const liveTotal = liveHome != null && liveAway != null ? liveHome + liveAway : null
+  const isLive = !isFinal && (game?.status === 'Live' || liveTotal != null)
   switch (play.market) {
     case 'total':
-      return overUnderOutcome(
-        play.side as 'over' | 'under',
-        play.line,
-        home == null || away == null ? null : home + away,
+      return (
+        overUnderOutcome(
+          play.side as 'over' | 'under',
+          play.line,
+          isFinal ? home! + away! : null,
+        ) ?? liveTotalOutcome(play.side as 'over' | 'under', play.line, liveTotal, isFinal)
       )
     case 'moneyline': {
-      if (home == null || away == null) return undefined
-      if (home === away) return 'push'
-      return (play.side === 'home') === (home > away) ? 'won' : 'lost'
+      if (isFinal) {
+        if (home === away) return 'push'
+        return (play.side === 'home') === (home! > away!) ? 'won' : 'lost'
+      }
+      return isLive ? 'live' : undefined
     }
     case 'run_line': {
-      if (home == null || away == null || play.line == null) return undefined
-      const margin = play.side === 'home' ? home - away : away - home
-      const adj = margin + play.line
-      if (adj === 0) return 'push'
-      return adj > 0 ? 'won' : 'lost'
+      if (play.line == null) return undefined
+      if (isFinal) {
+        const margin = play.side === 'home' ? home! - away! : away! - home!
+        const adj = margin + play.line
+        if (adj === 0) return 'push'
+        return adj > 0 ? 'won' : 'lost'
+      }
+      return isLive ? 'live' : undefined
     }
     case 'hr':
       if (play.playerId == null) return undefined
