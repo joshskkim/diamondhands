@@ -3,13 +3,18 @@
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { Target } from 'lucide-react'
-import { playerResultsQueryOptions, propBoardQueryOptions, todayGamesQueryOptions } from '@/lib/api'
+import {
+  livePlayerResultsQueryOptions,
+  playerResultsQueryOptions,
+  propBoardQueryOptions,
+  todayGamesQueryOptions,
+} from '@/lib/api'
 import type { BatterResult, PitcherPropPick, PitcherResult, PropBoardPick, TodayGame } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
-import { overUnderOutcome, propOutcome, type PickOutcome } from '@/lib/picks'
+import { liveCountOutcome, overUnderOutcome, propOutcome, type PickOutcome } from '@/lib/picks'
 import { OutcomeBadge } from './outcome-badge'
-import { LivePickTracker } from './live-tracker'
+import { LivePickTracker, gameIsLive } from './live-tracker'
 import { WhyDisclosure } from './why-disclosure'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -259,7 +264,19 @@ function RunnersUpLine({
   )
 }
 
-function PropCard({ pick, outcome, game }: { pick: PropBoardPick; outcome?: PickOutcome; game?: TodayGame }) {
+function PropCard({
+  pick,
+  outcome,
+  game,
+  liveCount,
+  liveOutcome,
+}: {
+  pick: PropBoardPick
+  outcome?: PickOutcome
+  game?: TodayGame
+  liveCount?: number | null
+  liveOutcome?: PickOutcome
+}) {
   const meta = MARKET_META[pick.market] ?? { chip: pick.market, verb: pick.market }
   return (
     <div className="rounded-xl border border-white/10 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">
@@ -316,7 +333,7 @@ function PropCard({ pick, outcome, game }: { pick: PropBoardPick; outcome?: Pick
         />
       </div>
 
-      <LivePickTracker game={game} market={pick.market} side="over" line={pick.line} outcome={outcome} />
+      <LivePickTracker game={game} market={pick.market} side="over" line={pick.line} outcome={liveOutcome} count={liveCount} />
 
       <WhyDisclosure reasons={buildReasons(pick)} />
 
@@ -464,7 +481,19 @@ function BestPick({ pick, unit }: { pick: PitcherPropPick; unit: string }) {
 // Pitcher cards are AMBER (batter cards are cyan) so "whose prop is this" is never
 // ambiguous — these are the starter's line, ranked by expected volume; the headline
 // number is the projection, the Best pick row is the model's lean (over or under).
-function PitcherCard({ pick, outcome, game }: { pick: PitcherPropPick; outcome?: PickOutcome; game?: TodayGame }) {
+function PitcherCard({
+  pick,
+  outcome,
+  game,
+  liveCount,
+  liveOutcome,
+}: {
+  pick: PitcherPropPick
+  outcome?: PickOutcome
+  game?: TodayGame
+  liveCount?: number | null
+  liveOutcome?: PickOutcome
+}) {
   const meta =
     PITCHER_MARKET_META[pick.market] ?? { chip: pick.market, unit: '', noun: pick.market }
 
@@ -502,7 +531,7 @@ function PitcherCard({ pick, outcome, game }: { pick: PitcherPropPick; outcome?:
 
       <BestPick pick={pick} unit={meta.unit} />
 
-      <LivePickTracker game={game} market={pick.market} side={pick.bestSide ?? 'over'} line={pick.bestLine} outcome={outcome} />
+      <LivePickTracker game={game} market={pick.market} side={pick.bestSide ?? 'over'} line={pick.bestLine} outcome={liveOutcome} count={liveCount} />
 
       <WhyDisclosure reasons={reasons} />
 
@@ -536,11 +565,24 @@ export function PropBoard() {
   // Live game state (score/inning) for the in-progress tracker on each card.
   const { data: games } = useQuery(todayGamesQueryOptions())
   const gamesById = new Map<number, TodayGame>((games ?? []).map((g) => [g.gameId, g]))
+  // Live player counts — poll only while a game is actually in progress; idle otherwise.
+  const anyLive = (games ?? []).some(gameIsLive)
+  const { data: liveResults } = useQuery({
+    ...livePlayerResultsQueryOptions(),
+    enabled: anyLive,
+    refetchInterval: anyLive ? 30_000 : false,
+  })
   const batterByKey = new Map<string, BatterResult>(
     (results?.batters ?? []).map((b) => [`${b.playerId}:${b.gameId}`, b]),
   )
   const pitcherByKey = new Map<string, PitcherResult>(
     (results?.pitchers ?? []).map((p) => [`${p.playerId}:${p.gameId}`, p]),
+  )
+  const liveBatterByKey = new Map<string, BatterResult>(
+    (liveResults?.batters ?? []).map((b) => [`${b.playerId}:${b.gameId}`, b]),
+  )
+  const livePitcherByKey = new Map<string, PitcherResult>(
+    (liveResults?.pitchers ?? []).map((p) => [`${p.playerId}:${p.gameId}`, p]),
   )
 
   function batterOutcome(pick: PropBoardPick): PickOutcome | undefined {
@@ -557,6 +599,16 @@ export function PropBoard() {
       pick.bestLine,
       pitcherByKey.get(`${pick.pitcherId}:${pick.gameId}`)?.[field],
     )
+  }
+
+  // Live in-progress count + monotonic-safe live grade for the on-card tracker.
+  function batterLiveCount(pick: PropBoardPick): number | null | undefined {
+    const field = BATTER_RESULT_FIELD[pick.market]
+    return field ? liveBatterByKey.get(`${pick.playerId}:${pick.gameId}`)?.[field] : undefined
+  }
+  function pitcherLiveCount(pick: PitcherPropPick): number | null | undefined {
+    const field = PITCHER_RESULT_FIELD[pick.market]
+    return field ? livePitcherByKey.get(`${pick.pitcherId}:${pick.gameId}`)?.[field] : undefined
   }
 
   return (
@@ -598,9 +650,19 @@ export function PropBoard() {
             (data.picks.length === 3 || data.picks.length >= 5) && 'lg:grid-cols-3',
           )}
         >
-          {data.picks.map((pick) => (
-            <PropCard key={pick.market} pick={pick} outcome={batterOutcome(pick)} game={gamesById.get(pick.gameId)} />
-          ))}
+          {data.picks.map((pick) => {
+            const liveCount = batterLiveCount(pick)
+            return (
+              <PropCard
+                key={pick.market}
+                pick={pick}
+                outcome={batterOutcome(pick)}
+                game={gamesById.get(pick.gameId)}
+                liveCount={liveCount}
+                liveOutcome={liveCountOutcome('over', pick.line, liveCount)}
+              />
+            )
+          })}
         </div>
       )}
 
@@ -616,9 +678,19 @@ export function PropBoard() {
               data.pitcherPicks.length >= 2 && 'lg:grid-cols-2',
             )}
           >
-            {data.pitcherPicks.map((pick) => (
-              <PitcherCard key={pick.market} pick={pick} outcome={pitcherOutcome(pick)} game={gamesById.get(pick.gameId)} />
-            ))}
+            {data.pitcherPicks.map((pick) => {
+              const liveCount = pitcherLiveCount(pick)
+              return (
+                <PitcherCard
+                  key={pick.market}
+                  pick={pick}
+                  outcome={pitcherOutcome(pick)}
+                  game={gamesById.get(pick.gameId)}
+                  liveCount={liveCount}
+                  liveOutcome={liveCountOutcome(pick.bestSide, pick.bestLine, liveCount)}
+                />
+              )
+            })}
           </div>
         </div>
       )}

@@ -56,6 +56,7 @@ export function LivePickTracker({
   side,
   line,
   outcome,
+  count,
   className,
 }: {
   game: TodayGame | undefined
@@ -63,6 +64,8 @@ export function LivePickTracker({
   side: string
   line: number | null
   outcome?: PickOutcome
+  /** Live count for a player prop (K/outs/ER/H, hits/HR) — shows a count-vs-line bar. */
+  count?: number | null
   className?: string
 }) {
   if (!gameIsLive(game)) return null
@@ -103,6 +106,9 @@ export function LivePickTracker({
         {word}
       </span>
     )
+  } else if (count != null && line != null) {
+    // Player prop (pitcher K/outs/ER/H, batter hits/HR): live count vs the line.
+    detail = <LiveProgress actual={count} line={line} tone={tone} />
   }
 
   return (

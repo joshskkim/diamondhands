@@ -30,6 +30,20 @@ public class ResultsRepository {
         WHERE game_date = ?
         """;
 
+    // Live (in-progress) counts from player_game_live — same DTO shapes as the Final reads
+    // so the client grades/tracks them identically. pitcher_strikeouts aliased to strikeouts.
+    private static final String LIVE_BATTERS_SQL = """
+        SELECT player_id, game_id, hits, home_runs, strikeouts, walks
+        FROM player_game_live
+        WHERE game_date = ? AND plate_appearances IS NOT NULL
+        """;
+
+    private static final String LIVE_PITCHERS_SQL = """
+        SELECT player_id, game_id, pitcher_strikeouts AS strikeouts, outs, hits_allowed, earned_runs
+        FROM player_game_live
+        WHERE game_date = ? AND outs IS NOT NULL
+        """;
+
     private final JdbcTemplate jdbc;
 
     public ResultsRepository(JdbcTemplate jdbc) {
@@ -42,6 +56,14 @@ public class ResultsRepository {
 
     public List<PitcherResultDto> findPitchers(LocalDate date) {
         return jdbc.query(PITCHERS_SQL, this::mapPitcher, date);
+    }
+
+    public List<BatterResultDto> findLiveBatters(LocalDate date) {
+        return jdbc.query(LIVE_BATTERS_SQL, this::mapBatter, date);
+    }
+
+    public List<PitcherResultDto> findLivePitchers(LocalDate date) {
+        return jdbc.query(LIVE_PITCHERS_SQL, this::mapPitcher, date);
     }
 
     private BatterResultDto mapBatter(ResultSet rs, int n) throws SQLException {

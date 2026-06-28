@@ -303,6 +303,13 @@ export function fetchPlayerResults(date?: string): Promise<PlayerResults> {
   return apiGet<PlayerResults>(`/api/results/players${qs ? `?${qs}` : ''}`)
 }
 
+export function fetchLivePlayerResults(date?: string): Promise<PlayerResults> {
+  const params = new URLSearchParams()
+  if (date) params.set('date', date)
+  const qs = params.toString()
+  return apiGet<PlayerResults>(`/api/results/players/live${qs ? `?${qs}` : ''}`)
+}
+
 export function fetchMostLikely(date?: string): Promise<MostLikely> {
   const params = new URLSearchParams()
   if (date) params.set('date', date)
@@ -386,6 +393,7 @@ export const queryKeys = {
   modelPicks: (date?: string) => ['model-picks', date ?? 'today'] as const,
   propBoard: (date?: string) => ['prop-board', date ?? 'today'] as const,
   playerResults: (date?: string) => ['player-results', date ?? 'today'] as const,
+  livePlayerResults: (date?: string) => ['player-results', 'live', date ?? 'today'] as const,
   players: {
     detail: (playerId: number) => ['player', 'detail', playerId] as const,
     recent: (playerId: number, limit = 20) =>
@@ -531,6 +539,15 @@ export function playerResultsQueryOptions(date?: string) {
   return queryOptions({
     queryKey: queryKeys.playerResults(date),
     queryFn: () => fetchPlayerResults(date),
+  })
+}
+
+/** Live in-progress player counts. The caller gates polling (enabled/refetchInterval) on
+ *  whether any game is actually live, so an idle slate pays nothing. */
+export function livePlayerResultsQueryOptions(date?: string) {
+  return queryOptions({
+    queryKey: queryKeys.livePlayerResults(date),
+    queryFn: () => fetchLivePlayerResults(date),
   })
 }
 
