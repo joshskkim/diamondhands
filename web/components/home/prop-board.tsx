@@ -316,7 +316,7 @@ function PropCard({ pick, outcome, game }: { pick: PropBoardPick; outcome?: Pick
         />
       </div>
 
-      <LivePickTracker game={game} market={pick.market} side="over" line={pick.line} />
+      <LivePickTracker game={game} market={pick.market} side="over" line={pick.line} outcome={outcome} />
 
       <WhyDisclosure reasons={buildReasons(pick)} />
 
@@ -502,7 +502,7 @@ function PitcherCard({ pick, outcome, game }: { pick: PitcherPropPick; outcome?:
 
       <BestPick pick={pick} unit={meta.unit} />
 
-      <LivePickTracker game={game} market={pick.market} side={pick.bestSide ?? 'over'} line={pick.bestLine} />
+      <LivePickTracker game={game} market={pick.market} side={pick.bestSide ?? 'over'} line={pick.bestLine} outcome={outcome} />
 
       <WhyDisclosure reasons={reasons} />
 

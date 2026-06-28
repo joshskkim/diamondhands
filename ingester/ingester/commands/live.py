@@ -19,7 +19,12 @@ from datetime import date
 import psycopg
 
 from ingester.db import eastern_today, get_connection
-from ingester.mlb_api import fetch_schedule, parse_game_linescore_live
+from ingester.mlb_api import (
+    fetch_schedule,
+    parse_game_first_inning,
+    parse_game_linescore_live,
+    parse_game_score,
+)
 from ingester.projection.constants import DEAD_GAME_STATUSES
 
 # Hydrate the linescore so we get currentInning / inningState / running runs in one call.
@@ -27,23 +32,47 @@ _LIVE_HYDRATE = "linescore"
 
 
 def _update_live(conn: psycopg.Connection, raw_games: list[dict]) -> int:
-    """Write live_* state for every in-progress game. Returns rows updated."""
+    """Update game state for in-progress and just-finished games. Returns rows updated.
+
+    While a game is live we write the live_* columns. The moment the schedule reports it
+    Final we set the Final score (+ first-inning runs) and clear live_* in the SAME pass —
+    so the board ends the game promptly at the live cadence instead of waiting for the
+    slower backfill-scores cron (which is what left finished games stuck "bottom 9th").
+    """
     n = 0
     for g in raw_games:
         game_pk = g.get("gamePk")
         if game_pk is None:
             continue
+        status = (g.get("status") or {}).get("abstractGameState")
         if (g.get("status") or {}).get("detailedState") in DEAD_GAME_STATUSES:
             continue
+
+        final = parse_game_score(g)  # not None only once the game is Final
+        if final is not None:
+            home, away = final
+            first = parse_game_first_inning(g)
+            home_1st, away_1st = first if first is not None else (None, None)
+            n += conn.execute(
+                "UPDATE games SET status = %s, home_score = %s, away_score = %s,"
+                " home_score_1st = COALESCE(%s, home_score_1st),"
+                " away_score_1st = COALESCE(%s, away_score_1st),"
+                " live_home_score = NULL, live_away_score = NULL,"
+                " live_current_inning = NULL, live_inning_state = NULL,"
+                " live_is_top = NULL, live_updated_at = NOW() WHERE id = %s",
+                (status, home, away, home_1st, away_1st, game_pk),
+            ).rowcount
+            continue
+
         live = parse_game_linescore_live(g)
         if live is None:
             continue
         n += conn.execute(
-            "UPDATE games SET live_home_score = %s, live_away_score = %s,"
+            "UPDATE games SET status = %s, live_home_score = %s, live_away_score = %s,"
             " live_current_inning = %s, live_inning_state = %s, live_is_top = %s,"
             " live_updated_at = NOW() WHERE id = %s",
             (
-                live["home"], live["away"], live["inning"],
+                status, live["home"], live["away"], live["inning"],
                 live["inning_state"], live["is_top"], game_pk,
             ),
         ).rowcount

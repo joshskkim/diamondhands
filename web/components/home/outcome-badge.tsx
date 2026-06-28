@@ -49,15 +49,30 @@ export function OutcomeBadge({
  * count vs the line and fills toward it. `onPace`, when given, draws a caret at the
  * projected-final position so you can see whether it's tracking over or under.
  */
+type LiveTone = 'live' | 'won' | 'lost'
+
+const TONE_TEXT: Record<LiveTone, string> = {
+  live: 'text-cyan-300',
+  won: 'text-emerald-300',
+  lost: 'text-rose-300',
+}
+const TONE_BAR: Record<LiveTone, string> = {
+  live: 'bg-cyan-500',
+  won: 'bg-emerald-500',
+  lost: 'bg-rose-500',
+}
+
 export function LiveProgress({
   actual,
   line,
   onPace,
+  tone = 'live',
   className,
 }: {
   actual: number
   line: number
   onPace?: number | null
+  tone?: LiveTone
   className?: string
 }) {
   const denom = line > 0 ? line : 1
@@ -66,12 +81,12 @@ export function LiveProgress({
     onPace != null ? Math.min(100, Math.max(0, (onPace / denom) * 100)) : null
   return (
     <div className={cn('flex items-center gap-1.5', className)}>
-      <span className="font-mono tabular-nums text-[11px] text-cyan-300">
+      <span className={cn('font-mono tabular-nums text-[11px]', TONE_TEXT[tone])}>
         {actual}
         <span className="text-zinc-600">/{line}</span>
       </span>
       <div className="relative h-1 w-12 rounded bg-black/40 overflow-hidden">
-        <div className="absolute inset-y-0 left-0 bg-cyan-500" style={{ width: `${pct}%` }} />
+        <div className={cn('absolute inset-y-0 left-0', TONE_BAR[tone])} style={{ width: `${pct}%` }} />
         {pacePct != null && (
           <div
             className="absolute inset-y-0 w-px bg-amber-300"

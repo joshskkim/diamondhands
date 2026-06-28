@@ -309,7 +309,7 @@ function PickCard({
         <Stat label="EV" value={signedPct(p.evPct)} className="text-emerald-300" />
       </div>
 
-      <LivePickTracker game={game} market={p.market} side={p.side} line={p.line} />
+      <LivePickTracker game={game} market={p.market} side={p.side} line={p.line} outcome={outcome} />
 
       <WhyDisclosure reasons={pick.reasons} />
     </div>
@@ -358,7 +358,7 @@ function LottoCard({ pick, outcome, game }: { pick: ModelPick; outcome?: PickOut
         <Stat label="EV" value={signedPct(p.evPct)} className="text-emerald-300" />
       </div>
 
-      <LivePickTracker game={game} market={p.market} side={p.side} line={p.line} />
+      <LivePickTracker game={game} market={p.market} side={p.side} line={p.line} outcome={outcome} />
 
       <WhyDisclosure reasons={pick.reasons} />
     </div>
