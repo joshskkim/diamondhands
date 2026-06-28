@@ -20,7 +20,7 @@ from datetime import date
 import psycopg
 import requests
 
-from ingester.db import eastern_today, get_connection
+from ingester.db import active_slate_date, get_connection
 from ingester.mlb_api import (
     fetch_schedule,
     parse_game_first_inning,
@@ -206,13 +206,15 @@ def _tick(conn: psycopg.Connection, game_date: date) -> tuple[int, int]:
 
 
 def cmd_live_refresh(args: argparse.Namespace) -> None:
-    game_date = getattr(args, "date", None) or eastern_today()
     loop: bool = getattr(args, "loop", False)
     interval: int = getattr(args, "interval_seconds", 30)
     for_minutes: int = getattr(args, "for_minutes", 30)
 
     conn = get_connection()
     try:
+        # Default to the active slate (latest with games), NOT eastern_today() — so a late
+        # game that crosses midnight ET keeps getting ticked + finalized (see active_slate_date).
+        game_date = getattr(args, "date", None) or active_slate_date(conn)
         if not loop:
             games_n, players_n = _tick(conn, game_date)
             print(f"[live-refresh] updated {games_n} game(s), {players_n} player line(s).")
