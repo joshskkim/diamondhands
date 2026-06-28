@@ -3,12 +3,13 @@
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { Target } from 'lucide-react'
-import { playerResultsQueryOptions, propBoardQueryOptions } from '@/lib/api'
-import type { BatterResult, PitcherPropPick, PitcherResult, PropBoardPick } from '@/lib/types'
+import { playerResultsQueryOptions, propBoardQueryOptions, todayGamesQueryOptions } from '@/lib/api'
+import type { BatterResult, PitcherPropPick, PitcherResult, PropBoardPick, TodayGame } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
 import { overUnderOutcome, propOutcome, type PickOutcome } from '@/lib/picks'
 import { OutcomeBadge } from './outcome-badge'
+import { LivePickTracker } from './live-tracker'
 import { WhyDisclosure } from './why-disclosure'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -258,7 +259,7 @@ function RunnersUpLine({
   )
 }
 
-function PropCard({ pick, outcome }: { pick: PropBoardPick; outcome?: PickOutcome }) {
+function PropCard({ pick, outcome, game }: { pick: PropBoardPick; outcome?: PickOutcome; game?: TodayGame }) {
   const meta = MARKET_META[pick.market] ?? { chip: pick.market, verb: pick.market }
   return (
     <div className="rounded-xl border border-white/10 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">
@@ -314,6 +315,8 @@ function PropCard({ pick, outcome }: { pick: PropBoardPick; outcome?: PickOutcom
           }
         />
       </div>
+
+      <LivePickTracker game={game} market={pick.market} side="over" line={pick.line} />
 
       <WhyDisclosure reasons={buildReasons(pick)} />
 
@@ -461,7 +464,7 @@ function BestPick({ pick, unit }: { pick: PitcherPropPick; unit: string }) {
 // Pitcher cards are AMBER (batter cards are cyan) so "whose prop is this" is never
 // ambiguous — these are the starter's line, ranked by expected volume; the headline
 // number is the projection, the Best pick row is the model's lean (over or under).
-function PitcherCard({ pick, outcome }: { pick: PitcherPropPick; outcome?: PickOutcome }) {
+function PitcherCard({ pick, outcome, game }: { pick: PitcherPropPick; outcome?: PickOutcome; game?: TodayGame }) {
   const meta =
     PITCHER_MARKET_META[pick.market] ?? { chip: pick.market, unit: '', noun: pick.market }
 
@@ -499,6 +502,8 @@ function PitcherCard({ pick, outcome }: { pick: PitcherPropPick; outcome?: PickO
 
       <BestPick pick={pick} unit={meta.unit} />
 
+      <LivePickTracker game={game} market={pick.market} side={pick.bestSide ?? 'over'} line={pick.bestLine} />
+
       <WhyDisclosure reasons={reasons} />
 
       <RunnersUpLine
@@ -528,6 +533,9 @@ export function PropBoard() {
   const { data, isPending, isError } = useQuery(propBoardQueryOptions())
   // Actual results overlay a ✓/✗ on the headline pick once its game is final.
   const { data: results } = useQuery(playerResultsQueryOptions())
+  // Live game state (score/inning) for the in-progress tracker on each card.
+  const { data: games } = useQuery(todayGamesQueryOptions())
+  const gamesById = new Map<number, TodayGame>((games ?? []).map((g) => [g.gameId, g]))
   const batterByKey = new Map<string, BatterResult>(
     (results?.batters ?? []).map((b) => [`${b.playerId}:${b.gameId}`, b]),
   )
@@ -591,7 +599,7 @@ export function PropBoard() {
           )}
         >
           {data.picks.map((pick) => (
-            <PropCard key={pick.market} pick={pick} outcome={batterOutcome(pick)} />
+            <PropCard key={pick.market} pick={pick} outcome={batterOutcome(pick)} game={gamesById.get(pick.gameId)} />
           ))}
         </div>
       )}
@@ -609,7 +617,7 @@ export function PropBoard() {
             )}
           >
             {data.pitcherPicks.map((pick) => (
-              <PitcherCard key={pick.market} pick={pick} outcome={pitcherOutcome(pick)} />
+              <PitcherCard key={pick.market} pick={pick} outcome={pitcherOutcome(pick)} game={gamesById.get(pick.gameId)} />
             ))}
           </div>
         </div>

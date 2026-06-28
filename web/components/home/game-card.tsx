@@ -8,13 +8,9 @@ import { cn, parseApiDate } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
 import { favoriteOutcome, liveTotalPace } from '@/lib/picks'
 import { OutcomeBadge, LiveProgress } from './outcome-badge'
+import { inningLabel } from './live-tracker'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
-
-const ORDINALS = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th']
-function inningLabel(inning: number): string {
-  return ORDINALS[inning] ?? `${inning}th`
-}
 
 // MLB detailedState values for a game that won't be played as scheduled — mirrors the
 // ingester's _DEAD_GAME_STATUSES. We keep the card (badged) but drop projections/picks;
