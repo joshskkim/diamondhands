@@ -36,9 +36,13 @@ DIAMOND_DIR=/opt/diamond
 
 # Live in-game state (~30s cadence) for the home board's real-time bet trackers.
 # Each invocation loops internally for 30 min, so the */30 schedule tiles back-to-back
-# loops with no gap across the game window (1pm–1am ET). Writes only games.live_*
-# (running score + current inning); the Final score/grading path is untouched.
-*/30 13-23,0-1 * * *  /opt/diamond/deploy/run-ingester.sh live-refresh --loop --for-minutes 30 --interval-seconds 30
+# loops with no gap across the game window (1pm–3am ET). The window runs to 3am so the
+# latest games (10pm-ET West-Coast starts, extra innings, delays) still get ticked through
+# to Final — _update_live clears live_* and sets the Final score in the same pass, so a
+# late game ends promptly here instead of staying stuck "Live" until the 9am daily run.
+# Writes only games.live_* (running score + current inning); the Final grading path is
+# untouched. Polls are cheap and a no-op once every game on the slate is Final.
+*/30 13-23,0-2 * * *  /opt/diamond/deploy/run-ingester.sh live-refresh --loop --for-minutes 30 --interval-seconds 30
 
 # Weekly point-in-time skill + pitch-mix snapshots (Mon 7am ET). Banks one row per player
 # per Monday using only game_date < as_of_date — the leak-free dataset the blend/ensemble

@@ -31,5 +31,10 @@ public record TodayGameDto(
     Integer liveAwayScore,
     Integer liveCurrentInning,
     String liveInningState,
-    Boolean liveIsTop
+    Boolean liveIsTop,
+    // When the live_* state was last written (ISO-8601). Lets the client treat live state
+    // as stale once the feed stops (game past the live-refresh window, or a cron gap) so a
+    // finished game never stays stuck reading "Live". Not streamed over SSE — see
+    // LiveGameDto / LiveGameService (a per-tick timestamp would defeat the change-diff).
+    String liveUpdatedAt
 ) {}

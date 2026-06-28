@@ -32,6 +32,7 @@ public class GameRepository {
             g.live_current_inning,
             g.live_inning_state,
             g.live_is_top,
+            g.live_updated_at,
             ht.id                           AS home_team_id,
             ht.abbreviation                 AS home_abbr,
             ht.name                         AS home_name,
@@ -139,7 +140,8 @@ public class GameRepository {
             nullableInt(rs, "live_away_score"),
             nullableInt(rs, "live_current_inning"),
             rs.getString("live_inning_state"),
-            nullableBool(rs, "live_is_top"));
+            nullableBool(rs, "live_is_top"),
+            timestampIso(rs, "live_updated_at"));
     }
 
     private static final String LIVE_GAMES_SQL = """
@@ -196,5 +198,11 @@ public class GameRepository {
     private static Boolean nullableBool(ResultSet rs, String col) throws SQLException {
         boolean val = rs.getBoolean(col);
         return rs.wasNull() ? null : val;
+    }
+
+    /** A TIMESTAMPTZ column as an ISO-8601 instant string, or null. */
+    private static String timestampIso(ResultSet rs, String col) throws SQLException {
+        java.sql.Timestamp ts = rs.getTimestamp(col);
+        return ts == null ? null : ts.toInstant().toString();
     }
 }

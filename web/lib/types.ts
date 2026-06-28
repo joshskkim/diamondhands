@@ -73,6 +73,10 @@ export interface TodayGame {
   liveCurrentInning: number | null
   liveInningState: string | null
   liveIsTop: boolean | null
+  /** When the live_* state was last written (ISO-8601), or null. Used to treat live state
+   *  as stale once the feed stops — so a finished game never stays stuck reading "Live".
+   *  Not carried on the SSE LiveGame delta (a per-tick timestamp would defeat its diff). */
+  liveUpdatedAt: string | null
 }
 
 /** GET /api/games/live/stream — a lean live-state delta pushed over SSE. */
@@ -721,6 +725,7 @@ export interface MostLikely {
 export interface BatterResult {
   playerId: number
   gameId: number
+  atBats: number | null
   hits: number | null
   homeRuns: number | null
   strikeouts: number | null
