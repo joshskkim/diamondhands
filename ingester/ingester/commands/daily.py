@@ -23,6 +23,8 @@ from ingester.commands.backfill_pitcher_starts import cmd_backfill_pitcher_start
 from ingester.commands.backfill_batter_lines import cmd_backfill_batter_lines
 from ingester.commands.daily_slate import cmd_daily_slate
 from ingester.commands.picks import cmd_record_picks, cmd_score_picks
+from ingester.commands.briefing import cmd_daily_briefing
+from agent_eval.score_recs import cmd_score_agent_recs
 from ingester.commands.refresh_weather import cmd_refresh_weather
 from ingester.commands.refresh_umpires import cmd_refresh_umpires
 from ingester.commands.refresh_skills import cmd_refresh_skills
@@ -69,6 +71,9 @@ def cmd_daily(args: argparse.Namespace) -> None:
             # market (hit/hr/k), only ever writing total_runs.
             ("backfill-batter-lines", cmd_backfill_batter_lines),
             ("score-picks", cmd_score_picks),
+            # Grade the agent's own recommendations + user bets on the same actuals (reuses
+            # the score-picks grader). Feeds the nightly outcome-eval + the briefing's record.
+            ("score-agent-recs", cmd_score_agent_recs),
             ("compute-accuracy", cmd_compute_accuracy),
         ):
             try:
@@ -141,6 +146,8 @@ def cmd_daily(args: argparse.Namespace) -> None:
             ("refresh-odds", cmd_refresh_odds, False),
             ("record-picks", cmd_record_picks, False),
             ("close prior slate (scores+stats+picks+accuracy)", _close_prior_slate, False),
+            # Proactive recap once the prior slate is graded (anchor A; Discord, no-op if unset).
+            ("daily briefing (Discord)", cmd_daily_briefing, False),
         ]
         if getattr(args, "skip_skills", False):
             # Both skills and bullpen do the slow Statcast-cache re-aggregation.

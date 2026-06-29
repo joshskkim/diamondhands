@@ -146,6 +146,127 @@ export async function askDiamond(
   }
 }
 
+// ── Diamond Analyst (stateful agent) ───────────────────────────────────────────
+
+/** A proposed write the user must confirm (the signed token replays the exact action). */
+export type AgentConfirm = { token: string; action: string; summary: string }
+
+/** One event off the /api/agent stream — adds debate `role` turns + `confirm` proposals. */
+export type AgentEvent =
+  | { type: 'status'; tool: string; label: string }
+  | { type: 'role'; role: string; text: string }
+  | { type: 'links'; links: AskLink[] }
+  | { type: 'confirm'; confirm: AgentConfirm }
+  | { type: 'answer'; text: string }
+  | { type: 'sources'; tools: string[] }
+  | { type: 'error'; message: string }
+
+function parseAgentEvent(record: string): AgentEvent | null {
+  let event = 'message'
+  let data = ''
+  for (const line of record.split('\n')) {
+    if (line.startsWith('event:')) event = line.slice(6).trim()
+    else if (line.startsWith('data:')) data += line.slice(5).trim()
+  }
+  if (!data) return null
+  try {
+    const payload = JSON.parse(data) as Record<string, unknown>
+    switch (event) {
+      case 'status':
+        return { type: 'status', tool: String(payload.tool), label: String(payload.label) }
+      case 'role':
+        return { type: 'role', role: String(payload.role), text: String(payload.text) }
+      case 'links':
+        return { type: 'links', links: (payload.links as AskLink[]) ?? [] }
+      case 'confirm':
+        return {
+          type: 'confirm',
+          confirm: {
+            token: String(payload.token),
+            action: String(payload.action),
+            summary: String(payload.summary),
+          },
+        }
+      case 'answer':
+        return { type: 'answer', text: String(payload.text) }
+      case 'sources':
+        return { type: 'sources', tools: (payload.tools as string[]) ?? [] }
+      case 'error':
+        return { type: 'error', message: String(payload.message) }
+      default:
+        return null
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Stream an answer from the authenticated Diamond Analyst. Same SSE shape as {@link askDiamond}
+ * plus bull/skeptic/judge `role` turns and `confirm` proposals. Requires a signed-in session
+ * (401 when not). Confirm a proposal with {@link confirmAction}.
+ */
+export async function askAgent(
+  question: string,
+  onEvent: (event: AgentEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}/api/agent`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify({ question }),
+      signal,
+    })
+  } catch {
+    onEvent({ type: 'error', message: 'Could not reach the server.' })
+    return
+  }
+  if (res.status === 401) {
+    onEvent({ type: 'error', message: 'Sign in to use the Diamond Analyst.' })
+    return
+  }
+  if (res.status === 503) {
+    onEvent({ type: 'error', message: 'The AI assistant is not enabled on this server.' })
+    return
+  }
+  if (!res.ok || !res.body) {
+    onEvent({ type: 'error', message: `Request failed (${res.status}).` })
+    return
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let sep: number
+    while ((sep = buffer.indexOf('\n\n')) !== -1) {
+      const record = buffer.slice(0, sep)
+      buffer = buffer.slice(sep + 2)
+      const parsed = parseAgentEvent(record)
+      if (parsed) onEvent(parsed)
+    }
+  }
+}
+
+/** Execute a confirmed write action; returns the server's human-readable result. */
+export async function confirmAction(token: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/agent/confirm`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  })
+  if (!res.ok) throw new Error(`Confirm failed (${res.status}).`)
+  const payload = (await res.json()) as { result?: string }
+  return payload.result ?? 'Done.'
+}
+
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 export type AuthUser = { id: number; email: string; handle: string; pro: boolean }

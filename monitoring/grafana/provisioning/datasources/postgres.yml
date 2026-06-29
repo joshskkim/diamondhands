@@ -1,0 +1,21 @@
+apiVersion: 1
+
+# Read-only Postgres datasource so Grafana can chart the agent eval history (eval_runs /
+# eval_results) — these are inherently DB-resident records, not Prometheus time series. The
+# password is interpolated from the grafana container's DB_PASSWORD env (set in compose.prod.yml),
+# so no secret is committed. Same db/user/host the API uses.
+datasources:
+  - name: Postgres
+    uid: diamond-postgres
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    user: diamond
+    isDefault: false
+    editable: true
+    jsonData:
+      database: diamond
+      sslmode: disable
+      postgresVersion: 1600
+    secureJsonData:
+      password: ${DB_PASSWORD}
