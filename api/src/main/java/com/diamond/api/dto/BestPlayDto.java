@@ -22,5 +22,10 @@ public record BestPlayDto(
     Double fairProb,
     double evPct,
     Integer playerId,
-    String playerName
+    String playerName,
+    // Analyst promotion-gate verdict (V64). Null when not vetted (AI off / not yet debated) —
+    // the board treats null as "show mechanically". 'pass' demotes from Today's Board to here.
+    String debateVerdict,
+    Double debateConfidence,
+    String debateRationale
 ) {}

@@ -14,6 +14,7 @@ duplicate of the TS ones (the web computes live, this records the snapshot).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -40,6 +41,9 @@ MIN_MODEL_PROB = 0.40
 LONGSHOT_EDGE = 0.08
 STRONG_EDGE = 0.06
 MAX_PICKS = 3
+# The Analyst gate (V64) debates the wider candidate set (one per game) before promotion, so a
+# vetoed top pick can be replaced by the next-best and the veto annotates Best Lines.
+CANDIDATE_LIMIT = 6
 EXCLUDED_MARKETS = {"pitcher_k", "pitcher_outs", "hit"}
 HIT_RATE_VETO_MIN_N = 15  # season sample needed before the traffic light can veto
 # Per-market veto bands: (no OVER below, no UNDER above). Market-specific because
@@ -55,6 +59,9 @@ HIT_RATE_VETO_BANDS: dict[str, tuple[float, float]] = {
 # Mirrors the mcp-server's DIAMOND_API_URL. Local/host runs fall back to localhost. An
 # explicit --api still wins (see cmd_record_picks).
 DEFAULT_API = os.environ.get("DIAMOND_API_URL", "http://localhost:8080")
+# Shared key for the server-to-server debate gate (POST /api/debate/pick). Blank => the gate is
+# off and the board stays mechanical (graceful — the gate only ever demotes on an explicit pass).
+INTERNAL_KEY = os.environ.get("AGENT_INTERNAL_KEY", "")
 
 
 def _get_json(url: str) -> object:
@@ -115,9 +122,9 @@ def _hit_rate_veto(play: dict, hit_rates: dict | None) -> bool:
     return False
 
 
-def build_picks(plays: list[dict], sim: dict | None,
-                hit_rates: dict | None = None) -> list[dict]:
-    """Apply the Model's Picks bar; returns at most MAX_PICKS plays, board order."""
+def _scored_candidates(plays: list[dict], sim: dict | None,
+                       hit_rates: dict | None) -> list[tuple[float, dict, float, bool]]:
+    """Apply the Model's Picks bar + vetoes; return (score, play, edge, strong) sorted best-first."""
     candidates: list[tuple[float, dict, float, bool]] = []
     for p in plays:
         if p["market"] in EXCLUDED_MARKETS or p.get("fairProb") is None:
@@ -137,18 +144,34 @@ def build_picks(plays: list[dict], sim: dict | None,
         score = edge + 0.5 * p["evPct"] + (0.02 if corroborated else 0.0)
         strong = edge >= STRONG_EDGE and p["modelProb"] >= 0.5
         candidates.append((score, p, edge, strong))
-
     candidates.sort(key=lambda c: -c[0])
+    return candidates
+
+
+def _take_one_per_game(candidates: list[tuple[float, dict, float, bool]], cap: int) -> list[dict]:
+    """At most one pick per game, in board order, up to `cap`."""
     picks: list[dict] = []
     used_games: set[int] = set()
-    for score, p, edge, strong in candidates:
+    for _score, p, edge, strong in candidates:
         if p["gameId"] in used_games:
             continue
         used_games.add(p["gameId"])
         picks.append({**p, "edge": edge, "strong": strong})
-        if len(picks) == MAX_PICKS:
+        if len(picks) == cap:
             break
     return picks
+
+
+def build_picks(plays: list[dict], sim: dict | None,
+                hit_rates: dict | None = None) -> list[dict]:
+    """Apply the Model's Picks bar; returns at most MAX_PICKS plays, board order."""
+    return _take_one_per_game(_scored_candidates(plays, sim, hit_rates), MAX_PICKS)
+
+
+def build_candidates(plays: list[dict], sim: dict | None, hit_rates: dict | None = None,
+                     limit: int = CANDIDATE_LIMIT) -> list[dict]:
+    """The wider candidate set (one per game) the Analyst gate debates before promotion."""
+    return _take_one_per_game(_scored_candidates(plays, sim, hit_rates), limit)
 
 
 def _active_slate(api: str) -> date:
@@ -195,6 +218,81 @@ def plan_reconcile(picks: list[dict], existing: dict, now: datetime,
     return ops
 
 
+# ── the Analyst promotion gate (V64) ─────────────────────────────────────────
+
+def _cached_verdict(conn, slate, cand: dict) -> str | None:
+    """A selection is debated once per slate; reuse the cached verdict if present."""
+    row = conn.execute(
+        "SELECT verdict FROM pick_verdicts WHERE slate_date=%s AND game_id=%s "
+        "AND market=%s AND side=%s AND player_id IS NOT DISTINCT FROM %s",
+        (slate, cand["gameId"], cand["market"], cand["side"], cand.get("playerId")),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _debate_and_store(conn, api: str, slate, cand: dict) -> str | None:
+    """Debate a candidate via the server gate and persist the verdict. Returns the verdict, or
+    None on any failure (gate off / AI disabled / error) so the candidate promotes mechanically —
+    the gate is additive and must never break record-picks."""
+    if not INTERNAL_KEY:
+        return None
+    try:
+        resp = requests.post(
+            f"{api}/api/debate/pick",
+            headers={"X-Internal-Key": INTERNAL_KEY},
+            json={
+                "gameId": cand["gameId"], "market": cand["market"], "side": cand["side"],
+                "line": cand.get("line"), "playerId": cand.get("playerId"),
+                "playerName": cand.get("playerName"), "priceAmerican": cand["priceAmerican"],
+                "modelProb": cand["modelProb"], "fairProb": cand["fairProb"],
+            },
+            timeout=90,
+        )
+        if resp.status_code != 200:
+            return None  # 503 (AI off) / 403 (no key) => no gate, promote mechanically
+        v = resp.json()
+    except Exception as exc:  # noqa: BLE001 — the gate must never break record-picks
+        who = cand.get("playerName") or cand.get("matchup")
+        print(f"[record-picks] debate failed for {who}: {exc}; promoting mechanically")
+        return None
+
+    conn.execute(
+        """
+        INSERT INTO pick_verdicts (
+            slate_date, game_id, market, side, line, player_id, player_name, matchup,
+            model_prob, fair_prob, edge, ev_pct, price_american, book,
+            verdict, confidence, rationale, risks
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+        ON CONFLICT (slate_date, game_id, market, side, player_id) DO UPDATE SET
+            verdict=EXCLUDED.verdict, confidence=EXCLUDED.confidence,
+            rationale=EXCLUDED.rationale, risks=EXCLUDED.risks, debated_at=now()
+        """,
+        (slate, cand["gameId"], cand["market"], cand["side"], cand.get("line"),
+         cand.get("playerId"), cand.get("playerName"), cand.get("matchup"),
+         cand["modelProb"], cand["fairProb"], cand["edge"], cand["evPct"],
+         cand["priceAmerican"], cand.get("bestBook"),
+         v.get("verdict", "pass"), v.get("confidence"), v.get("rationale"),
+         json.dumps(v.get("keyRisks", []))),
+    )
+    return v.get("verdict", "pass")
+
+
+def gate_candidates(conn, api: str, slate, candidates: list[dict]) -> list[dict]:
+    """Promote up to MAX_PICKS candidates the Analyst endorses, debating in score order.
+    verdict bet/lean (or None when the gate is off/unavailable) → promoted; 'pass' → demoted
+    (left in pick_verdicts only, surfaced on Best Lines). Cached verdicts are reused."""
+    picks: list[dict] = []
+    for cand in candidates:
+        verdict = _cached_verdict(conn, slate, cand)
+        if verdict is None:
+            verdict = _debate_and_store(conn, api, slate, cand)
+        if verdict is None or verdict in ("bet", "lean"):
+            picks.append(cand)
+        if len(picks) == MAX_PICKS:
+            break
+    return picks
+
+
 def cmd_record_picks(args: argparse.Namespace) -> None:
     api = getattr(args, "api", None) or DEFAULT_API
     # Record the slate users are actually shown, not the wall-clock/projection date — so a
@@ -216,7 +314,7 @@ def cmd_record_picks(args: argparse.Namespace) -> None:
         print(f"[record-picks] hit-rates unavailable ({exc}); recording without that veto")
         hit_rates = None
 
-    picks = build_picks(plays, sim, hit_rates)
+    candidates = build_candidates(plays, sim, hit_rates)
     now = datetime.now(timezone.utc)
 
     # Reconcile (never DELETE): a pick keeps its row once shown. Picks still in the top set
@@ -225,6 +323,10 @@ def cmd_record_picks(args: argparse.Namespace) -> None:
     # as an "earlier" extra). Picks whose game has started are frozen as-is.
     conn = get_connection()
     try:
+        # Analyst gate: debate the candidates and promote only those it endorses (bet/lean).
+        # Vetoed (pass) candidates stay in pick_verdicts → surfaced on Best Lines. No-op when
+        # the gate is off/unavailable (mechanical top-3). Verdicts + picks commit together below.
+        picks = gate_candidates(conn, api, slate, candidates)
         existing = conn.execute(
             """
             SELECT mp.id, mp.game_id, mp.market, mp.side, mp.player_id, mp.active,

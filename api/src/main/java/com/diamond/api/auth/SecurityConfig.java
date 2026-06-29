@@ -75,6 +75,10 @@ public class SecurityConfig {
                 // "Ask Diamond" AI query is a public read-like endpoint (POST only because it
                 // takes a question body). Gate to .authenticated() later if it needs sign-in.
                 .requestMatchers(HttpMethod.POST, "/api/ask").permitAll()
+                // Server-to-server debate gate (record-picks). Not session-auth'd — guarded by
+                // the X-Internal-Key header in DebateController. Permit here so the filter chain
+                // doesn't 401 it before the controller's key check runs.
+                .requestMatchers(HttpMethod.POST, "/api/debate/pick").permitAll()
                 // Stripe webhook is public but authenticated by its signature, not the
                 // session cookie (it's a server-to-server callback). Checkout/portal POSTs
                 // are not GET, so they fall through to .authenticated() below.
