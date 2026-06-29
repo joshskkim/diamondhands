@@ -143,7 +143,26 @@ function buildReasons(p: BestPlay, edge: number, corroboration: string | null): 
     )
   }
   if (corroboration) reasons.push(corroboration)
+  if (p.debateVerdict === 'bet' || p.debateVerdict === 'lean') {
+    const conf = p.debateConfidence != null ? ` (${Math.round(p.debateConfidence * 100)}% confidence)` : ''
+    reasons.push(
+      `The Analyst's bull-vs-skeptic debate endorsed this${conf}${p.debateRationale ? `: ${p.debateRationale}` : '.'}`,
+    )
+  }
   return reasons
+}
+
+/** The judge's endorsement chip — shown on a pick the Analyst gate promoted (bet/lean). */
+function AnalystChip({ verdict, confidence }: { verdict?: string | null; confidence?: number | null }) {
+  if (verdict !== 'bet' && verdict !== 'lean') return null
+  return (
+    <span
+      title="The Analyst's bull/skeptic/judge debate endorsed this pick"
+      className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-violet-300 border-violet-400/40 bg-violet-500/10"
+    >
+      Analyst {confidence != null ? `${Math.round(confidence * 100)}%` : verdict}
+    </span>
+  )
 }
 
 function buildPicks(
@@ -161,6 +180,10 @@ function buildPicks(
     if (p.evPct < MIN_EV) continue
     if (p.modelProb < MIN_MODEL_PROB && edge < LONGSHOT_EDGE) continue
     if (hitRateVeto(p, hitRates)) continue
+    // The Analyst gate: a pick it passed on drops off Today's Board (it shows on Best Lines
+    // with the reason). A null verdict means "not vetted" → show mechanically. Mirrors the
+    // server gate in picks.py::gate_candidates.
+    if (p.debateVerdict === 'pass') continue
 
     const totals = simTotalsCheck(p, sim)
     if (totals.veto) continue
@@ -274,6 +297,7 @@ function PickCard({
         >
           {pick.strong ? 'Strong' : 'Lean'}
         </span>
+        <AnalystChip verdict={p.debateVerdict} confidence={p.debateConfidence} />
         {outcome && <OutcomeBadge outcome={outcome} />}
         <Link
           href={`/mlb/games/${p.gameId}`}
@@ -325,6 +349,7 @@ function LottoCard({ pick, outcome, game }: { pick: ModelPick; outcome?: PickOut
         <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-200 border-amber-400/40 bg-amber-500/10">
           Lotto
         </span>
+        <AnalystChip verdict={p.debateVerdict} confidence={p.debateConfidence} />
         {outcome && <OutcomeBadge outcome={outcome} />}
         <Link
           href={`/mlb/games/${p.gameId}`}
