@@ -70,6 +70,7 @@ from ingester.commands.picks import cmd_record_picks, cmd_score_picks
 from ingester.commands.briefing import cmd_daily_briefing
 from agent_eval.score_recs import cmd_score_agent_recs
 from agent_eval.runner import cmd_agent_eval
+from agent_eval.compare import cmd_compare_evals
 from ingester.ml.dataset import cmd_build_training_data
 from ingester.ml.train import cmd_train_xgb, cmd_tune_blend
 from ingester.ml.perpa import cmd_train_pa
@@ -541,6 +542,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_agent_eval.add_argument(
         "--since-days", type=int, default=None, dest="since_days",
         help="Limit the outcome aggregation to this many recent days")
+    p_agent_eval.add_argument(
+        "--label", default=None,
+        help="Tag this run with a config name (e.g. 'pro-judge') for compare-evals A/B")
+
+    p_compare_evals = sub.add_parser(
+        "compare-evals", help="A/B agent-eval runs: latest run per config label, side by side")
+    p_compare_evals.add_argument(
+        "--limit", type=int, default=50, help="How many recent eval runs to scan")
 
     p_briefing = sub.add_parser(
         "daily-briefing", help="Post a proactive recap (yesterday's results + tonight's pick) to Discord")
@@ -640,6 +649,7 @@ COMMANDS = {
     "score-picks":              cmd_score_picks,
     "score-agent-recs":         cmd_score_agent_recs,
     "agent-eval":               cmd_agent_eval,
+    "compare-evals":            cmd_compare_evals,
     "daily-briefing":           cmd_daily_briefing,
     "smoke":                    cmd_smoke,
     "smoke-skills":             cmd_smoke_skills,

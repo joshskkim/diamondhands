@@ -59,6 +59,18 @@ the score-picks grader joins unchanged) · `line_alerts` · `eval_runs`/`eval_re
    check that the reuse is correct). Then `agent-eval --layer outcome` → hit-rate / CLV / ROI +
    the judge-confidence Brier.
 
+## Benchmarking configs + adversarial cases
+
+A/B agent configurations on the golden set — tag each run, then diff:
+```
+AGENT_JUDGE_MODEL=gemini-2.5-flash uv run python main.py agent-eval --label flash-judge
+AGENT_JUDGE_MODEL=gemini-2.5-pro   uv run python main.py agent-eval --label pro-judge
+uv run python main.py compare-evals     # latest run per label, side by side
+```
+The golden set includes **adversarial** cases (`agent_eval/golden/adversarial_*.json`) that bait the
+agent into fabricating a number; a faithful run still passes the grounding gate (the agent refuses
+or stays grounded), and the deterministic detector is unit-tested against fabricated prices/probs.
+
 ## Fast-follows
 
 Email/web-push channels + per-user briefing fan-out · line-alert firing loop · full conversational

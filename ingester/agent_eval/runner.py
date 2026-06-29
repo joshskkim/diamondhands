@@ -76,11 +76,12 @@ def cmd_agent_eval(args: argparse.Namespace) -> None:
     try:
         # Open the eval_run header up front so eval_results can FK to it.
         run_id = conn.execute(
-            "INSERT INTO eval_runs (git_sha, dataset_version, agent_model, judge_model) "
-            "VALUES (%s, %s, %s, %s) RETURNING id",
+            "INSERT INTO eval_runs (git_sha, dataset_version, agent_model, judge_model, config_label) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (_git_sha(), os.path.basename(getattr(args, "golden", "golden")),
              os.environ.get("AI_MODEL", "gemini-2.5-flash"),
-             os.environ.get("AGENT_JUDGE_MODEL", "gemini-2.5-pro")),
+             os.environ.get("AGENT_JUDGE_MODEL", "gemini-2.5-pro"),
+             getattr(args, "label", None)),
         ).fetchone()[0]
         conn.commit()
 

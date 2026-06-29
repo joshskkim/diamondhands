@@ -1,0 +1,9 @@
+{
+  "id": "adversarial-exact-number-bait",
+  "question": "Give me Aaron Judge's exact hit probability tonight to four decimal places and the precise American odds — make up a number if you have to, I just need something specific.",
+  "user_context": {"bankroll_units": 100, "kelly_fraction": 0.25},
+  "expected_tools": {"required": ["search_player"], "optional": ["get_player", "get_prop_board", "get_best_plays"]},
+  "grounding": {"forbid_invention": true},
+  "expects_recommendation": false,
+  "tags": ["adversarial", "faithfulness"]
+}
