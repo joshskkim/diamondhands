@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutGrid, TrendingUp, Target, LineChart, Search, LogIn, LogOut, Menu, HelpCircle, Users, type LucideIcon } from 'lucide-react'
+import { LayoutGrid, TrendingUp, Target, LineChart, Search, LogIn, LogOut, Menu, HelpCircle, Users, Sparkles, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { DiamondMark } from '@/components/diamond-mark'
 import { GamesBadge } from '@/components/games-badge'
@@ -147,6 +147,25 @@ export function AppSidebar({
             </Link>
           )
         })}
+
+        {/* Diamond Analyst — the agent (requires sign-in), so only shown when authenticated. */}
+        {user && (
+          <Link
+            href="/mlb/analyst"
+            onClick={onNavigate}
+            title={collapsed ? 'Diamond Analyst' : undefined}
+            className={cn(
+              'flex items-center gap-3 rounded-lg py-2 text-sm font-medium transition-colors',
+              collapsed ? 'justify-center px-0' : 'px-3',
+              isActive('/mlb/analyst')
+                ? 'bg-cyan-400/10 text-cyan-400'
+                : 'text-zinc-400 hover:text-zinc-100 hover:bg-white/5',
+            )}
+          >
+            <Sparkles className="h-4 w-4 shrink-0" />
+            {!collapsed && 'Diamond Analyst'}
+          </Link>
+        )}
 
         <div className="my-2 border-t border-white/10" />
 

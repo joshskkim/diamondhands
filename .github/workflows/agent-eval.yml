@@ -1,0 +1,104 @@
+name: Agent Eval
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "ingester/agent_eval/**"
+      - "ingester/tests/test_agent_eval.py"
+      - "api/src/main/java/com/diamond/api/ai/**"
+      - ".github/workflows/agent-eval.yml"
+
+jobs:
+  # Always-on gate: the deterministic eval logic (numeric grounding, tool-trajectory recall,
+  # outcome math). This is "tests for a non-deterministic system" — the scoring rules that gate
+  # the live agent are themselves unit-tested, so a regression in the harness fails CI without
+  # needing a model key or a live API.
+  eval-logic:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ingester
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync dependencies
+        run: uv sync
+      - name: Eval harness unit tests
+        run: uv run python -m pytest tests/test_agent_eval.py -q
+
+  # Full live eval over the golden dataset (faithfulness + trajectory gates). Conditional on a
+  # GEMINI_API_KEY secret so forks/PRs without one don't fail; runs the SAME agent users hit.
+  # NOTE: needs a seeded slate to exercise the data tools fully — recorded tool-output cassettes
+  # for fully-hermetic runs are a tracked fast-follow (see docs/plan).
+  agent-eval-live:
+    if: ${{ secrets.GEMINI_API_KEY != '' }}
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: diamond
+          POSTGRES_USER: diamond
+          POSTGRES_PASSWORD: diamond
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U diamond -d diamond"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      AI_ENABLED: "true"
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      MANAGEMENT_TRACING_ENABLED: "false"
+      DATABASE_URL: postgresql://diamond:diamond@localhost:5432/diamond
+      DIAMOND_API_URL: http://localhost:8080
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply migrations
+        run: |
+          docker run --rm --network host \
+            -v "${{ github.workspace }}/db/migrations:/flyway/sql" \
+            flyway/flyway:10 \
+            -url=jdbc:postgresql://localhost:5432/diamond \
+            -user=diamond -password=diamond \
+            -locations=filesystem:/flyway/sql \
+            -connectRetries=10 migrate
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Build API
+        working-directory: api
+        run: mvn -B -ntp -DskipTests package
+
+      - name: Start API
+        working-directory: api
+        run: |
+          java -jar target/*.jar > api.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8080/health && break || sleep 2
+          done
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Run agent eval (faithfulness + trajectory gates)
+        working-directory: ingester
+        run: |
+          uv sync
+          uv run python main.py agent-eval --golden agent_eval/golden --layer all

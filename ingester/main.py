@@ -67,6 +67,9 @@ from ingester.commands.pitch_aggregations import (
 from ingester.commands.backtest import cmd_backtest
 from ingester.commands.accuracy import cmd_compute_accuracy
 from ingester.commands.picks import cmd_record_picks, cmd_score_picks
+from ingester.commands.briefing import cmd_daily_briefing
+from agent_eval.score_recs import cmd_score_agent_recs
+from agent_eval.runner import cmd_agent_eval
 from ingester.ml.dataset import cmd_build_training_data
 from ingester.ml.train import cmd_train_xgb, cmd_tune_blend
 from ingester.ml.perpa import cmd_train_pa
@@ -514,6 +517,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Slate date to score (default: yesterday in US/Eastern)",
     )
 
+    # ── Diamond Analyst (agent) ──────────────────────────────────────────────
+    p_score_recs = sub.add_parser(
+        "score-agent-recs",
+        help="Grade agent recommendations + user bets vs actuals (reuses score-picks machinery)",
+    )
+    p_score_recs.add_argument(
+        "--date", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+        help="Slate date to score (default: yesterday in US/Eastern)",
+    )
+
+    p_agent_eval = sub.add_parser(
+        "agent-eval",
+        help="Run the agent over a golden dataset: faithfulness + trajectory (gated) + outcome",
+    )
+    p_agent_eval.add_argument(
+        "--golden", default="agent_eval/golden", help="Directory of golden case JSON files")
+    p_agent_eval.add_argument(
+        "--layer", choices=["all", "faithfulness", "trajectory", "outcome"], default="all",
+        help="Which layer(s) to run (default all; 'outcome' only aggregates graded recs)")
+    p_agent_eval.add_argument(
+        "--api", default=None, help="Agent API base URL (default: DIAMOND_API_URL or localhost)")
+    p_agent_eval.add_argument(
+        "--since-days", type=int, default=None, dest="since_days",
+        help="Limit the outcome aggregation to this many recent days")
+
+    p_briefing = sub.add_parser(
+        "daily-briefing", help="Post a proactive recap (yesterday's results + tonight's pick) to Discord")
+    p_briefing.add_argument("--webhook", default=None, help="Discord webhook URL (default: DISCORD_WEBHOOK_URL)")
+    p_briefing.add_argument("--no-agent", action="store_true", default=False, dest="no_agent",
+                            help="Skip the LLM recap; post the templated summary only")
+
     sub.add_parser("smoke",        help="DB connectivity sanity check")
     sub.add_parser("smoke-skills", help="Print top batters/pitchers from skill tables")
     p_smoke_slate    = sub.add_parser("smoke-slate",    help="Print today's slate with weather and probables")
@@ -604,6 +638,9 @@ COMMANDS = {
     "compute-accuracy":         cmd_compute_accuracy,
     "record-picks":             cmd_record_picks,
     "score-picks":              cmd_score_picks,
+    "score-agent-recs":         cmd_score_agent_recs,
+    "agent-eval":               cmd_agent_eval,
+    "daily-briefing":           cmd_daily_briefing,
     "smoke":                    cmd_smoke,
     "smoke-skills":             cmd_smoke_skills,
     "smoke-slate":              cmd_smoke_slate,

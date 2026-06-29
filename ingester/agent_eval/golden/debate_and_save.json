@@ -1,0 +1,9 @@
+{
+  "id": "debate-and-save-top-pick",
+  "question": "Find tonight's strongest pick, run a bull-vs-skeptic debate on it, and if the judge says bet, save it for me with a Kelly-sized stake.",
+  "user_context": {"bankroll_units": 100, "kelly_fraction": 0.25},
+  "expected_tools": {"required": ["get_best_plays", "debate_pick"], "optional": ["get_most_likely", "save_recommendation", "get_prop_board"]},
+  "grounding": {"must_cite_from": ["get_best_plays", "debate_pick"], "forbid_invention": true},
+  "expects_recommendation": true,
+  "tags": ["debate", "sizing", "outcome", "write"]
+}
