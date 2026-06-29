@@ -59,6 +59,26 @@ the score-picks grader joins unchanged) · `line_alerts` · `eval_runs`/`eval_re
    check that the reuse is correct). Then `agent-eval --layer outcome` → hit-rate / CLV / ROI +
    the judge-confidence Brier.
 
+## Measuring it (how the numbers accrue)
+
+The eval-first claim is only as good as the numbers behind it, so they accrue automatically:
+
+- **Faithfulness + trajectory** — a nightly `agent-eval` (9:35am ET cron, after the prior slate is
+  graded) runs the golden suite through the live agent and banks one `eval_runs` row/day.
+- **Outcome (hit-rate / CLV / ROI / Brier)** — the daily chain's `score-agent-recs` grades real
+  `agent_recommendations` through the same code as Model's Picks; `outcome.aggregate` rolls them up.
+- **Where to read it** — the *"Diamond — Agent Evals"* Grafana dashboard (trend charts + a
+  failing-case table) and `compare-evals` on the CLI.
+- **Hermetic CI gate** — `agent-eval --replay agent_eval/cassettes` runs the deterministic layers on
+  recorded runs on every PR (no key), so a regression that makes the agent fabricate a number or
+  skip a required tool fails the build.
+
+Results table (fill from `compare-evals` / the dashboard once the cadence has run a week):
+
+| config | cases | faithfulness | tool recall | hit-rate | avg CLV | ROI | judge Brier |
+|--------|------:|-------------:|------------:|---------:|--------:|----:|------------:|
+| _pending first accrual_ | | | | | | | |
+
 ## Benchmarking configs + adversarial cases
 
 A/B agent configurations on the golden set — tag each run, then diff:

@@ -31,6 +31,12 @@ jobs:
       - name: Eval harness unit tests
         run: uv run python -m pytest tests/test_agent_eval.py -q
 
+      # Hermetic agent-quality gate: replay recorded cassettes through the SAME deterministic
+      # faithfulness + trajectory scorers the live agent uses — no LLM, no API, no DB. Fails the
+      # PR if a recorded run fabricates a number or skips a required tool.
+      - name: Hermetic eval (cassette replay)
+        run: uv run python main.py agent-eval --replay agent_eval/cassettes
+
   # Full live eval over the golden dataset (faithfulness + trajectory gates). Conditional on a
   # GEMINI_API_KEY secret so forks/PRs without one don't fail; runs the SAME agent users hit.
   # NOTE: needs a seeded slate to exercise the data tools fully — recorded tool-output cassettes

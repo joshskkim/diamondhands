@@ -545,6 +545,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_agent_eval.add_argument(
         "--label", default=None,
         help="Tag this run with a config name (e.g. 'pro-judge') for compare-evals A/B")
+    p_agent_eval.add_argument(
+        "--replay", default=None, metavar="DIR",
+        help="Hermetic mode: score recorded cassettes in DIR (no LLM/API/DB) — the CI gate")
+    p_agent_eval.add_argument(
+        "--record", default=None, metavar="DIR",
+        help="In live mode, save each run as a cassette in DIR for later --replay")
 
     p_compare_evals = sub.add_parser(
         "compare-evals", help="A/B agent-eval runs: latest run per config label, side by side")

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import unittest
 
-from agent_eval import faithfulness, trajectory, outcome, compare
+from agent_eval import faithfulness, trajectory, outcome, compare, replay
 
 
 class FaithfulnessTest(unittest.TestCase):
@@ -157,6 +157,37 @@ class CompareEvalsTest(unittest.TestCase):
         ]
         out = compare.latest_per_config(rows)
         self.assertEqual(sorted(r["config"] for r in out), ["flash/flash", "flash/pro"])
+
+
+class ReplayTest(unittest.TestCase):
+    CASE = {"id": "c1", "expected_tools": {"required": ["get_best_plays"], "optional": []}}
+
+    def test_grounded_recorded_run_passes(self):
+        cassette = {
+            "case_id": "c1",
+            "answer": "Over 4.5 at +105, model 0.58 vs fair 0.51.",
+            "steps": [{"tool_name": "get_best_plays",
+                       "result_summary": '{"line":4.5,"priceAmerican":105,"modelProb":0.58,"fairProb":0.51}'}],
+        }
+        r = replay.score_cassette(self.CASE, cassette)
+        self.assertTrue(r["passed"], r)
+
+    def test_invented_number_in_recorded_run_fails(self):
+        cassette = {
+            "case_id": "c1",
+            "answer": "Take it at +900.",  # not in the tool output
+            "steps": [{"tool_name": "get_best_plays", "result_summary": '{"priceAmerican":105}'}],
+        }
+        r = replay.score_cassette(self.CASE, cassette)
+        self.assertFalse(r["passed"])
+        self.assertIn("+900", r["faithfulness"]["orphans"])
+
+    def test_missing_required_tool_fails(self):
+        cassette = {"case_id": "c1", "answer": "No numbers here.",
+                    "steps": [{"tool_name": "search_player", "result_summary": "{}"}]}
+        r = replay.score_cassette(self.CASE, cassette)
+        self.assertFalse(r["passed"])
+        self.assertIn("get_best_plays", r["trajectory"]["missing"])
 
 
 if __name__ == "__main__":
