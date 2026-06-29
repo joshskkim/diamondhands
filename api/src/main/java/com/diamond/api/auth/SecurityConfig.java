@@ -71,6 +71,8 @@ public class SecurityConfig {
                 // etc.) re-enter the chain on /error and get masked as 401.
                 .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
+                // The personal Tracker is user-owned; the default permits GET /api/**, so gate it.
+                .requestMatchers(HttpMethod.GET, "/api/tracker").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/auth/signup", "/api/auth/signin", "/api/auth/signout").permitAll()
                 // "Ask Diamond" AI query is a public read-like endpoint (POST only because it
                 // takes a question body). Gate to .authenticated() later if it needs sign-in.

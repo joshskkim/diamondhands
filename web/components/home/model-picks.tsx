@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Flame, Ticket } from 'lucide-react'
 import {
@@ -12,6 +12,7 @@ import {
   playerResultsQueryOptions,
   queryKeys,
   reconcileModelPicks,
+  tailPick,
   todayGamesQueryOptions,
   type PickKey,
 } from '@/lib/api'
@@ -19,6 +20,7 @@ import type { BestPlay, HitRate, ModelPickResult, MostLikely, TodayGame } from '
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
 import { modelPlayOutcome, pickOutcome, pickTitle, type PickOutcome } from '@/lib/picks'
+import { useAuth } from '@/components/auth-provider'
 import { OutcomeBadge } from './outcome-badge'
 import { LivePickTracker } from './live-tracker'
 import { WhyDisclosure } from './why-disclosure'
@@ -162,6 +164,47 @@ function AnalystChip({ verdict, confidence }: { verdict?: string | null; confide
     >
       Analyst {confidence != null ? `${Math.round(confidence * 100)}%` : verdict}
     </span>
+  )
+}
+
+/** Tail a pick into your personal Tracker (server computes the Kelly stake). Signed-in only. */
+function TailButton({ p }: { p: BestPlay }) {
+  const { user } = useAuth()
+  const [state, setState] = useState<'idle' | 'saving' | 'done' | 'error'>('idle')
+  const [msg, setMsg] = useState<string | null>(null)
+  if (!user || p.fairProb == null) return null
+
+  async function onTail() {
+    setState('saving')
+    try {
+      const res = await tailPick({
+        gameId: p.gameId, market: p.market, side: p.side, line: p.line,
+        playerId: p.playerId, playerName: p.playerName, priceAmerican: p.priceAmerican,
+        book: p.bestBook, modelProb: p.modelProb, fairProb: p.fairProb!,
+        confidence: p.debateConfidence ?? null,
+      })
+      setMsg(res.message)
+      setState('done')
+    } catch {
+      setMsg('Could not tail that.')
+      setState('error')
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={onTail}
+        disabled={state === 'saving' || state === 'done'}
+        className="rounded-md border border-cyan-400/40 bg-cyan-500/10 px-2.5 py-1 text-xs font-medium text-cyan-300 transition-colors hover:bg-cyan-500/20 disabled:opacity-60"
+      >
+        {state === 'done' ? 'Tailed ✓' : state === 'saving' ? 'Tailing…' : 'Tail'}
+      </button>
+      {msg && (
+        <span className={cn('text-[11px]', state === 'error' ? 'text-rose-400' : 'text-zinc-400')}>{msg}</span>
+      )}
+    </div>
   )
 }
 
@@ -336,6 +379,7 @@ function PickCard({
       <LivePickTracker game={game} market={p.market} side={p.side} line={p.line} outcome={outcome} />
 
       <WhyDisclosure reasons={pick.reasons} />
+      <TailButton p={p} />
     </div>
   )
 }
@@ -386,6 +430,7 @@ function LottoCard({ pick, outcome, game }: { pick: ModelPick; outcome?: PickOut
       <LivePickTracker game={game} market={p.market} side={p.side} line={p.line} outcome={outcome} />
 
       <WhyDisclosure reasons={pick.reasons} />
+      <TailButton p={p} />
     </div>
   )
 }
