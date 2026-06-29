@@ -54,7 +54,7 @@ public class AgentController {
         });
     }
 
-    public record AgentRequest(String question) {}
+    public record AgentRequest(String question, Long threadId) {}
     public record ConfirmRequest(String token) {}
 
     @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -71,11 +71,12 @@ public class AgentController {
         // Throttle before doing any (paid) model work; 429 propagates to the client.
         rateLimiter.check(user.id());
 
+        Long threadId = request.threadId();
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
         executor.submit(() -> {
             SseSink sink = new SseSink(emitter);
             try {
-                agent.ask(user.id(), question, sink);
+                agent.ask(user.id(), threadId, question, sink);
             } catch (Exception e) {
                 sink.error("Something went wrong answering that.");
             } finally {
@@ -109,6 +110,11 @@ public class AgentController {
 
         SseSink(SseEmitter emitter) {
             this.emitter = emitter;
+        }
+
+        @Override
+        public void thread(long threadId) {
+            send("thread", Map.of("threadId", threadId));
         }
 
         @Override

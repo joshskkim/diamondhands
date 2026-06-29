@@ -153,6 +153,7 @@ export type AgentConfirm = { token: string; action: string; summary: string }
 
 /** One event off the /api/agent stream — adds debate `role` turns + `confirm` proposals. */
 export type AgentEvent =
+  | { type: 'thread'; threadId: number }
   | { type: 'status'; tool: string; label: string }
   | { type: 'role'; role: string; text: string }
   | { type: 'links'; links: AskLink[] }
@@ -172,6 +173,8 @@ function parseAgentEvent(record: string): AgentEvent | null {
   try {
     const payload = JSON.parse(data) as Record<string, unknown>
     switch (event) {
+      case 'thread':
+        return { type: 'thread', threadId: Number(payload.threadId) }
       case 'status':
         return { type: 'status', tool: String(payload.tool), label: String(payload.label) }
       case 'role':
@@ -210,6 +213,7 @@ export async function askAgent(
   question: string,
   onEvent: (event: AgentEvent) => void,
   signal?: AbortSignal,
+  threadId?: number | null,
 ): Promise<void> {
   let res: Response
   try {
@@ -217,7 +221,7 @@ export async function askAgent(
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, threadId: threadId ?? null }),
       signal,
     })
   } catch {

@@ -13,6 +13,7 @@ public final class NoOpSink implements AgentSink {
 
     private NoOpSink() {}
 
+    @Override public void thread(long threadId) {}
     @Override public void status(String toolName, String label) {}
     @Override public void role(String role, String text) {}
     @Override public void links(List<LinkRef> links) {}
