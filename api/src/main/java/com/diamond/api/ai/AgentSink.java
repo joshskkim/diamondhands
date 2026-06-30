@@ -9,6 +9,9 @@ import java.util.List;
  */
 public interface AgentSink {
 
+    /** The conversation thread this turn belongs to (sent first so the client threads the next turn). */
+    void thread(long threadId);
+
     /** One per tool the agent calls (live "working" feed). */
     void status(String toolName, String label);
 

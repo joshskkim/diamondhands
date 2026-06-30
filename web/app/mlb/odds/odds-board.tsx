@@ -190,6 +190,11 @@ function PlayCard({
               </Link>
             )}
           </div>
+          {r.debateVerdict === 'pass' && (
+            <div className="mt-1 text-[11px] leading-snug text-amber-300/80">
+              Analyst passed{r.debateRationale ? ` — ${r.debateRationale}` : ''}
+            </div>
+          )}
         </div>
         <span
           className={cn(
@@ -435,6 +440,14 @@ export function OddsBoard() {
                           >
                             {r.matchup}
                           </Link>
+                        )}
+                        {r.debateVerdict === 'pass' && (
+                          <div
+                            className="mt-0.5 whitespace-normal text-[10px] leading-snug text-amber-300/80"
+                            title={r.debateRationale ?? undefined}
+                          >
+                            Analyst passed{r.debateRationale ? ` — ${r.debateRationale}` : ''}
+                          </div>
                         )}
                       </td>
                       <td className="px-3 py-2 text-zinc-300 whitespace-nowrap">

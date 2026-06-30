@@ -17,7 +17,7 @@ import re
 
 # A stat-like number: a decimal (0.62), a percent (62%), or an American price (+130 / -110).
 _PERCENT = re.compile(r"(?<![\w.])(\d{1,3}(?:\.\d+)?)\s?%")
-_PRICE = re.compile(r"(?<![\w.])([+-]\d{3,4})(?![\d.])")
+_PRICE = re.compile(r"(?<![\w.])([+-]\d{3,4})(?!\d)(?!\.\d)")
 _DECIMAL = re.compile(r"(?<![\w])(\d?\.\d+)(?![\d%])")
 _ANY_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 

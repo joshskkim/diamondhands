@@ -4,7 +4,9 @@ import com.diamond.api.repository.AgentRepository;
 import com.diamond.api.repository.UserPreferenceRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.genai.Client;
+import com.google.genai.types.Content;
 import com.google.genai.types.FunctionDeclaration;
+import com.google.genai.types.Part;
 import com.google.genai.types.Schema;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -60,6 +62,7 @@ public class AgentService {
     private final String model;
     private final long maxTokens;
     private final int maxToolIterations;
+    private final int historyTurns;
 
     public AgentService(ObjectProvider<Client> clientProvider, AskToolRegistry readTools,
                         AgentActionRegistry actions, DebateOrchestrator debate, ActionTokenService tokens,
@@ -68,7 +71,8 @@ public class AgentService {
                         @Value("${app.ai.enabled:false}") boolean enabled,
                         @Value("${app.ai.model:gemini-2.5-flash}") String model,
                         @Value("${app.ai.max-tokens:3000}") long maxTokens,
-                        @Value("${app.agent.max-tool-iterations:8}") int maxToolIterations) {
+                        @Value("${app.agent.max-tool-iterations:8}") int maxToolIterations,
+                        @Value("${app.agent.history-turns:6}") int historyTurns) {
         this.clientProvider = clientProvider;
         this.readTools = readTools;
         this.actions = actions;
@@ -82,21 +86,35 @@ public class AgentService {
         this.model = model;
         this.maxTokens = maxTokens;
         this.maxToolIterations = maxToolIterations;
+        this.historyTurns = historyTurns;
     }
 
     public boolean isAvailable() {
         return enabled && clientProvider.getIfAvailable() != null;
     }
 
-    /** Run a question for an authenticated user through the agentic loop. */
-    public void ask(long userId, String question, AgentSink sink) {
+    /** Run a question for an authenticated user through the agentic loop, in a conversation thread. */
+    public void ask(long userId, Long threadId, String question, AgentSink sink) {
         Client client = clientProvider.getIfAvailable();
         if (client == null) {
             sink.error("AI assistant is not configured.");
             return;
         }
+        // Resolve the thread: reuse the caller's if it's theirs, else start a new one. The id is
+        // sent back so the client threads the next turn onto the same conversation.
+        long tid = (threadId != null && agentRepo.ownsThread(threadId, userId))
+            ? threadId : agentRepo.createThread(userId);
+        sink.thread(tid);
+
+        // Replay the thread's recent turns so follow-ups ("size that one") resolve in context.
+        List<Content> history = new ArrayList<>();
+        for (AgentRepository.Turn t : agentRepo.recentTurns(tid, historyTurns)) {
+            history.add(Content.builder().role("user").parts(Part.fromText(t.question())).build());
+            history.add(Content.builder().role("model").parts(Part.fromText(t.answer())).build());
+        }
+
         UserPreferences prefs = prefsRepo.findOrDefault(userId);
-        long runId = agentRepo.createRun("web", userId, question, model);
+        long runId = agentRepo.createRun("web", userId, tid, question, model);
         AtomicInteger stepNo = new AtomicInteger();
 
         GeminiToolLoop.Steps steps = (role, tool, args, summary, ms) ->
@@ -137,7 +155,7 @@ public class AgentService {
             GeminiToolLoop.Result result = loop.run(client, model, "model",
                 SYSTEM_PROMPT.formatted(LocalDate.now(), describePrefs(prefs)),
                 decls, exec, labeler, readTools::linkFor,
-                question, maxToolIterations, maxTokens, sink::status, steps);
+                history, question, maxToolIterations, maxTokens, sink::status, steps);
 
             if (result.hitLimit()) {
                 agentRepo.finishRun(runId, null, "error", result.toolCalls());
@@ -149,6 +167,7 @@ public class AgentService {
             sink.answer(answer);
             sink.sources(result.toolsUsed());
             agentRepo.finishRun(runId, answer, "done", result.toolCalls());
+            agentRepo.touchThread(tid);
         } catch (Exception e) {
             agentRepo.finishRun(runId, null, "error", 0);
             sink.error("Something went wrong answering that.");

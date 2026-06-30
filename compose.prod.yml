@@ -64,6 +64,8 @@ services:
       AI_ENABLED: ${AI_ENABLED:-false}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       AGENT_JUDGE_MODEL: ${AGENT_JUDGE_MODEL:-gemini-2.5-pro}
+      # Shared key guarding the server-to-server debate gate (record-picks -> /api/debate/pick).
+      AGENT_INTERNAL_KEY: ${AGENT_INTERNAL_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -120,6 +122,8 @@ services:
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
       AGENT_EVAL_EMAIL: ${AGENT_EVAL_EMAIL:-}
       AGENT_EVAL_PASSWORD: ${AGENT_EVAL_PASSWORD:-}
+      # record-picks sends this to the debate gate; blank => gate off (mechanical board).
+      AGENT_INTERNAL_KEY: ${AGENT_INTERNAL_KEY:-}
     volumes:
       - pybaseball_cache:/root/.pybaseball
     depends_on:

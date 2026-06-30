@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Flame, Ticket } from 'lucide-react'
 import {
@@ -12,6 +12,7 @@ import {
   playerResultsQueryOptions,
   queryKeys,
   reconcileModelPicks,
+  tailPick,
   todayGamesQueryOptions,
   type PickKey,
 } from '@/lib/api'
@@ -19,6 +20,7 @@ import type { BestPlay, HitRate, ModelPickResult, MostLikely, TodayGame } from '
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
 import { modelPlayOutcome, pickOutcome, pickTitle, type PickOutcome } from '@/lib/picks'
+import { useAuth } from '@/components/auth-provider'
 import { OutcomeBadge } from './outcome-badge'
 import { LivePickTracker } from './live-tracker'
 import { WhyDisclosure } from './why-disclosure'
@@ -143,7 +145,67 @@ function buildReasons(p: BestPlay, edge: number, corroboration: string | null): 
     )
   }
   if (corroboration) reasons.push(corroboration)
+  if (p.debateVerdict === 'bet' || p.debateVerdict === 'lean') {
+    const conf = p.debateConfidence != null ? ` (${Math.round(p.debateConfidence * 100)}% confidence)` : ''
+    reasons.push(
+      `The Analyst's bull-vs-skeptic debate endorsed this${conf}${p.debateRationale ? `: ${p.debateRationale}` : '.'}`,
+    )
+  }
   return reasons
+}
+
+/** The judge's endorsement chip — shown on a pick the Analyst gate promoted (bet/lean). */
+function AnalystChip({ verdict, confidence }: { verdict?: string | null; confidence?: number | null }) {
+  if (verdict !== 'bet' && verdict !== 'lean') return null
+  return (
+    <span
+      title="The Analyst's bull/skeptic/judge debate endorsed this pick"
+      className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-violet-300 border-violet-400/40 bg-violet-500/10"
+    >
+      Analyst {confidence != null ? `${Math.round(confidence * 100)}%` : verdict}
+    </span>
+  )
+}
+
+/** Tail a pick into your personal Tracker (server computes the Kelly stake). Signed-in only. */
+function TailButton({ p }: { p: BestPlay }) {
+  const { user } = useAuth()
+  const [state, setState] = useState<'idle' | 'saving' | 'done' | 'error'>('idle')
+  const [msg, setMsg] = useState<string | null>(null)
+  if (!user || p.fairProb == null) return null
+
+  async function onTail() {
+    setState('saving')
+    try {
+      const res = await tailPick({
+        gameId: p.gameId, market: p.market, side: p.side, line: p.line,
+        playerId: p.playerId, playerName: p.playerName, priceAmerican: p.priceAmerican,
+        book: p.bestBook, modelProb: p.modelProb, fairProb: p.fairProb!,
+        confidence: p.debateConfidence ?? null,
+      })
+      setMsg(res.message)
+      setState('done')
+    } catch {
+      setMsg('Could not tail that.')
+      setState('error')
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={onTail}
+        disabled={state === 'saving' || state === 'done'}
+        className="rounded-md border border-cyan-400/40 bg-cyan-500/10 px-2.5 py-1 text-xs font-medium text-cyan-300 transition-colors hover:bg-cyan-500/20 disabled:opacity-60"
+      >
+        {state === 'done' ? 'Tailed ✓' : state === 'saving' ? 'Tailing…' : 'Tail'}
+      </button>
+      {msg && (
+        <span className={cn('text-[11px]', state === 'error' ? 'text-rose-400' : 'text-zinc-400')}>{msg}</span>
+      )}
+    </div>
+  )
 }
 
 function buildPicks(
@@ -161,6 +223,10 @@ function buildPicks(
     if (p.evPct < MIN_EV) continue
     if (p.modelProb < MIN_MODEL_PROB && edge < LONGSHOT_EDGE) continue
     if (hitRateVeto(p, hitRates)) continue
+    // The Analyst gate: a pick it passed on drops off Today's Board (it shows on Best Lines
+    // with the reason). A null verdict means "not vetted" → show mechanically. Mirrors the
+    // server gate in picks.py::gate_candidates.
+    if (p.debateVerdict === 'pass') continue
 
     const totals = simTotalsCheck(p, sim)
     if (totals.veto) continue
@@ -274,6 +340,7 @@ function PickCard({
         >
           {pick.strong ? 'Strong' : 'Lean'}
         </span>
+        <AnalystChip verdict={p.debateVerdict} confidence={p.debateConfidence} />
         {outcome && <OutcomeBadge outcome={outcome} />}
         <Link
           href={`/mlb/games/${p.gameId}`}
@@ -312,6 +379,7 @@ function PickCard({
       <LivePickTracker game={game} market={p.market} side={p.side} line={p.line} outcome={outcome} />
 
       <WhyDisclosure reasons={pick.reasons} />
+      <TailButton p={p} />
     </div>
   )
 }
@@ -325,6 +393,7 @@ function LottoCard({ pick, outcome, game }: { pick: ModelPick; outcome?: PickOut
         <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-200 border-amber-400/40 bg-amber-500/10">
           Lotto
         </span>
+        <AnalystChip verdict={p.debateVerdict} confidence={p.debateConfidence} />
         {outcome && <OutcomeBadge outcome={outcome} />}
         <Link
           href={`/mlb/games/${p.gameId}`}
@@ -361,6 +430,7 @@ function LottoCard({ pick, outcome, game }: { pick: ModelPick; outcome?: PickOut
       <LivePickTracker game={game} market={p.market} side={p.side} line={p.line} outcome={outcome} />
 
       <WhyDisclosure reasons={pick.reasons} />
+      <TailButton p={p} />
     </div>
   )
 }

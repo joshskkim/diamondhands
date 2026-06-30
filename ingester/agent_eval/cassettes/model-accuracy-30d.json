@@ -1,0 +1,12 @@
+{
+  "case_id": "model-accuracy-30d",
+  "answer": "Over the last 30 days the hit-market is well calibrated: the model's Brier is 0.214 versus a 0.241 baseline, and predicted vs actual clear rates track within about 2 points across the probability buckets.",
+  "steps": [
+    {
+      "role": "model",
+      "tool_name": "get_model_accuracy",
+      "args": {"days": "30"},
+      "result_summary": "{\"market\":\"hit\",\"days\":30,\"brier\":0.214,\"baselineBrier\":0.241,\"calibration\":[{\"bucket\":0.4,\"predicted\":0.40,\"actual\":0.42},{\"bucket\":0.5,\"predicted\":0.50,\"actual\":0.49}]}"
+    }
+  ]
+}

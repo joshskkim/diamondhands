@@ -33,5 +33,9 @@ public record ModelPickResultDto(
     boolean scored,
     boolean active,
     String firstShownAt,
-    String bumpedAt
+    String bumpedAt,
+    // Analyst promotion-gate verdict (V64) — what endorsed this pick onto the board.
+    String debateVerdict,
+    Double debateConfidence,
+    String debateRationale
 ) {}

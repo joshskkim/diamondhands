@@ -92,13 +92,13 @@ public class DebateOrchestrator {
 
         GeminiToolLoop.Result bull = loop.run(client, model, "bull", BULL_PROMPT,
             bullTools.declarations(), bullTools::execute, bullTools::label, bullTools::linkFor,
-            candidate, maxIters, maxTokens, status, steps);
+            List.of(), candidate, maxIters, maxTokens, status, steps);
         sink.role("bull", bull.text());
 
         String skepticInput = candidate + "\n\nThe bull argues:\n" + bull.text();
         GeminiToolLoop.Result skeptic = loop.run(client, model, "skeptic", SKEPTIC_PROMPT,
             skepticTools.declarations(), skepticTools::execute, skepticTools::label, skepticTools::linkFor,
-            skepticInput, maxIters, maxTokens, status, steps);
+            List.of(), skepticInput, maxIters, maxTokens, status, steps);
         sink.role("skeptic", skeptic.text());
 
         Verdict verdict = judge(client, candidate, bull.text(), skeptic.text());

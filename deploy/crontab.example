@@ -63,5 +63,12 @@ DIAMOND_DIR=/opt/diamond
 # cache (no big re-download), so each is quick.
 30 8 * * *       /opt/diamond/deploy/run-ingester.sh refresh-pitch-aggregations && /opt/diamond/deploy/run-ingester.sh refresh-batted-ball && /opt/diamond/deploy/run-ingester.sh refresh-bat-tracking
 
+# Diamond Analyst eval cadence (9:35am ET, after the 9am daily grades the prior slate). Runs
+# the golden suite through the live agent — faithfulness + tool-trajectory — and aggregates the
+# outcome layer (hit-rate / CLV / Brier on graded recommendations), banking one eval_runs row per
+# day so the "Diamond — Agent Evals" Grafana panel shows a trend. Needs AI_ENABLED + a key (no-op
+# otherwise). Cheap (~10 cases). compare-evals A/Bs configs on demand; this just accrues the trend.
+35 9 * * *       /opt/diamond/deploy/run-ingester.sh agent-eval
+
 # Nightly database backup.
 30 3 * * *       /opt/diamond/deploy/backup.sh

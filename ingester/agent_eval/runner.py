@@ -70,17 +70,58 @@ def _steps_text(conn, run_id: int) -> str:
     return "\n".join(r[0] for r in rows)
 
 
+def _dump_cassette(conn, run_id: int, case_id: str, answer: str, cassette_dir: str) -> None:
+    """Record a run as a hermetic cassette (answer + ordered tool steps) for CI replay."""
+    os.makedirs(cassette_dir, exist_ok=True)
+    rows = conn.execute(
+        "SELECT role, tool_name, args_json, result_summary FROM agent_steps "
+        "WHERE run_id = %s ORDER BY step_no",
+        (run_id,),
+    ).fetchall()
+    steps = [{"role": r[0], "tool_name": r[1], "args": r[2], "result_summary": r[3]}
+             for r in rows]
+    with open(os.path.join(cassette_dir, f"{case_id}.json"), "w") as fh:
+        json.dump({"case_id": case_id, "answer": answer, "steps": steps}, fh, indent=2, default=str)
+
+
 def cmd_agent_eval(args: argparse.Namespace) -> None:
     layer = getattr(args, "layer", "all")
+
+    # Hermetic replay: score recorded cassettes with no LLM / API / DB — the always-on CI gate.
+    if getattr(args, "replay", None):
+        from agent_eval.replay import run_replay
+        agg = run_replay(getattr(args, "golden", "agent_eval/golden"), args.replay)
+        for r in agg["results"]:
+            if "error" in r:
+                print(f"  ✗ {r['case_id']}: {r['error']}")
+                continue
+            flag = "✓" if r["passed"] else "✗"
+            fg, tj = r["faithfulness"], r["trajectory"]
+            print(f"  {flag} {r['case_id']}: faith={fg['score']:.2f}"
+                  f"{' orphans=' + ','.join(fg['orphans']) if fg['orphans'] else ''} "
+                  f"recall={tj['recall']:.2f}"
+                  f"{' missing=' + ','.join(tj['missing']) if tj['missing'] else ''}")
+        print(f"\n[agent-eval/replay] {agg['cases']} cassettes | "
+              f"faithfulness {agg['faithfulness_pass_rate']:.2f} (gate {FAITHFULNESS_GATE}) | "
+              f"recall {agg['trajectory_recall']:.2f} (gate {REQUIRED_RECALL_GATE})")
+        if agg["faithfulness_pass_rate"] < FAITHFULNESS_GATE \
+                or agg["trajectory_recall"] < REQUIRED_RECALL_GATE \
+                or any("error" in r for r in agg["results"]):
+            print("[agent-eval/replay] GATE FAILED", file=sys.stderr)
+            sys.exit(1)
+        print("[agent-eval/replay] gates passed.")
+        return
+
     conn = get_connection()
     try:
         # Open the eval_run header up front so eval_results can FK to it.
         run_id = conn.execute(
-            "INSERT INTO eval_runs (git_sha, dataset_version, agent_model, judge_model) "
-            "VALUES (%s, %s, %s, %s) RETURNING id",
+            "INSERT INTO eval_runs (git_sha, dataset_version, agent_model, judge_model, config_label) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (_git_sha(), os.path.basename(getattr(args, "golden", "golden")),
              os.environ.get("AI_MODEL", "gemini-2.5-flash"),
-             os.environ.get("AGENT_JUDGE_MODEL", "gemini-2.5-pro")),
+             os.environ.get("AGENT_JUDGE_MODEL", "gemini-2.5-pro"),
+             getattr(args, "label", None)),
         ).fetchone()[0]
         conn.commit()
 
@@ -130,6 +171,10 @@ def cmd_agent_eval(args: argparse.Namespace) -> None:
                       f"{' orphans=' + ','.join(fg['orphans']) if fg['orphans'] else ''} "
                       f"recall={tj['recall']:.2f}"
                       f"{' missing=' + ','.join(tj['missing']) if tj['missing'] else ''}")
+
+                # Capture this real run as a cassette so CI can replay it hermetically later.
+                if getattr(args, "record", None) and rid:
+                    _dump_cassette(conn, rid, case["id"], answer, args.record)
 
         # Layer 3: outcome aggregation (always computed; reported, not gated here).
         agg = outcome.aggregate(conn, since_days=getattr(args, "since_days", None))

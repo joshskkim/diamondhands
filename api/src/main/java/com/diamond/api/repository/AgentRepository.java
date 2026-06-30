@@ -9,6 +9,7 @@ import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.sql.Types;
 import java.time.LocalDate;
+import java.util.List;
 
 /**
  * Persistence for the agent: the run header + per-decision trajectory ({@code agent_runs} /
@@ -26,14 +27,54 @@ public class AgentRepository {
         this.jdbc = jdbc;
     }
 
-    // ── trajectory ───────────────────────────────────────────────────────────────
+    // ── conversation threads (multi-turn memory) ─────────────────────────────────
 
-    public long createRun(String channel, Long userId, String question, String model) {
+    /** A prior turn replayed into the prompt for context (oldest-first). */
+    public record Turn(String question, String answer) {}
+
+    public long createThread(long userId) {
         KeyHolder kh = new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement(
-                "INSERT INTO agent_runs (channel, user_id, question, model, status) "
-                + "VALUES (?,?,?,?, 'running')",
+                "INSERT INTO agent_threads (user_id) VALUES (?)", new String[] {"id"});
+            ps.setLong(1, userId);
+            return ps;
+        }, kh);
+        return kh.getKey().longValue();
+    }
+
+    /** True only if the thread exists and belongs to this user (don't leak others' history). */
+    public boolean ownsThread(long threadId, long userId) {
+        Integer c = jdbc.queryForObject(
+            "SELECT count(*) FROM agent_threads WHERE id=? AND user_id=?",
+            Integer.class, threadId, userId);
+        return c != null && c > 0;
+    }
+
+    public void touchThread(long threadId) {
+        jdbc.update("UPDATE agent_threads SET last_active_at = now() WHERE id=?", threadId);
+    }
+
+    /** The thread's last {@code limit} completed turns (question + answer), oldest-first. */
+    public List<Turn> recentTurns(long threadId, int limit) {
+        List<Turn> rows = jdbc.query(
+            "SELECT question, final_answer FROM agent_runs "
+            + "WHERE thread_id=? AND status='done' AND final_answer IS NOT NULL "
+            + "ORDER BY id DESC LIMIT ?",
+            (rs, n) -> new Turn(rs.getString("question"), rs.getString("final_answer")),
+            threadId, limit);
+        java.util.Collections.reverse(rows); // newest-first query -> replay oldest-first
+        return rows;
+    }
+
+    // ── trajectory ───────────────────────────────────────────────────────────────
+
+    public long createRun(String channel, Long userId, Long threadId, String question, String model) {
+        KeyHolder kh = new GeneratedKeyHolder();
+        jdbc.update(con -> {
+            PreparedStatement ps = con.prepareStatement(
+                "INSERT INTO agent_runs (channel, user_id, thread_id, question, model, status) "
+                + "VALUES (?,?,?,?,?, 'running')",
                 new String[] {"id"});
             ps.setString(1, channel);
             if (userId == null) {
@@ -41,8 +82,13 @@ public class AgentRepository {
             } else {
                 ps.setLong(2, userId);
             }
-            ps.setString(3, question);
-            ps.setString(4, model);
+            if (threadId == null) {
+                ps.setNull(3, Types.BIGINT);
+            } else {
+                ps.setLong(3, threadId);
+            }
+            ps.setString(4, question);
+            ps.setString(5, model);
             return ps;
         }, kh);
         return kh.getKey().longValue();

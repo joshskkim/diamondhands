@@ -59,7 +59,8 @@ public class GeminiToolLoop {
      */
     public Result run(Client client, String model, String role, String systemPrompt,
                       List<FunctionDeclaration> decls, Executor exec, Labeler labeler, LinkResolver links,
-                      String userText, int maxIters, long maxTokens, Status status, Steps steps) {
+                      List<Content> history, String userText, int maxIters, long maxTokens,
+                      Status status, Steps steps) {
 
         GenerateContentConfig config = GenerateContentConfig.builder()
             .systemInstruction(Content.fromParts(Part.fromText(systemPrompt)))
@@ -67,7 +68,8 @@ public class GeminiToolLoop {
             .maxOutputTokens((int) maxTokens)
             .build();
 
-        List<Content> contents = new ArrayList<>();
+        // Prior conversation turns (multi-turn memory) seed the context, then the current question.
+        List<Content> contents = new ArrayList<>(history == null ? List.of() : history);
         contents.add(Content.builder().role("user").parts(Part.fromText(userText)).build());
 
         List<String> used = new ArrayList<>();

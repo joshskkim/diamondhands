@@ -153,6 +153,7 @@ export type AgentConfirm = { token: string; action: string; summary: string }
 
 /** One event off the /api/agent stream — adds debate `role` turns + `confirm` proposals. */
 export type AgentEvent =
+  | { type: 'thread'; threadId: number }
   | { type: 'status'; tool: string; label: string }
   | { type: 'role'; role: string; text: string }
   | { type: 'links'; links: AskLink[] }
@@ -172,6 +173,8 @@ function parseAgentEvent(record: string): AgentEvent | null {
   try {
     const payload = JSON.parse(data) as Record<string, unknown>
     switch (event) {
+      case 'thread':
+        return { type: 'thread', threadId: Number(payload.threadId) }
       case 'status':
         return { type: 'status', tool: String(payload.tool), label: String(payload.label) }
       case 'role':
@@ -210,6 +213,7 @@ export async function askAgent(
   question: string,
   onEvent: (event: AgentEvent) => void,
   signal?: AbortSignal,
+  threadId?: number | null,
 ): Promise<void> {
   let res: Response
   try {
@@ -217,7 +221,7 @@ export async function askAgent(
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, threadId: threadId ?? null }),
       signal,
     })
   } catch {
@@ -487,6 +491,75 @@ export function flattenGameBatters(
   )
 }
 
+// ── Personal Tracker ──────────────────────────────────────────────────────────
+
+export interface TrackerEntry {
+  id: number
+  source: 'agent' | 'personal'
+  slateDate: string
+  gameId: number
+  market: string
+  side: string
+  line: number | null
+  playerId: number | null
+  playerName: string | null
+  priceAmerican: number | null
+  book: string | null
+  stakeUnits: number | null
+  confidence: number | null
+  modelProb: number | null
+  fairProb: number | null
+  edge: number | null
+  won: boolean | null
+  resultValue: number | null
+  clv: number | null
+  scored: boolean
+  status: string
+}
+
+export interface TrackerSummary {
+  picks: number
+  wins: number
+  losses: number
+  pushes: number
+  units: number
+  roiPct: number
+  clvN: number | null
+  clvRate: number | null
+  avgClv: number | null
+}
+
+export interface TrackerResponse {
+  summary: TrackerSummary
+  entries: TrackerEntry[]
+}
+
+export type TailRequest = {
+  gameId: number
+  market: string
+  side: string
+  line: number | null
+  playerId: number | null
+  playerName: string | null
+  priceAmerican: number
+  book: string | null
+  modelProb: number
+  fairProb: number
+  confidence?: number | null
+}
+
+export type TailResult = { stakeUnits: number | null; alreadyTracked: boolean; message: string }
+
+/** The signed-in user's tracked picks + logged bets, graded with ROI/CLV. */
+export function fetchTracker(): Promise<TrackerResponse> {
+  return apiGet<TrackerResponse>('/api/tracker')
+}
+
+/** Tail a board pick into the user's tracker (server computes the Kelly stake). */
+export function tailPick(req: TailRequest): Promise<TailResult> {
+  return apiPost<TailResult>('/api/tracker/tail', req)
+}
+
 /** @deprecated Prefer named fetchers; kept for existing imports. */
 export const api = {
   todayGames: fetchTodayGames,
@@ -512,6 +585,7 @@ export const queryKeys = {
   },
   mostLikely: (date?: string) => ['most-likely', date ?? 'today'] as const,
   modelPicks: (date?: string) => ['model-picks', date ?? 'today'] as const,
+  tracker: () => ['tracker'] as const,
   propBoard: (date?: string) => ['prop-board', date ?? 'today'] as const,
   playerResults: (date?: string) => ['player-results', date ?? 'today'] as const,
   livePlayerResults: (date?: string) => ['player-results', 'live', date ?? 'today'] as const,

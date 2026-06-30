@@ -5,7 +5,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from ingester.commands.picks import (
-    MAX_PICKS, _devig_two_way, _grade, _pick_key, build_picks, plan_reconcile,
+    MAX_PICKS, _devig_two_way, _grade, _pick_key, build_candidates, build_picks,
+    gate_candidates, plan_reconcile,
 )
 from ingester.projection.runner import DEGENERACY_MIN_ROWS, is_degenerate_slate
 
@@ -168,6 +169,59 @@ class TestDevigForClv(unittest.TestCase):
     def test_nonpositive_returns_none(self):
         self.assertIsNone(_devig_two_way(0.0, 1.9))
         self.assertIsNone(_devig_two_way(1.9, -1.0))
+
+
+class _Result:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+
+class _FakeConn:
+    """Stands in for a DB connection: serves cached verdicts, records no writes."""
+    def __init__(self, cached):
+        self.cached = cached  # {(game, market, side, player): verdict}
+
+    def execute(self, sql, params=None):
+        if sql.strip().startswith("SELECT verdict"):
+            _slate, game, market, side, player = params
+            v = self.cached.get((game, market, side, player))
+            return _Result([(v,)] if v is not None else [])
+        return _Result([])
+
+
+class TestAnalystGate(unittest.TestCase):
+    """gate_candidates promotes only bet/lean; pass demotes; None (gate off) promotes mechanically.
+    INTERNAL_KEY is unset in tests, so an uncached candidate never hits the network (returns None)."""
+
+    def test_pass_demotes_and_endorsed_promote(self):
+        cands = [play(game_id=1), play(game_id=2), play(game_id=3)]
+        conn = _FakeConn({
+            (1, "hr", "over", 10): "pass",
+            (2, "hr", "over", 10): "bet",
+            (3, "hr", "over", 10): "lean",
+        })
+        picks = gate_candidates(conn, "http://x", "2026-06-29", cands)
+        self.assertEqual([p["gameId"] for p in picks], [2, 3])
+
+    def test_gate_off_promotes_mechanically(self):
+        cands = [play(game_id=g) for g in (1, 2, 3, 4)]
+        picks = gate_candidates(_FakeConn({}), "http://x", "2026-06-29", cands)
+        # No cache, no key → all None → first MAX_PICKS promoted in order.
+        self.assertEqual([p["gameId"] for p in picks], [1, 2, 3])
+
+    def test_caps_at_max_picks(self):
+        cands = [play(game_id=g) for g in (1, 2, 3, 4, 5)]
+        conn = _FakeConn({(g, "hr", "over", 10): "bet" for g in (1, 2, 3, 4, 5)})
+        picks = gate_candidates(conn, "http://x", "2026-06-29", cands)
+        self.assertEqual(len(picks), MAX_PICKS)
+
+    def test_build_candidates_wider_than_picks(self):
+        plays = [play(game_id=g, model=0.60, fair=0.50, ev=0.10) for g in range(1, 7)]
+        self.assertEqual(len(build_picks(plays, sim=None)), MAX_PICKS)
+        self.assertEqual(len(build_candidates(plays, sim=None)), 6)
 
 
 class TestDegeneracyGuard(unittest.TestCase):

@@ -167,6 +167,25 @@ export function AppSidebar({
           </Link>
         )}
 
+        {/* Personal Tracker — the picks you tailed + bets you logged (signed-in only). */}
+        {user && (
+          <Link
+            href="/trackers"
+            onClick={onNavigate}
+            title={collapsed ? 'Tracker' : undefined}
+            className={cn(
+              'flex items-center gap-3 rounded-lg py-2 text-sm font-medium transition-colors',
+              collapsed ? 'justify-center px-0' : 'px-3',
+              isActive('/trackers')
+                ? 'bg-cyan-400/10 text-cyan-400'
+                : 'text-zinc-400 hover:text-zinc-100 hover:bg-white/5',
+            )}
+          >
+            <LineChart className="h-4 w-4 shrink-0" />
+            {!collapsed && 'Tracker'}
+          </Link>
+        )}
+
         <div className="my-2 border-t border-white/10" />
 
         {SECONDARY_LINKS.map((link) => {

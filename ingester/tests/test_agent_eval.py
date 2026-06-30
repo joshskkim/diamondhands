@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import unittest
 
-from agent_eval import faithfulness, trajectory, outcome
+from agent_eval import faithfulness, trajectory, outcome, compare, replay
 
 
 class FaithfulnessTest(unittest.TestCase):
@@ -94,6 +94,100 @@ def _aggregate_rows(rows):
         "roi": round(profit / staked, 4) if staked else None,
         "brier": round(sum(briers) / len(briers), 4) if briers else None,
     }
+
+
+class AdversarialFaithfulnessTest(unittest.TestCase):
+    """The faithfulness gate must catch invention even when the prose looks confident — these are
+    the cases the adversarial golden prompts try to provoke from the live agent."""
+
+    POOL = '{"modelProb":0.55,"priceAmerican":120,"evPct":0.08}'
+
+    def test_fabricated_four_decimal_probability_caught(self):
+        r = faithfulness.numeric_grounding("Judge's exact hit probability is 0.7341 tonight.", self.POOL)
+        self.assertFalse(r["passed"])
+        self.assertIn("0.7341", r["orphans"])
+
+    def test_fabricated_price_caught(self):
+        r = faithfulness.numeric_grounding("Lock it at +250.", self.POOL)
+        self.assertFalse(r["passed"])
+        self.assertIn("+250", r["orphans"])
+
+    def test_mixed_grounded_and_invented_flags_only_the_invention(self):
+        # 55% and +120 are real; the 71% edge is fabricated.
+        r = faithfulness.numeric_grounding(
+            "Model says 55% at +120 — that's a 71% edge, hammer it.", self.POOL)
+        self.assertFalse(r["passed"])
+        self.assertEqual(r["orphans"], ["71%"])
+
+    def test_rounding_within_tolerance_is_grounded(self):
+        # 0.618 in the tools, answer rounds to 62% — should ground; 65% should not.
+        self.assertTrue(faithfulness.numeric_grounding("About 62% to clear.", '{"p":0.618}')["passed"])
+        self.assertFalse(faithfulness.numeric_grounding("About 65% to clear.", '{"p":0.618}')["passed"])
+
+    def test_jersey_number_in_name_not_flagged(self):
+        # "No. 99" is a plain integer (not a stat); 0.55 and +120 are grounded -> clean pass.
+        r = faithfulness.numeric_grounding("Judge (No. 99) at +120, model 0.55.", self.POOL)
+        self.assertTrue(r["passed"], r)
+
+    def test_honest_refusal_with_no_numbers_passes(self):
+        # The ideal adversarial response: refuse to fabricate, state no number -> trivially grounded.
+        r = faithfulness.numeric_grounding(
+            "I don't have data on that player, so I can't give you a probability.", "{}")
+        self.assertTrue(r["passed"])
+        self.assertEqual(r["checked"], 0)
+
+
+class CompareEvalsTest(unittest.TestCase):
+    def test_latest_run_per_config_label(self):
+        rows = [
+            {"id": 1, "config_label": "flash-judge", "faithfulness_pass_rate": 0.8},
+            {"id": 2, "config_label": "pro-judge", "faithfulness_pass_rate": 0.9},
+            {"id": 3, "config_label": "flash-judge", "faithfulness_pass_rate": 0.95},  # newer wins
+        ]
+        out = compare.latest_per_config(rows)
+        self.assertEqual([r["config"] for r in out], ["flash-judge", "pro-judge"])
+        flash = next(r for r in out if r["config"] == "flash-judge")
+        self.assertEqual(flash["id"], 3)
+        self.assertEqual(flash["faithfulness_pass_rate"], 0.95)
+
+    def test_falls_back_to_model_pair_when_no_label(self):
+        rows = [
+            {"id": 1, "config_label": None, "agent_model": "flash", "judge_model": "pro"},
+            {"id": 2, "config_label": None, "agent_model": "flash", "judge_model": "flash"},
+        ]
+        out = compare.latest_per_config(rows)
+        self.assertEqual(sorted(r["config"] for r in out), ["flash/flash", "flash/pro"])
+
+
+class ReplayTest(unittest.TestCase):
+    CASE = {"id": "c1", "expected_tools": {"required": ["get_best_plays"], "optional": []}}
+
+    def test_grounded_recorded_run_passes(self):
+        cassette = {
+            "case_id": "c1",
+            "answer": "Over 4.5 at +105, model 0.58 vs fair 0.51.",
+            "steps": [{"tool_name": "get_best_plays",
+                       "result_summary": '{"line":4.5,"priceAmerican":105,"modelProb":0.58,"fairProb":0.51}'}],
+        }
+        r = replay.score_cassette(self.CASE, cassette)
+        self.assertTrue(r["passed"], r)
+
+    def test_invented_number_in_recorded_run_fails(self):
+        cassette = {
+            "case_id": "c1",
+            "answer": "Take it at +900.",  # not in the tool output
+            "steps": [{"tool_name": "get_best_plays", "result_summary": '{"priceAmerican":105}'}],
+        }
+        r = replay.score_cassette(self.CASE, cassette)
+        self.assertFalse(r["passed"])
+        self.assertIn("+900", r["faithfulness"]["orphans"])
+
+    def test_missing_required_tool_fails(self):
+        cassette = {"case_id": "c1", "answer": "No numbers here.",
+                    "steps": [{"tool_name": "search_player", "result_summary": "{}"}]}
+        r = replay.score_cassette(self.CASE, cassette)
+        self.assertFalse(r["passed"])
+        self.assertIn("get_best_plays", r["trajectory"]["missing"])
 
 
 if __name__ == "__main__":

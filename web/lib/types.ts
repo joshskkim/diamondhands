@@ -344,6 +344,14 @@ export interface BestPlay {
   evPct: number
   playerId: number | null
   playerName: string | null
+  /**
+   * Analyst promotion-gate verdict (bet | lean | pass), or null when not vetted (AI off /
+   * not yet debated). 'pass' is hidden from Today's Board and shown on Best Lines with the
+   * rationale; null means "show normally" (mechanical board).
+   */
+  debateVerdict?: string | null
+  debateConfidence?: number | null
+  debateRationale?: string | null
 }
 
 /**
