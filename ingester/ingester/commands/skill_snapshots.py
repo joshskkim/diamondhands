@@ -18,10 +18,13 @@ import psycopg
 from ingester.db import get_connection
 from ingester.commands.refresh_skills import (
     MIN_BF_PITCHER,
+    _load_pitcher_barrel_allowed,
+    _load_pitcher_priors,
     compute_batter_skill_rows,
     compute_pitcher_skill_rows,
     load_all_statcast_pa,
 )
+from ingester.projection.constants import PITCHER_PRIOR_ENABLED
 from ingester.statcast import require_valid_season
 
 
@@ -78,13 +81,13 @@ _PITCHER_SNAPSHOT_SQL = """
 INSERT INTO pitcher_skill_snapshots (
     player_id, as_of_date, season, vs_handedness,
     batters_faced, woba_against, xwoba_against,
-    k_rate, bb_rate, hr_per_pa, hits_per_pa,
+    k_rate, bb_rate, hr_per_pa, hits_per_pa, barrel_allowed,
     computed_at
 )
 VALUES (
     %(player_id)s, %(as_of_date)s, %(season)s, %(vs_handedness)s,
     %(batters_faced)s, %(woba_against)s, %(xwoba_against)s,
-    %(k_rate)s, %(bb_rate)s, %(hr_per_pa)s, %(hits_per_pa)s,
+    %(k_rate)s, %(bb_rate)s, %(hr_per_pa)s, %(hits_per_pa)s, %(barrel_allowed)s,
     NOW()
 )
 ON CONFLICT (player_id, as_of_date, vs_handedness) DO UPDATE SET
@@ -96,6 +99,7 @@ ON CONFLICT (player_id, as_of_date, vs_handedness) DO UPDATE SET
     bb_rate       = EXCLUDED.bb_rate,
     hr_per_pa     = EXCLUDED.hr_per_pa,
     hits_per_pa   = EXCLUDED.hits_per_pa,
+    barrel_allowed = EXCLUDED.barrel_allowed,
     computed_at   = NOW()
 """
 
@@ -181,6 +185,12 @@ def cmd_refresh_skill_snapshots(args: argparse.Namespace) -> None:
     total_batter_rows = 0
     total_pitcher_rows = 0
 
+    # Prior-season barrel-allowed (Lever 1) is constant across the season's Monday
+    # snapshots — load it once and attach to every pitcher×hand row. Leak-free.
+    barrel_allowed = _load_pitcher_barrel_allowed(conn, season - 1)
+    # Pitcher true-talent prior (Lever 4), also season-constant. None when off.
+    pitcher_priors = _load_pitcher_priors(conn, season) if PITCHER_PRIOR_ENABLED else None
+
     try:
         if force_rebuild:
             _delete_existing_snapshots(conn, mondays)
@@ -192,7 +202,13 @@ def cmd_refresh_skill_snapshots(args: argparse.Namespace) -> None:
             _write_batter_snapshot(conn, monday, batter_rows)
             conn.commit()
 
-            pitcher_rows = compute_pitcher_skill_rows(season, all_pa, cutoff_date=monday)
+            pitcher_rows = compute_pitcher_skill_rows(
+                season, all_pa, cutoff_date=monday, priors=pitcher_priors
+            )
+            for r in pitcher_rows:
+                r["barrel_allowed"] = barrel_allowed.get(
+                    (r["player_id"], r["vs_handedness"])
+                )
             _write_pitcher_snapshot(conn, monday, pitcher_rows)
             conn.commit()
 

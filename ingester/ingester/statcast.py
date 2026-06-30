@@ -329,6 +329,7 @@ def agg_pitcher_vs_handedness(pa_chunks: list[pd.DataFrame]) -> list[dict]:
     needed_cols = [
         "pitcher", "stand", "events",
         "estimated_woba_using_speedangle", "woba_value", "woba_denom",
+        "estimated_ba_using_speedangle",  # Lever 5: xBA-against (de-luck hits)
     ]
 
     # Build incremental aggregation: accumulate numeric totals per (pitcher, stand)
@@ -345,6 +346,9 @@ def agg_pitcher_vs_handedness(pa_chunks: list[pd.DataFrame]) -> list[dict]:
         sub["xwoba_num"] = _xwoba_num(sub)
         sub["woba_value"] = _to_float64(sub.get("woba_value"))
         sub["woba_denom"] = _to_float64(sub.get("woba_denom")).fillna(0)
+        # Lever 5: expected hits = Σ xBA on balls in play (0 on K/BB/HBP, which it is
+        # NaN for) → de-luck the realized hit rate toward this in compute_pitcher_skill_rows.
+        sub["xba_num"] = _to_float64(sub.get("estimated_ba_using_speedangle")).fillna(0.0)
         sub["is_k"]   = sub["events"].isin({"strikeout", "strikeout_double_play"}).astype(int)
         sub["is_bb"]  = sub["events"].isin(BB_EVENTS).astype(int)
         sub["is_hit"] = sub["events"].isin(HIT_EVENTS).astype(int)
@@ -360,13 +364,15 @@ def agg_pitcher_vs_handedness(pa_chunks: list[pd.DataFrame]) -> list[dict]:
             xwoba_num=("xwoba_num", "sum"),
             woba_num=("woba_value", "sum"),
             woba_denom=("woba_denom", "sum"),
+            xba_num=("xba_num", "sum"),
         )
 
         for (pitcher, stand), row in chunk_agg.iterrows():
             key = (int(pitcher), str(stand))
             if key not in acc:
                 acc[key] = {"bf": 0, "k": 0, "bb": 0, "hits": 0, "hr": 0,
-                            "xwoba_num": 0.0, "woba_num": 0.0, "woba_denom": 0.0}
+                            "xwoba_num": 0.0, "woba_num": 0.0, "woba_denom": 0.0,
+                            "xba_num": 0.0}
             d = acc[key]
             d["bf"]         += int(row["bf"])
             d["k"]          += int(row["k"])
@@ -376,6 +382,7 @@ def agg_pitcher_vs_handedness(pa_chunks: list[pd.DataFrame]) -> list[dict]:
             d["xwoba_num"]  += float(row["xwoba_num"]) if not pd.isna(row["xwoba_num"]) else 0.0
             d["woba_num"]   += float(row["woba_num"])  if not pd.isna(row["woba_num"])  else 0.0
             d["woba_denom"] += float(row["woba_denom"])
+            d["xba_num"]    += float(row["xba_num"]) if not pd.isna(row["xba_num"]) else 0.0
 
     rows: list[dict] = []
     for (pitcher_id, stand), d in acc.items():
@@ -392,6 +399,8 @@ def agg_pitcher_vs_handedness(pa_chunks: list[pd.DataFrame]) -> list[dict]:
             "bb_rate":       round(d["bb"]   / bf, 4) if bf > 0 else None,
             "hr_per_pa":     round(d["hr"]   / bf, 4) if bf > 0 else None,
             "hits_per_pa":   round(d["hits"] / bf, 4) if bf > 0 else None,
+            # Lever 5: expected hits per PA (xBA-against); used to de-luck hits_per_pa.
+            "xba_against":   round(d["xba_num"] / bf, 4) if bf > 0 else None,
         })
     return rows
 
@@ -675,6 +684,74 @@ def agg_batter_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
             "pu_pct": _pct(d["pu"], bip),
             "avg_launch_speed": round(d["ev_sum"] / d["ev_cnt"], 2) if d["ev_cnt"] > 0 else None,
             "avg_launch_angle": round(d["la_sum"] / d["la_cnt"], 2) if d["la_cnt"] > 0 else None,
+            "hard_hit_pct": _pct(d["hard"], bip),
+            "barrel_pct": _pct(d["barrel"], bip),
+        })
+    return rows
+
+
+def agg_pitcher_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
+    """
+    Aggregate a season's contact-quality-allowed per (pitcher, batter-stand).
+
+    The pitcher-side mirror of ``agg_batter_batted_ball`` (Lever 1), grouped by the
+    stand of the batter who put the ball in play so it aligns with pitcher_skill's
+    handedness split. Uses balls in play (rows with launch_speed + bb_type); emits
+    fly-ball share, hard-hit (EV≥95) and Statcast barrels (launch_speed_angle == 6)
+    per BIP. No spray — park-fit is batter-side. One dict per (pitcher, vs_handedness).
+    """
+    needed = ["pitcher", "stand", "launch_speed", "bb_type", "launch_speed_angle"]
+    acc: dict[tuple[int, str], dict] = {}
+    sum_keys = ("bip", "fb", "hard", "barrel")
+
+    for df in chunks:
+        if df is None or df.empty:
+            continue
+        sub = df[[c for c in needed if c in df.columns]].copy()
+        for col in ("launch_speed", "launch_speed_angle"):
+            if col not in sub.columns:
+                sub[col] = np.nan
+        if "stand" not in sub.columns or "bb_type" not in sub.columns:
+            continue
+        sub = sub[sub["stand"].isin(["L", "R"])]
+        ev = _to_float64(sub["launch_speed"])
+        keep = ev.notna() & sub["bb_type"].notna()
+        sub = sub[keep]
+        if sub.empty:
+            continue
+        sub["pitcher"] = pd.to_numeric(sub["pitcher"], errors="coerce")
+        sub = sub[sub["pitcher"].notna()]
+        if sub.empty:
+            continue
+
+        ev = _to_float64(sub["launch_speed"])
+        bb = sub["bb_type"].astype(str)
+        lsa = _to_float64(sub["launch_speed_angle"])
+        per = pd.DataFrame({
+            "pitcher": sub["pitcher"].astype("int64").to_numpy(),
+            "stand": sub["stand"].to_numpy(),
+            "fb": bb.eq("fly_ball").astype(int).to_numpy(),
+            "hard": (ev >= 95).fillna(False).astype(int).to_numpy(),
+            "barrel": (lsa == 6).fillna(False).astype(int).to_numpy(),
+        })
+        per["bip"] = 1
+        grp = per.groupby(["pitcher", "stand"]).sum()
+        for (pid, stand), row in grp.iterrows():
+            d = acc.setdefault((int(pid), str(stand)), {k: 0.0 for k in sum_keys})
+            for k in sum_keys:
+                d[k] += float(row[k])
+
+    def _pct(num: float, den: float) -> float | None:
+        return round(num / den, 4) if den > 0 else None
+
+    rows: list[dict] = []
+    for (pid, stand), d in acc.items():
+        bip = int(d["bip"])
+        rows.append({
+            "player_id": pid,
+            "vs_handedness": stand,
+            "bip": bip,
+            "fb_pct": _pct(d["fb"], bip),
             "hard_hit_pct": _pct(d["hard"], bip),
             "barrel_pct": _pct(d["barrel"], bip),
         })

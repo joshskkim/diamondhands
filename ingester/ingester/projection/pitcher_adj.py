@@ -4,11 +4,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ingester.projection.constants import (
+    LEAGUE_BARREL_RATE,
     LEAGUE_BB_PER_PA,
     LEAGUE_HIT_PER_PA,
     LEAGUE_HR_PER_PA,
     LEAGUE_K_PER_PA,
     MIN_BF_PITCHER_HANDEDNESS,
+    PITCHER_HR_BARREL_BLEND_W,
     PITCHER_MULT_BB_CLAMP,
     PITCHER_MULT_HIT_CLAMP,
     PITCHER_MULT_HR_CLAMP,
@@ -27,6 +29,9 @@ class PitcherHandSplit:
     hr_per_pa: float
     k_rate: float
     bb_rate: float = LEAGUE_BB_PER_PA
+    # Prior-season EB-regressed barrel-allowed (Lever 1). None → the HR multiplier
+    # falls back to the realized hr_per_pa basis (pre-Lever-1 behaviour).
+    barrel_allowed: float | None = None
 
 
 # Synthetic league-average pitcher used as Tier 3 fallback.
@@ -38,6 +43,7 @@ LEAGUE_AVG_PITCHER = PitcherHandSplit(
     hr_per_pa=LEAGUE_HR_PER_PA,
     k_rate=LEAGUE_K_PER_PA,
     bb_rate=LEAGUE_BB_PER_PA,
+    barrel_allowed=LEAGUE_BARREL_RATE,
 )
 
 
@@ -74,6 +80,15 @@ def _weighted_rate(
     return sum(getattr(s, attr) * s.batters_faced for s in splits) / total_bf
 
 
+def _weighted_barrel_allowed(splits: list[PitcherHandSplit]) -> float | None:
+    """BF-weighted barrel-allowed over the splits that carry it; None if none do."""
+    present = [s for s in splits if s.barrel_allowed is not None]
+    total_bf = sum(s.batters_faced for s in present)
+    if total_bf <= 0:
+        return None
+    return sum(s.barrel_allowed * s.batters_faced for s in present) / total_bf
+
+
 def overall_pitcher_split(splits: list[PitcherHandSplit]) -> PitcherHandSplit:
     """BF-weighted average across both batter hands (fallback when split is thin)."""
     total_bf = sum(s.batters_faced for s in splits)
@@ -86,6 +101,7 @@ def overall_pitcher_split(splits: list[PitcherHandSplit]) -> PitcherHandSplit:
         hr_per_pa=_weighted_rate(splits, "hr_per_pa"),
         k_rate=_weighted_rate(splits, "k_rate"),
         bb_rate=_weighted_rate(splits, "bb_rate"),
+        barrel_allowed=_weighted_barrel_allowed(splits),
     )
 
 
@@ -111,12 +127,30 @@ def select_pitcher_split(
     return overall_pitcher_split(list(by_hand.values()))
 
 
+def _hr_multiplier(split: PitcherHandSplit) -> float:
+    """Pitcher HR multiplier: realized hr_per_pa, optionally blended with barrel-allowed.
+
+    Mirrors the batter-side hr_scale (HR_BARREL_BLEND_W). With the weight at 0 (the
+    ship default) or no prior-season barrel-allowed, this is exactly the pre-Lever-1
+    realized-HR multiplier. Otherwise the barrel-allowed multiplier is blended in,
+    then clamped — the same clamp the realized basis already used.
+    """
+    hr_rate_mult = split.hr_per_pa / LEAGUE_HR_PER_PA if LEAGUE_HR_PER_PA > 0 else 1.0
+    w = PITCHER_HR_BARREL_BLEND_W
+    if split.barrel_allowed is not None and w > 0.0 and LEAGUE_BARREL_RATE > 0:
+        barrel_mult = split.barrel_allowed / LEAGUE_BARREL_RATE
+        blended = (1.0 - w) * hr_rate_mult + w * barrel_mult
+    else:
+        blended = hr_rate_mult
+    return _clamp_mult(blended, PITCHER_MULT_HR_CLAMP)
+
+
 def compute_pitcher_adjustments(split: PitcherHandSplit) -> PitcherAdjustments:
     return PitcherAdjustments(
         hit=rate_multiplier(
             split.hits_per_pa, LEAGUE_HIT_PER_PA, PITCHER_MULT_HIT_CLAMP
         ),
-        hr=rate_multiplier(split.hr_per_pa, LEAGUE_HR_PER_PA, PITCHER_MULT_HR_CLAMP),
+        hr=_hr_multiplier(split),
         k=rate_multiplier(split.k_rate, LEAGUE_K_PER_PA, PITCHER_MULT_K_CLAMP),
         bb=rate_multiplier(split.bb_rate, LEAGUE_BB_PER_PA, PITCHER_MULT_BB_CLAMP),
     )
