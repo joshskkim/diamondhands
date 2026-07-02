@@ -37,12 +37,31 @@ jobs:
       - name: Hermetic eval (cassette replay)
         run: uv run python main.py agent-eval --replay agent_eval/cassettes
 
+  # The `secrets` context isn't available in a job-level `if:`, so probe for the key in a
+  # step (where secrets ARE allowed via env) and expose the result as an output the live
+  # job can gate on through `needs`.
+  check-secrets:
+    runs-on: ubuntu-latest
+    outputs:
+      has-gemini: ${{ steps.probe.outputs.has-gemini }}
+    steps:
+      - id: probe
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -n "$GEMINI_API_KEY" ]; then
+            echo "has-gemini=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-gemini=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # Full live eval over the golden dataset (faithfulness + trajectory gates). Conditional on a
   # GEMINI_API_KEY secret so forks/PRs without one don't fail; runs the SAME agent users hit.
   # NOTE: needs a seeded slate to exercise the data tools fully — recorded tool-output cassettes
   # for fully-hermetic runs are a tracked fast-follow (see docs/plan).
   agent-eval-live:
-    if: ${{ secrets.GEMINI_API_KEY != '' }}
+    needs: check-secrets
+    if: needs.check-secrets.outputs.has-gemini == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:

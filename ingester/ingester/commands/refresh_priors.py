@@ -122,6 +122,9 @@ def _load_k_anchors(conn, target_season: int) -> dict[int, float]:
         (target_season - 1, target_season - 1),
     ).fetchall()
     out: dict[int, float] = {}
+    # Lever 3 chase is NOT applied here anymore — it rides the matchup K driver instead
+    # (matchup.batter_chase_k_delta), because the prior's K is bypassed by the matchup
+    # for ~88% of projections. The whiff anchor stays (it's the shipped v2.8 prior).
     for pid, whiff, _pitches in rows:
         anchor = whiff_k_anchor(float(whiff) if whiff is not None else None, LEAGUE_K_PER_PA)
         if anchor is not None:
@@ -186,7 +189,7 @@ def cmd_refresh_priors(args: argparse.Namespace) -> None:
                     %(player_id)s, %(season)s, %(proj_xwoba)s, %(proj_k_rate)s,
                     %(proj_iso)s, %(proj_pa)s, 'marcel', NOW()
                 )
-                ON CONFLICT (player_id, season) DO UPDATE
+                ON CONFLICT (player_id, season, method) DO UPDATE
                     SET proj_xwoba  = EXCLUDED.proj_xwoba,
                         proj_k_rate = EXCLUDED.proj_k_rate,
                         proj_iso    = EXCLUDED.proj_iso,

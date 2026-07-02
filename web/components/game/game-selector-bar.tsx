@@ -2,11 +2,13 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { format } from 'date-fns'
-import { ChevronDown } from 'lucide-react'
 import Link from 'next/link'
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, type CSSProperties } from 'react'
 import { todayGamesQueryOptions } from '@/lib/api'
+import type { TodayGame } from '@/lib/types'
 import { cn, parseApiDate } from '@/lib/utils'
+
+const DEAD_STATUSES = new Set(['Postponed', 'Suspended', 'Cancelled'])
 
 /**
  * Projected-favorite glow. From the game's expected runs, picks the favorite side
@@ -72,6 +74,84 @@ function MatchupMeta({
   )
 }
 
+// The running/final score with a short game-state suffix, once a game is live or final.
+interface ScoreState {
+  away: number
+  home: number
+  leadSide: 'home' | 'away' | null
+  label: string
+}
+
+// Short inning tag, e.g. "Top 5" / "Bot 3" / "Mid 4".
+function inningLabel(state: string | null, inning: number | null): string {
+  const prefix =
+    state === 'Top'
+      ? 'Top'
+      : state === 'Bottom'
+        ? 'Bot'
+        : state === 'Middle'
+          ? 'Mid'
+          : state === 'End'
+            ? 'End'
+            : (state ?? 'Live')
+  return `${prefix} ${inning ?? ''}`.trim()
+}
+
+// Live/final score for a game, or null while it's still scheduled (or lacks a score).
+function scoreState(g: TodayGame): ScoreState | null {
+  const isFinal = g.finalHomeScore != null && g.finalAwayScore != null
+  const home = isFinal ? g.finalHomeScore : g.liveHomeScore
+  const away = isFinal ? g.finalAwayScore : g.liveAwayScore
+  const isLive = !isFinal && (g.status === 'Live' || (home != null && away != null))
+  if ((!isFinal && !isLive) || home == null || away == null) return null
+  const leadSide = home > away ? 'home' : away > home ? 'away' : null
+  const label = isFinal ? 'Final' : inningLabel(g.liveInningState, g.liveCurrentInning)
+  return { away, home, leadSide, label }
+}
+
+// Emerald when the leading side is the team we projected to win, rose when it's the other
+// team, neutral on a tie — so the color reads "our pick is / isn't ahead" at a glance.
+function scoreColor(
+  side: 'home' | 'away',
+  leadSide: 'home' | 'away' | null,
+  favSide: 'home' | 'away' | null,
+): string {
+  if (side !== leadSide || favSide == null) return 'text-zinc-300' // trailing/tied or no lean
+  return leadSide === favSide ? 'text-emerald-400' : 'text-rose-400'
+}
+
+// AWY score @ HOM score · state, with the leading team's number colored by our prediction.
+function MatchupScore({ score, favSide }: { score: ScoreState; favSide: 'home' | 'away' | null }) {
+  const { away, home, leadSide, label } = score
+  return (
+    <div className="mt-0.5 flex items-center gap-1.5 text-[10px] whitespace-nowrap">
+      <span className={cn('font-mono font-semibold tabular-nums', scoreColor('away', leadSide, favSide))}>
+        {away}
+      </span>
+      <span className="text-zinc-600">@</span>
+      <span className={cn('font-mono font-semibold tabular-nums', scoreColor('home', leadSide, favSide))}>
+        {home}
+      </span>
+      <span className="text-zinc-700">·</span>
+      <span className="font-mono tabular-nums text-zinc-500">{label}</span>
+    </div>
+  )
+}
+
+// The sub-line beneath a matchup: dead-game status, else the live/final score, else time · total.
+function ChipMeta({ game, favSide }: { game: TodayGame; favSide: 'home' | 'away' | null }) {
+  if (game.detailedStatus && DEAD_STATUSES.has(game.detailedStatus)) {
+    return (
+      <div className="mt-0.5 text-[10px] font-medium text-zinc-500 whitespace-nowrap">
+        {game.detailedStatus}
+      </div>
+    )
+  }
+  const score = scoreState(game)
+  if (score) return <MatchupScore score={score} favSide={favSide} />
+  return <MatchupMeta startTimeUtc={game.startTimeUtc} total={game.projection?.expectedTotal} />
+}
+
 /**
  * Sticky game switcher for today's slate. On desktop it's a horizontally
  * scrolling strip of chips; on mobile it collapses to a dropdown (the strip
@@ -83,7 +163,6 @@ export function GameSelectorBar({ activeGameId }: { activeGameId?: number }) {
   const { data: games } = useQuery(todayGamesQueryOptions())
   const activeRef = useRef<HTMLAnchorElement | null>(null)
   const stripRef = useRef<HTMLDivElement | null>(null)
-  const [open, setOpen] = useState(false)
 
   // Bring the current game into view when the bar mounts / the slate loads.
   useEffect(() => {
@@ -119,15 +198,10 @@ export function GameSelectorBar({ activeGameId }: { activeGameId?: number }) {
 
   if (!games || games.length === 0) return null
 
-  const active = games.find((g) => g.gameId === activeGameId)
-  const activeGlow = active
-    ? favoriteGlow(active.projection?.expectedHomeRuns, active.projection?.expectedAwayRuns)
-    : favoriteGlow(null, null)
-
   return (
     <div className="sticky top-12 md:top-0 z-30 -mx-4 mb-6 border-b border-white/10 bg-[#08090d]/90 px-4 py-2 backdrop-blur">
-      {/* desktop: horizontal chip strip */}
-      <div ref={stripRef} className="scrollbar-slim hidden gap-2 overflow-x-auto md:flex">
+      {/* horizontal chip strip — scrolls with the wheel on desktop, touch-drag on mobile */}
+      <div ref={stripRef} className="scrollbar-slim flex gap-2 overflow-x-auto">
         {games.map((g) => {
           const isActive = g.gameId === activeGameId
           const glow = favoriteGlow(g.projection?.expectedHomeRuns, g.projection?.expectedAwayRuns)
@@ -144,59 +218,10 @@ export function GameSelectorBar({ activeGameId }: { activeGameId?: number }) {
               )}
             >
               <MatchupLabel away={g.away.abbr} home={g.home.abbr} glow={glow} />
-              <MatchupMeta startTimeUtc={g.startTimeUtc} total={g.projection?.expectedTotal} />
+              <ChipMeta game={g} favSide={glow.side} />
             </Link>
           )
         })}
-      </div>
-
-      {/* mobile: dropdown switcher */}
-      <div className="relative md:hidden">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left"
-        >
-          <div className="min-w-0">
-            {active ? (
-              <>
-                <MatchupLabel away={active.away.abbr} home={active.home.abbr} glow={activeGlow} />
-                <MatchupMeta startTimeUtc={active.startTimeUtc} total={active.projection?.expectedTotal} />
-              </>
-            ) : (
-              <span className="text-sm font-medium text-zinc-300">
-                Today&apos;s games ({games.length})
-              </span>
-            )}
-          </div>
-          <ChevronDown
-            className={cn('h-4 w-4 shrink-0 text-zinc-400 transition-transform', open && 'rotate-180')}
-          />
-        </button>
-
-        {open && (
-          <div className="absolute inset-x-0 top-full z-40 mt-1 max-h-[60vh] overflow-y-auto rounded-lg border border-white/10 bg-[#0e1015] py-1 shadow-xl">
-            {games.map((g) => {
-              const isActive = g.gameId === activeGameId
-              const glow = favoriteGlow(g.projection?.expectedHomeRuns, g.projection?.expectedAwayRuns)
-              return (
-                <Link
-                  key={g.gameId}
-                  href={`/mlb/games/${g.gameId}`}
-                  onClick={() => setOpen(false)}
-                  className={cn(
-                    'flex items-center justify-between gap-3 px-3 py-2 transition-colors',
-                    isActive ? 'bg-cyan-400/10 text-cyan-300' : 'text-zinc-300 hover:bg-white/5',
-                  )}
-                >
-                  <MatchupLabel away={g.away.abbr} home={g.home.abbr} glow={glow} />
-                  <MatchupMeta startTimeUtc={g.startTimeUtc} total={g.projection?.expectedTotal} />
-                </Link>
-              )
-            })}
-          </div>
-        )}
       </div>
     </div>
   )

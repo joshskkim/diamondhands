@@ -41,6 +41,7 @@ from ingester.commands.refresh_weather import cmd_refresh_weather
 from ingester.commands.refresh_umpires import cmd_refresh_umpires
 from ingester.commands.refresh_skills import cmd_refresh_skills
 from ingester.commands.refresh_priors import cmd_refresh_priors
+from ingester.commands.refresh_pitcher_priors import cmd_refresh_pitcher_priors
 from ingester.commands.backfill_birthdates import cmd_backfill_birthdates
 from ingester.commands.ingest_steamer import cmd_ingest_steamer
 from ingester.commands.refresh_projections import (
@@ -204,6 +205,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Compute Marcel-style multi-year true-talent priors into batter_projection_prior",
     )
     p_priors.add_argument("--season", type=int, default=2026, help="Target season year (default: 2026)")
+
+    p_pitcher_priors = sub.add_parser(
+        "refresh-pitcher-priors",
+        help="Compute Marcel-style multi-year true-talent priors into pitcher_projection_prior (Lever 4)",
+    )
+    p_pitcher_priors.add_argument("--season", type=int, default=2026, help="Target season year (default: 2026)")
 
     p_projections = sub.add_parser(
         "refresh-projections",
@@ -627,6 +634,7 @@ COMMANDS = {
     "refresh-umpires":          cmd_refresh_umpires,
     "refresh-skills":           cmd_refresh_skills,
     "refresh-priors":           cmd_refresh_priors,
+    "refresh-pitcher-priors":   cmd_refresh_pitcher_priors,
     "backfill-birthdates":      cmd_backfill_birthdates,
     "ingest-steamer":           cmd_ingest_steamer,
     "refresh-projections":      cmd_refresh_projections,

@@ -219,6 +219,10 @@ def whiff_k_anchor(whiff_rate: float | None, league_k_rate: float) -> float | No
     K ≈ league_k + .0401·whiff_z. Centered on the league K rate (not the fitted
     intercept, which carries ≥200-PA survivor bias), same as bat_speed_iso_anchor.
     Returns None without whiff data → caller falls back to the flat league anchor.
+
+    (Lever 3 chase was moved OUT of this prior anchor and onto the matchup K driver —
+    see matchup.batter_chase_k_delta — because the prior's K is bypassed by the matchup
+    for ~88% of projections, so a prior-side chase term never reached them.)
     """
     if whiff_rate is None:
         return None

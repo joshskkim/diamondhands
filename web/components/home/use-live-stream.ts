@@ -61,6 +61,14 @@ export function useLiveStream(games: TodayGame[] | undefined): void {
                 liveCurrentInning: d.liveCurrentInning,
                 liveInningState: d.liveInningState,
                 liveIsTop: d.liveIsTop,
+                // First-inning runs share the home_score_1st/away_score_1st columns that
+                // /api/games/today maps into finalHome/AwayFirstInningRuns — patch them so
+                // the NRFI/YRFI badge resolves at end of the 1st, not the 5-min poll. Keep
+                // any value we already have if the stream hasn't populated it yet.
+                finalHomeFirstInningRuns:
+                  d.liveHomeFirstInningRuns ?? g.finalHomeFirstInningRuns,
+                finalAwayFirstInningRuns:
+                  d.liveAwayFirstInningRuns ?? g.finalAwayFirstInningRuns,
               }
             : g
         }),
