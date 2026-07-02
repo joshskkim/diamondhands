@@ -8,5 +8,7 @@ public record LiveGameDto(
     Integer liveAwayScore,
     Integer liveCurrentInning,
     String liveInningState,
-    Boolean liveIsTop
+    Boolean liveIsTop,
+    Integer liveHomeFirstInningRuns,
+    Integer liveAwayFirstInningRuns
 ) {}

@@ -6,6 +6,7 @@ import { mostLikelyQueryOptions, todayGamesQueryOptions } from '@/lib/api'
 import type { MostLikely } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import {
+  liveNrfiOutcome,
   liveTotalOutcome,
   nrfiOutcome,
   runLineOutcome,
@@ -26,6 +27,7 @@ interface GameResult {
   liveTotal: number | null
   liveHome: number | null
   liveAway: number | null
+  liveCurrentInning: number | null
   isFinal: boolean
   isLive: boolean
 }
@@ -182,7 +184,9 @@ function NrfiCard({ data, games }: { data: MostLikely['nrfi']; games: Map<number
       {rows.length === 0 && <Empty />}
       {rows.map((n, i) => {
         const g = games.get(n.gameId)
-        const outcome = nrfiOutcome(n.lean, g?.home1st ?? null, g?.away1st ?? null)
+        const outcome =
+          nrfiOutcome(n.lean, g?.home1st ?? null, g?.away1st ?? null) ??
+          liveNrfiOutcome(n.lean, g?.liveHome, g?.liveAway, g?.liveCurrentInning, g?.isFinal ?? false)
         return (
         <div key={n.gameId} className="flex items-center gap-3 px-4 py-2 hover:bg-white/[0.03] transition-colors">
           <Rank n={i + 1} />
@@ -265,6 +269,7 @@ export function SimBoards() {
           liveTotal,
           liveHome: g.liveHomeScore,
           liveAway: g.liveAwayScore,
+          liveCurrentInning: g.liveCurrentInning,
           isFinal,
           isLive: !isFinal && (g.status === 'Live' || liveTotal != null),
         },
