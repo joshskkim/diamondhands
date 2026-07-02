@@ -88,6 +88,10 @@ export interface LiveGame {
   liveCurrentInning: number | null
   liveInningState: string | null
   liveIsTop: boolean | null
+  /** First-inning runs per side once the 1st completes — streamed so NRFI/YRFI grades live
+   *  (patched onto the game's finalHome/AwayFirstInningRuns). */
+  liveHomeFirstInningRuns: number | null
+  liveAwayFirstInningRuns: number | null
 }
 
 /** GET /api/model-picks — a persisted Model's Pick with its graded outcome. */
@@ -352,6 +356,41 @@ export interface BestPlay {
   debateVerdict?: string | null
   debateConfidence?: number | null
   debateRationale?: string | null
+}
+
+/**
+ * GET /api/lotto — the "Lotto of the Day" HR boom pick (or null when none qualifies).
+ * NOT chosen on price/edge: a bottom-of-order hitter who's gone cold but has real raw power,
+ * in a park/pitcher/weather setup that amplifies home runs today. Age-blind by design. The
+ * implied wager is always HR over 0.5; price fields are the best HR-over price across books
+ * and are null when no book has posted it yet (the pick stands on the model). `reasons` are
+ * server-built so the card matches the recorded pick.
+ */
+export interface BoomPick {
+  gameId: number
+  matchup: string
+  playerId: number
+  playerName: string
+  bats: string | null
+  isHome: boolean
+  lineupPosition: number
+  opposingPitcher: string
+  pHr: number
+  barrelRate: number
+  isoSeason: number
+  xwoba: number | null
+  xwobaL30: number | null
+  coldGap: number
+  adjPark: number
+  adjPitcher: number
+  adjWeatherHr: number
+  condBoost: number
+  hrDistanceFt: number | null
+  priceAmerican: number | null
+  priceDecimal: number | null
+  bestBook: string | null
+  boomScore: number
+  reasons: string[]
 }
 
 /**

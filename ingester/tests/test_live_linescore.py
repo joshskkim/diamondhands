@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import unittest
 
-from ingester.commands.live import _box_player_rows, _live_game_tuples
+from ingester.commands.live import _box_player_rows, _live_game_tuples, _update_live
 from ingester.mlb_api import parse_game_linescore_live
 
 
@@ -140,6 +140,62 @@ class TestLiveGameTuples(unittest.TestCase):
         ]
         tuples = _live_game_tuples(games)
         self.assertEqual(tuples, [(1, "2026-06-28", 10, 20)])
+
+
+class _FakeResult:
+    def __init__(self, rowcount: int) -> None:
+        self.rowcount = rowcount
+
+
+class _FakeConn:
+    """Captures execute(sql, params) calls so we can assert on the UPDATE payload."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple]] = []
+
+    def execute(self, sql: str, params: tuple) -> _FakeResult:
+        self.calls.append((sql, params))
+        return _FakeResult(1)
+
+
+def _live_raw(inning: int, first_home, first_away, run_home=3, run_away=2) -> dict:
+    """A live game whose linescore carries the running total, current inning, and per-inning
+    runs (innings[0] drives first-inning persistence)."""
+    innings = [{"num": 1, "home": {"runs": first_home}, "away": {"runs": first_away}}]
+    return {
+        "gamePk": 777,
+        "status": {"abstractGameState": "Live", "detailedState": "In Progress"},
+        "linescore": {
+            "currentInning": inning,
+            "inningState": "Top",
+            "isTopInning": True,
+            "teams": {"home": {"runs": run_home}, "away": {"runs": run_away}},
+            "innings": innings,
+        },
+    }
+
+
+class TestUpdateLiveFirstInning(unittest.TestCase):
+    def test_persists_first_inning_runs_once_the_1st_completes(self):
+        conn = _FakeConn()
+        _update_live(conn, [_live_raw(inning=6, first_home=1, first_away=0)])
+        self.assertEqual(len(conn.calls), 1)
+        sql, params = conn.calls[0]
+        self.assertIn("home_score_1st = COALESCE", sql)
+        self.assertIn("away_score_1st = COALESCE", sql)
+        # params: (status, home, away, inning, inning_state, is_top, home_1st, away_1st, game_pk)
+        self.assertEqual(params[6], 1)
+        self.assertEqual(params[7], 0)
+        self.assertEqual(params[-1], 777)
+
+    def test_no_first_inning_runs_while_1st_still_in_progress(self):
+        # Top of the 1st: home half not played yet (runs None) → pass None so COALESCE keeps
+        # whatever's already stored instead of clobbering it.
+        conn = _FakeConn()
+        _update_live(conn, [_live_raw(inning=1, first_home=None, first_away=None)])
+        _, params = conn.calls[0]
+        self.assertIsNone(params[6])
+        self.assertIsNone(params[7])
 
 
 if __name__ == "__main__":
