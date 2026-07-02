@@ -1311,8 +1311,10 @@ def _project_game(
     _upsert_game_sim_projection(conn, game.game_id, sim)
     # Persist the simulator's per-batter prop distributions (aligned to each side's
     # lineup) so the prop board can blend them against the closed-form binomial.
-    _upsert_game_sim_batter_props(conn, game.game_id, sim.home_props, home.starter_player_ids)
-    _upsert_game_sim_batter_props(conn, game.game_id, sim.away_props, away.starter_player_ids)
+    _upsert_game_sim_batter_props(
+        conn, game.game_id, sim.n_sims, sim.home_props, home.starter_player_ids)
+    _upsert_game_sim_batter_props(
+        conn, game.game_id, sim.n_sims, sim.away_props, away.starter_player_ids)
     # Each starter's hits/ER distribution (faced by the opposing lineup in the sim).
     # Skip a starter flagged as a likely opener — the away lineup faces the home
     # probable, so that side's opener flag gates the home probable's props (and vice versa).
@@ -1343,9 +1345,9 @@ def _upsert_game_sim_projection(
             expected_home_runs, expected_away_runs, expected_total, p_home_win, total_hist,
             f5_expected_home, f5_expected_away, f5_expected_total,
             f5_p_home_lead, f5_p_away_lead, f5_p_tie, f5_total_hist,
-            p_yrfi, p_home_cover_1_5, p_away_cover_1_5, computed_at
+            p_yrfi, p_home_cover_1_5, p_away_cover_1_5, p_home_cover_plus15, computed_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
         ON CONFLICT (game_id) DO UPDATE SET
             n_sims             = EXCLUDED.n_sims,
             expected_home_runs = EXCLUDED.expected_home_runs,
@@ -1363,6 +1365,7 @@ def _upsert_game_sim_projection(
             p_yrfi             = EXCLUDED.p_yrfi,
             p_home_cover_1_5   = EXCLUDED.p_home_cover_1_5,
             p_away_cover_1_5   = EXCLUDED.p_away_cover_1_5,
+            p_home_cover_plus15 = EXCLUDED.p_home_cover_plus15,
             computed_at        = NOW()
         """,
         (
@@ -1383,6 +1386,7 @@ def _upsert_game_sim_projection(
             round(sim.p_yrfi, 3),
             round(sim.p_home_cover_1_5, 3),
             round(sim.p_away_cover_1_5, 3),
+            round(sim.p_home_cover_plus_1_5, 3),
         ),
     )
 
@@ -1390,6 +1394,7 @@ def _upsert_game_sim_projection(
 def _upsert_game_sim_batter_props(
     conn: psycopg.Connection,
     game_id: int,
+    n_sims: int,
     props: list,
     player_ids: list[int | None],
 ) -> None:
@@ -1402,29 +1407,38 @@ def _upsert_game_sim_batter_props(
         conn.execute(
             """
             INSERT INTO game_sim_batter_props (
-                game_id, player_id,
+                game_id, player_id, n_sims,
                 p_hit_1plus, p_hit_2plus, p_hr, p_k_1plus, expected_tb, expected_hits,
+                expected_hrr, tb_hist, hrr_hist,
                 computed_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             ON CONFLICT (game_id, player_id) DO UPDATE SET
+                n_sims        = EXCLUDED.n_sims,
                 p_hit_1plus   = EXCLUDED.p_hit_1plus,
                 p_hit_2plus   = EXCLUDED.p_hit_2plus,
                 p_hr          = EXCLUDED.p_hr,
                 p_k_1plus     = EXCLUDED.p_k_1plus,
                 expected_tb   = EXCLUDED.expected_tb,
                 expected_hits = EXCLUDED.expected_hits,
+                expected_hrr  = EXCLUDED.expected_hrr,
+                tb_hist       = EXCLUDED.tb_hist,
+                hrr_hist      = EXCLUDED.hrr_hist,
                 computed_at   = NOW()
             """,
             (
                 game_id,
                 player_id,
+                n_sims,
                 round(prop.p_hit_1plus, 3),
                 round(prop.p_hit_2plus, 3),
                 round(prop.p_hr, 3),
                 round(prop.p_k_1plus, 3),
                 round(prop.expected_tb, 2),
                 round(prop.expected_hits, 2),
+                round(prop.expected_hrr, 2),
+                prop.tb_hist,
+                prop.hrr_hist,
             ),
         )
 

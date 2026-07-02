@@ -156,6 +156,35 @@ class TestParsePropMarkets:
         assert all(r["market"] == "hr" for r in rows)
         assert all(r["player_name"] == "Mike Trout" for r in rows)
 
+    def test_line_based_batter_and_pitcher_markets(self):
+        # The TB / H+R+RBI and pitcher hits/ER markets carry real (non-0.5) lines.
+        event = {
+            "bookmakers": [
+                {"key": "draftkings", "last_update": "t", "markets": [
+                    {"key": "batter_total_bases", "outcomes": [
+                        {"name": "Over", "description": "Mike Trout", "price": -115, "point": 1.5},
+                        {"name": "Under", "description": "Mike Trout", "price": -105, "point": 1.5},
+                    ]},
+                    {"key": "batter_hits_runs_rbis", "outcomes": [
+                        {"name": "Over", "description": "Mike Trout", "price": 105, "point": 2.5},
+                    ]},
+                    {"key": "pitcher_hits_allowed", "outcomes": [
+                        {"name": "Over", "description": "Walbert Urena", "price": -120, "point": 4.5},
+                    ]},
+                    {"key": "pitcher_earned_runs", "outcomes": [
+                        {"name": "Under", "description": "Walbert Urena", "price": -140, "point": 1.5},
+                    ]},
+                ]}
+            ]
+        }
+        rows = odds_api.parse_prop_markets(event)
+        by_market = {r["market"]: r for r in rows}
+        assert set(by_market) == {"tb", "hrr", "pitcher_hits_allowed", "pitcher_earned_runs"}
+        assert by_market["tb"]["line"] == 1.5
+        assert by_market["hrr"]["line"] == 2.5
+        assert by_market["pitcher_hits_allowed"]["side"] == "over"
+        assert by_market["pitcher_earned_runs"]["side"] == "under"
+
 
 class TestOddsInputHash:
     """The cache-gate hash is a pure function over a game's odds-relevant inputs."""

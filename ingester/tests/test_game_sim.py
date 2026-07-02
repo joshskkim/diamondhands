@@ -260,6 +260,73 @@ class TestRunLineCover(unittest.TestCase):
         self.assertGreater(sim.p_home_cover_1_5, sim.p_away_cover_1_5)
 
 
+class TestRunRbiAttribution(unittest.TestCase):
+    """Run/RBI attribution invariants: every team run is credited to exactly one
+    scoring runner, and RBIs never exceed runs (WP/PB/SB runs carry no RBI)."""
+
+    def test_slot_runs_sum_to_team_runs(self) -> None:
+        # The core invariant: attribution is a partition of the team's runs, per sim.
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=2000, seed=50,
+                            retain_teams=True)
+        for team in (sim.home, sim.away):
+            np.testing.assert_array_equal(team.slot_runs.sum(axis=1), team.runs)
+
+    def test_team_rbi_never_exceeds_runs(self) -> None:
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=2000, seed=51,
+                            retain_teams=True)
+        for team in (sim.home, sim.away):
+            self.assertTrue((team.slot_rbi.sum(axis=1) <= team.runs).all())
+            # But most runs ARE driven in — the no-RBI carve-out is only the
+            # P_EXTRA_ADVANCE catch-all.
+            self.assertGreater(team.slot_rbi.sum() / max(team.runs.sum(), 1), 0.75)
+
+    def test_attribution_leaves_run_scoring_untouched(self) -> None:
+        # Same seed with and without retained arrays: attribution adds no RNG draws,
+        # so the run distributions are bit-for-bit identical either way.
+        a = simulate_game(_league_lineup(), _league_lineup(), n_sims=1500, seed=52)
+        b = simulate_game(_league_lineup(), _league_lineup(), n_sims=1500, seed=52,
+                          retain_teams=True)
+        self.assertTrue((a.home_runs == b.home_runs).all())
+        self.assertTrue((a.f5.home_runs == b.f5.home_runs).all())
+
+    def test_batter_hists_sum_to_nsims(self) -> None:
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=1500, seed=53)
+        for bp in sim.home_props + sim.away_props:
+            self.assertEqual(sum(bp.tb_hist), 1500)
+            self.assertEqual(sum(bp.hrr_hist), 1500)
+            # Expectation reconstructed from the histogram matches the stored mean
+            # (within the >=max clipping, which league batters never approach).
+            mean_hrr = sum(i * c for i, c in enumerate(bp.hrr_hist)) / 1500
+            self.assertAlmostEqual(mean_hrr, bp.expected_hrr, delta=0.05)
+            mean_tb = sum(i * c for i, c in enumerate(bp.tb_hist)) / 1500
+            self.assertAlmostEqual(mean_tb, bp.expected_tb, delta=0.05)
+
+    def test_league_hrr_is_reasonable(self) -> None:
+        # A league-average bat: ~1 hit + ~0.5 R + ~0.5 RBI per game → E[H+R+RBI] ≈ 2.
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=4000, seed=54)
+        for bp in sim.home_props:
+            self.assertGreater(bp.expected_hrr, 1.0)
+            self.assertLess(bp.expected_hrr, 3.0)
+        # P(H+R+RBI >= 2) for a league bat sits in a broad plausible band.
+        p2 = [sum(bp.hrr_hist[2:]) / 4000 for bp in sim.home_props]
+        self.assertGreater(min(p2), 0.25)
+        self.assertLess(max(p2), 0.75)
+
+    def test_stronger_hitter_higher_hrr(self) -> None:
+        strong = [_proj(0.330, 0.080, 0.15, pid=i) for i in range(9)]
+        weak = [_proj(0.180, 0.010, 0.30, pid=i) for i in range(9)]
+        sim = simulate_game(strong, weak, n_sims=3000, seed=55)
+        self.assertGreater(sim.home_props[0].expected_hrr, sim.away_props[0].expected_hrr)
+
+    def test_home_cover_plus_1_5_identity(self) -> None:
+        sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=3000, seed=56)
+        # home +1.5 and away -1.5 partition the space (no push on a half line)…
+        self.assertAlmostEqual(
+            sim.p_home_cover_plus_1_5 + sim.full.p_away_cover(-1.5), 1.0, places=6)
+        # …and taking +1.5 is always easier than laying -1.5.
+        self.assertGreater(sim.p_home_cover_plus_1_5, sim.p_home_cover_1_5)
+
+
 class TestRetainTeams(unittest.TestCase):
     def test_default_does_not_retain_arrays(self) -> None:
         sim = simulate_game(_league_lineup(), _league_lineup(), n_sims=200, seed=5)

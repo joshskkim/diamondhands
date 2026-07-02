@@ -29,11 +29,12 @@ WORKERS = 8
 _UPSERT = """
 INSERT INTO player_game_stats (
     player_id, game_date, game_id, opponent_team_id, is_home,
-    plate_appearances, at_bats, hits, home_runs, total_bases, strikeouts, walks
+    plate_appearances, at_bats, hits, home_runs, total_bases, strikeouts, walks,
+    runs, rbi
 ) VALUES (
     %(player_id)s, %(game_date)s, %(game_id)s, %(opponent_team_id)s, %(is_home)s,
     %(plate_appearances)s, %(at_bats)s, %(hits)s, %(home_runs)s, %(total_bases)s,
-    %(strikeouts)s, %(walks)s
+    %(strikeouts)s, %(walks)s, %(runs)s, %(rbi)s
 )
 ON CONFLICT (player_id, game_date, game_id) DO UPDATE
     SET opponent_team_id  = COALESCE(EXCLUDED.opponent_team_id,  player_game_stats.opponent_team_id),
@@ -44,7 +45,9 @@ ON CONFLICT (player_id, game_date, game_id) DO UPDATE
         home_runs         = COALESCE(EXCLUDED.home_runs,         player_game_stats.home_runs),
         total_bases       = COALESCE(EXCLUDED.total_bases,       player_game_stats.total_bases),
         strikeouts        = COALESCE(EXCLUDED.strikeouts,        player_game_stats.strikeouts),
-        walks             = COALESCE(EXCLUDED.walks,             player_game_stats.walks)
+        walks             = COALESCE(EXCLUDED.walks,             player_game_stats.walks),
+        runs              = COALESCE(EXCLUDED.runs,              player_game_stats.runs),
+        rbi               = COALESCE(EXCLUDED.rbi,               player_game_stats.rbi)
 """
 
 
@@ -74,6 +77,8 @@ def _fetch_batter_rows(game: tuple) -> list[dict]:
                 "total_bases": bat.get("totalBases"),
                 "strikeouts": bat.get("strikeOuts"),
                 "walks": bat.get("baseOnBalls"),
+                "runs": bat.get("runs"),
+                "rbi": bat.get("rbi"),
             })
     return rows
 
