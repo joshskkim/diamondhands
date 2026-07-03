@@ -152,7 +152,9 @@ public class GameRepository {
             g.live_away_score,
             g.live_current_inning,
             g.live_inning_state,
-            g.live_is_top
+            g.live_is_top,
+            g.home_score_1st,
+            g.away_score_1st
         FROM games g
         WHERE g.game_date = ?
         ORDER BY g.start_time_utc
@@ -171,7 +173,9 @@ public class GameRepository {
             nullableInt(rs, "live_away_score"),
             nullableInt(rs, "live_current_inning"),
             rs.getString("live_inning_state"),
-            nullableBool(rs, "live_is_top"));
+            nullableBool(rs, "live_is_top"),
+            nullableInt(rs, "home_score_1st"),
+            nullableInt(rs, "away_score_1st"));
     }
 
     /** FanDuel game-market summary, or null when the game has no FanDuel odds. */

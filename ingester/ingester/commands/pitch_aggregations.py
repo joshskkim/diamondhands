@@ -61,11 +61,12 @@ _BATTER_SQL = """
 INSERT INTO batter_pitch_type_stats (
     player_id, season, as_of_date, pitch_type, vs_handedness,
     pitches_seen, pa_ended_on_type,
-    xwoba, woba, k_rate, iso, hr_rate, swing_rate, whiff_rate
+    xwoba, woba, k_rate, iso, hr_rate, swing_rate, whiff_rate, chase_rate, oz_pitches
 ) VALUES (
     %(player_id)s, %(season)s, %(as_of_date)s, %(pitch_type)s, %(vs_handedness)s,
     %(pitches_seen)s, %(pa_ended_on_type)s,
-    %(xwoba)s, %(woba)s, %(k_rate)s, %(iso)s, %(hr_rate)s, %(swing_rate)s, %(whiff_rate)s
+    %(xwoba)s, %(woba)s, %(k_rate)s, %(iso)s, %(hr_rate)s, %(swing_rate)s, %(whiff_rate)s,
+    %(chase_rate)s, %(oz_pitches)s
 )
 ON CONFLICT (player_id, season, as_of_date, pitch_type, vs_handedness) DO UPDATE SET
     pitches_seen     = EXCLUDED.pitches_seen,
@@ -76,7 +77,9 @@ ON CONFLICT (player_id, season, as_of_date, pitch_type, vs_handedness) DO UPDATE
     iso              = EXCLUDED.iso,
     hr_rate          = EXCLUDED.hr_rate,
     swing_rate       = EXCLUDED.swing_rate,
-    whiff_rate       = EXCLUDED.whiff_rate
+    whiff_rate       = EXCLUDED.whiff_rate,
+    chase_rate       = EXCLUDED.chase_rate,
+    oz_pitches       = EXCLUDED.oz_pitches
 """
 
 _ARSENAL_SQL = """
@@ -98,16 +101,18 @@ ON CONFLICT (player_id, season, as_of_date, pitch_type, vs_handedness) DO UPDATE
 _BASELINE_SQL = """
 INSERT INTO pitch_type_league_baselines (
     season, pitch_type, vs_handedness,
-    league_xwoba, league_iso, league_k_rate, league_usage_rate
+    league_xwoba, league_iso, league_k_rate, league_usage_rate, league_whiff_rate
 ) VALUES (
     %(season)s, %(pitch_type)s, %(vs_handedness)s,
-    %(league_xwoba)s, %(league_iso)s, %(league_k_rate)s, %(league_usage_rate)s
+    %(league_xwoba)s, %(league_iso)s, %(league_k_rate)s, %(league_usage_rate)s,
+    %(league_whiff_rate)s
 )
 ON CONFLICT (season, pitch_type, vs_handedness) DO UPDATE SET
     league_xwoba      = EXCLUDED.league_xwoba,
     league_iso        = EXCLUDED.league_iso,
     league_k_rate     = EXCLUDED.league_k_rate,
-    league_usage_rate = EXCLUDED.league_usage_rate
+    league_usage_rate = EXCLUDED.league_usage_rate,
+    league_whiff_rate = EXCLUDED.league_whiff_rate
 """
 
 

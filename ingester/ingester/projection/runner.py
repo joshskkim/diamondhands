@@ -515,7 +515,8 @@ def _load_pitcher_splits(
 ) -> list[PitcherHandSplit]:
     rows = conn.execute(
         """
-        SELECT vs_handedness, batters_faced, hits_per_pa, hr_per_pa, k_rate, bb_rate
+        SELECT vs_handedness, batters_faced, hits_per_pa, hr_per_pa, k_rate, bb_rate,
+               barrel_allowed
         FROM pitcher_skill
         WHERE player_id = %s AND season = %s
         """,
@@ -533,6 +534,7 @@ def _load_pitcher_splits(
                 hr_per_pa=float(r[3]),
                 k_rate=float(r[4]),
                 bb_rate=float(r[5]) if r[5] is not None else LEAGUE_BB_PER_PA,
+                barrel_allowed=float(r[6]) if r[6] is not None else None,
             )
         )
     return splits
@@ -1615,7 +1617,7 @@ def _load_pitcher_splits_snapshot(
     """Read pitcher splits from the most recent snapshot with as_of_date <= as_of_date."""
     rows = conn.execute(
         """
-        SELECT vs_handedness, batters_faced, hits_per_pa, hr_per_pa, k_rate
+        SELECT vs_handedness, batters_faced, hits_per_pa, hr_per_pa, k_rate, barrel_allowed
         FROM pitcher_skill_snapshots
         WHERE player_id = %s
           AND season = %s
@@ -1638,6 +1640,7 @@ def _load_pitcher_splits_snapshot(
                 hits_per_pa=float(r[2]),
                 hr_per_pa=float(r[3]),
                 k_rate=float(r[4]),
+                barrel_allowed=float(r[5]) if r[5] is not None else None,
             )
         )
     return splits

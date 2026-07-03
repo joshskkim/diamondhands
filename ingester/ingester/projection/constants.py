@@ -95,6 +95,37 @@ MARCEL_REGRESSION_PA_XWOBA: int = 1500
 MARCEL_REGRESSION_PA_K: int = 800
 MARCEL_REGRESSION_PA_ISO: int = 1800
 
+# Pitcher Marcel prior (Lever 4) — phantom league-average BF mixed into each allowed
+# rate, by how slowly that rate stabilises (premise check, 2024→2025, n=212): K% is
+# stickiest (light), HR/PA is noisiest (HEAVY → reverts to league, matching the two
+# OOS tests that say pitcher HR-allowed wants the league anchor). First-pass values;
+# the OOS proof can refine them. See ingester/projection/pitcher_prior.py.
+MARCEL_REGRESSION_BF_K: int = 200
+MARCEL_REGRESSION_BF_BB: int = 350
+MARCEL_REGRESSION_BF_HITS: int = 500
+MARCEL_REGRESSION_BF_HR: int = 900
+# Master switch (Lever 4). ON by default — PROVEN: rate proof (early-season K −14%/BB −9%)
+# + backtest (May–Jun 2025, 806 games: run MAE 3.740→3.707, model edge over league ~doubled).
+# Requires pitcher_projection_prior populated (nightly refresh-pitcher-priors); empty →
+# graceful league-mean fallback. Set DIAMOND_PITCHER_PRIOR_ENABLED=0 to disable.
+PITCHER_PRIOR_ENABLED: bool = os.environ.get("DIAMOND_PITCHER_PRIOR_ENABLED", "1") != "0"
+
+# Pitcher whiff → matchup K (Lever 2). The matchup K rate is driven by the batter's
+# per-pitch-type K propensity weighted by the pitcher's usage; this folds in the
+# pitcher's OWN per-pitch swing-and-miss ability as a multiplier relative to league
+# whiff, raised to this exponent. 0.0 = OFF (matchup K unchanged) until proven.
+PITCHER_WHIFF_K_BETA: float = float(os.environ.get("DIAMOND_PITCHER_WHIFF_K_BETA", "0.0"))
+
+# Hit-allowed de-luck toward xBA (Lever 5). Pitcher hits-allowed carries heavy BABIP
+# noise (DIPS); xBA-against (expected hits from contact quality) is a better predictor
+# (OOS corr .48 vs realized .39). The de-luck blends raw hits toward xBA by this weight
+# BEFORE the existing league/prior regression — which is what makes it additive: an OOS
+# check showed xBA adds +3.7% over realized+league, but REPLACING the league regression
+# with an xBA blend loses (pitcher hits are so low-control league shrink dominates).
+# ON (0.5) by default — PROVEN: +3.7% incremental rate proof + backtest (on top of Lever 4:
+# P(H≥1) Brier 0.2347→0.2340, hits MAE 3.82→3.77, run MAE 3.740→3.707). Set to 0.0 to disable.
+PITCHER_HIT_DELUCK_W: float = float(os.environ.get("DIAMOND_PITCHER_HIT_DELUCK_W", "0.5"))
+
 # ---------------------------------------------------------------------------
 # Bat-speed-implied ISO anchor (v2.7.0)
 # ---------------------------------------------------------------------------
@@ -127,6 +158,18 @@ WHIFF_K_PER_Z: float = float(os.environ.get("DIAMOND_WHIFF_K_PER_Z", "0.0401"))
 WHIFF_MEAN: float = 0.2262
 WHIFF_SD: float = 0.0594
 
+# Chase term added to the whiff K anchor (Lever 3). An OOS check (2024 chase -> 2025
+# K, n=236) showed chase is nearly orthogonal to whiff (corr .13) and adds INCREMENTAL
+# K signal: whiff+chase cut OOS test K-rate MAE 5.4% vs whiff-only (CSW was redundant
+# with whiff, .64, and dropped). Joint standardized fit: K ≈ league + .044·whiff_z
+# − .0124·chase_z — the chase coef is small and NEGATIVE (a conditional correction:
+# given whiff, more chasing means slightly fewer Ks). Moments from the 2024 population.
+# Gated OFF until the backtest confirms; ON adds the chase z-term to whiff_k_anchor.
+CHASE_K_ENABLED: bool = os.environ.get("DIAMOND_CHASE_K_ENABLED", "") == "1"
+CHASE_K_PER_Z: float = -0.0124
+CHASE_MEAN: float = 0.2866
+CHASE_SD: float = 0.0568
+
 # Barrel-rate HR basis (v2.9). The HR rate was derived purely from ISO, which
 # conflates doubles/triples power with true HR power. Barrel rate is the canonical
 # HR predictor. Out-of-sample (2024 barrel -> 2025 HR/PA, n=315): barrel beats ISO
@@ -136,6 +179,17 @@ WHIFF_SD: float = 0.0594
 # (barrel-only at w=1.0 regresses). Barrel is fed as a PRIOR-season true-talent
 # input (leak-free, like the bat-speed anchor); 0 = pure-ISO (pre-v2.9 behaviour).
 HR_BARREL_BLEND_W: float = float(os.environ.get("DIAMOND_HR_BARREL_W", "0.6"))
+
+# Pitcher-side barrel-allowed HR blend (Lever 1) — the symmetric pitcher version of
+# HR_BARREL_BLEND_W. The pitcher.hr multiplier normally rides realized hr_per_pa
+# allowed; when a prior-season barrel-allowed rate is present, blend the
+# barrel-allowed multiplier in by this weight.
+# DEAD / KEPT OFF: the OOS solo proof (2024→2025, n=299) FAILED — pitcher
+# barrel-allowed (corr +0.131) is a WEAKER next-season HR predictor than realized
+# HR-allowed (+0.240), and the blend's MAE gain was a pure shrinkage artifact (plain
+# league-shrink beats it by ~7%). Textbook DIPS: pitchers weakly control contact/HR.
+# Stays at 0.0 (pre-Lever-1 realized-HR basis); don't enable without a new input.
+PITCHER_HR_BARREL_BLEND_W: float = float(os.environ.get("DIAMOND_PITCHER_HR_BARREL_W", "0.0"))
 
 # ---------------------------------------------------------------------------
 # Personalized park HR factor (v2.5.0)

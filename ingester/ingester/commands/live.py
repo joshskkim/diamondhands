@@ -187,13 +187,20 @@ def _update_live(conn: psycopg.Connection, raw_games: list[dict]) -> int:
         live = parse_game_linescore_live(g)
         if live is None:
             continue
+        # Persist first-inning runs the moment the 1st completes (COALESCE so an early tick
+        # doesn't clobber a value already set) — so NRFI/YRFI resolves at end of the 1st
+        # instead of waiting for the Final branch / the slower backfill-scores cron.
+        first = parse_game_first_inning(g)  # None until the 1st completes
+        home_1st, away_1st = first if first is not None else (None, None)
         n += conn.execute(
             "UPDATE games SET status = %s, live_home_score = %s, live_away_score = %s,"
             " live_current_inning = %s, live_inning_state = %s, live_is_top = %s,"
+            " home_score_1st = COALESCE(%s, home_score_1st),"
+            " away_score_1st = COALESCE(%s, away_score_1st),"
             " live_updated_at = NOW() WHERE id = %s",
             (
                 status, live["home"], live["away"], live["inning"],
-                live["inning_state"], live["is_top"], game_pk,
+                live["inning_state"], live["is_top"], home_1st, away_1st, game_pk,
             ),
         ).rowcount
     return n

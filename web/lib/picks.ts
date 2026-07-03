@@ -128,6 +128,22 @@ export function nrfiOutcome(
   return (lean === 'YRFI') === yrfi ? 'won' : 'lost'
 }
 
+/** Live YRFI early-settle: while the 1st is still in progress, any run already locks YRFI
+ *  'won' / NRFI 'lost' (a run can't un-score). Only settles that irreversible direction — the
+ *  scoreless end-of-1st case is left to nrfiOutcome once first-inning runs land. Returns
+ *  undefined once past the 1st (or final), with no live score, or while still scoreless. */
+export function liveNrfiOutcome(
+  lean: 'NRFI' | 'YRFI',
+  liveHome: number | null | undefined,
+  liveAway: number | null | undefined,
+  currentInning: number | null | undefined,
+  isFinal: boolean,
+): PickOutcome | undefined {
+  if (isFinal || currentInning !== 1 || liveHome == null || liveAway == null) return undefined
+  if (liveHome + liveAway > 0) return lean === 'YRFI' ? 'won' : 'lost'
+  return undefined
+}
+
 // ── live, in-progress trackers (monotonic-safe early settlement) ─────────────────
 // These run off the streamed games.live_* state while a game is being played. They only
 // ever settle the direction that CAN'T reverse (a total can only climb), so an under can
