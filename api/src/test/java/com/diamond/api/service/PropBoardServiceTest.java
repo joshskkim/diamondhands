@@ -63,17 +63,15 @@ class PropBoardServiceTest {
     @Test
     void board_surfacesWalksPick_routingToWalkClearRate() {
         LocalDate date = LocalDate.of(2026, 6, 18);
-        PropBoardRepository repo = mock(PropBoardRepository.class);
-        // One batter with only a walk probability set — the hit/hr/k markets see null
-        // probs and produce no picks, isolating the new bb market.
+        PropBoardRepository repo = mockRepo(date);
+        // One batter with only a walk probability set — the hrr/hr/tb markets see null
+        // probs and produce no picks, isolating the bb market.
         SlateRow walker = slateRow(101, "Patient Pat", 0.46);
         when(repo.findSlateRows(date)).thenReturn(List.of(walker));
         when(repo.findClearRatesBatch(any(), any())).thenReturn(Map.of(
-            // hit/hr/k season rates null; only the walk rate is demonstrated.
-            101, new ClearRates(null, null, null, 0.40,
-                                 null, null, null, 0.42, 60)));
-        when(repo.findPitcherRows(date)).thenReturn(List.of());
-        when(repo.findBestOverPrice(any(), anyInt(), anyString())).thenReturn(null);
+            // Only the walk rate is demonstrated.
+            101, new ClearRates(null, null, null, 0.40, null, null,
+                                 null, null, null, 0.42, null, null, 60, 0)));
 
         PropBoardResponse resp = new PropBoardService(repo).board(date);
 
@@ -86,13 +84,46 @@ class PropBoardServiceTest {
     }
 
     @Test
+    void board_surfacesTbAndHrrPicks_fromSimHistograms() {
+        LocalDate date = LocalDate.of(2026, 6, 18);
+        PropBoardRepository repo = mockRepo(date);
+        // 1000-sim histograms: P(TB >= 2) = 500/1000, P(H+R+RBI >= 2) = 700/1000.
+        SlateRow slugger = simSlateRow(202, "Sim Slugger",
+            new int[]{300, 200, 250, 150, 100}, new int[]{150, 150, 300, 250, 150});
+        when(repo.findSlateRows(date)).thenReturn(List.of(slugger));
+        when(repo.findClearRatesBatch(any(), any())).thenReturn(Map.of());
+
+        PropBoardResponse resp = new PropBoardService(repo).board(date);
+
+        // The same batter can't take two cards (used-set dedupe): hrr ranks first,
+        // so tb has no eligible candidate left.
+        assertThat(resp.picks()).extracting(PropBoardPickDto::market).containsExactly("hrr");
+        PropBoardPickDto hrr = resp.picks().get(0);
+        assertThat(hrr.line()).isEqualTo(1.5);
+        assertThat(hrr.probModel()).isEqualTo(0.7);   // 700/1000 over 1.5
+        // No season history: the blend regresses toward the 0.44 league rate.
+        assertThat(hrr.prob()).isBetween(0.44, 0.7);
+    }
+
+    @Test
+    void board_tbCard_dropsBattersWithoutSimRow() {
+        LocalDate date = LocalDate.of(2026, 6, 18);
+        PropBoardRepository repo = mockRepo(date);
+        // No sim histograms at all → tb/hrr probs are null → no tb/hrr cards (never a 0%).
+        SlateRow walker = slateRow(101, "Patient Pat", 0.46);
+        when(repo.findSlateRows(date)).thenReturn(List.of(walker));
+        when(repo.findClearRatesBatch(any(), any())).thenReturn(Map.of());
+
+        PropBoardResponse resp = new PropBoardService(repo).board(date);
+
+        assertThat(resp.picks()).extracting(PropBoardPickDto::market).containsExactly("bb");
+    }
+
+    @Test
     void board_pitcherPickCarriesReasoningDrivers() {
         LocalDate date = LocalDate.of(2026, 6, 18);
-        PropBoardRepository repo = mock(PropBoardRepository.class);
-        when(repo.findSlateRows(date)).thenReturn(List.of());
-        when(repo.findClearRatesBatch(any(), any())).thenReturn(Map.of());
+        PropBoardRepository repo = mockRepo(date);
         when(repo.findPitcherRows(date)).thenReturn(List.of(pitcherRow()));
-        when(repo.findPitcherPrice(anyLong(), anyInt(), anyString(), anyString())).thenReturn(null);
 
         PropBoardResponse resp = new PropBoardService(repo).board(date);
 
@@ -107,8 +138,10 @@ class PropBoardServiceTest {
         assertThat(k.opponentXwoba()).isEqualTo(0.31);
         assertThat(k.arsenal()).singleElement()
             .extracting(PitcherPropPickDto.ArsenalPitch::pitchType).isEqualTo("SL");
-        // Best pick with no odds: anchor = modeled line nearest expectedK (6.0 → 5.5),
-        // and P(over 5.5)=0.52 ≥ 0.5 so the lean is the over at that line.
+        // No odds anywhere → volume fallback: anchor = modeled line nearest expectedK
+        // (6.0 → 5.5), and P(over 5.5)=0.52 ≥ 0.5 so the lean is the over at that line.
+        assertThat(k.rankedBy()).isEqualTo("volume");
+        assertThat(k.edge()).isNull();
         assertThat(k.bestSide()).isEqualTo("over");
         assertThat(k.bestLine()).isEqualTo(5.5);
         assertThat(k.bestProb()).isEqualTo(0.52);
@@ -118,11 +151,8 @@ class PropBoardServiceTest {
     @Test
     void board_pitcherBestPick_leansUnderForSoftTosser() {
         LocalDate date = LocalDate.of(2026, 6, 18);
-        PropBoardRepository repo = mock(PropBoardRepository.class);
-        when(repo.findSlateRows(date)).thenReturn(List.of());
-        when(repo.findClearRatesBatch(any(), any())).thenReturn(Map.of());
+        PropBoardRepository repo = mockRepo(date);
         when(repo.findPitcherRows(date)).thenReturn(List.of(softTosserRow()));
-        when(repo.findPitcherPrice(anyLong(), anyInt(), anyString(), anyString())).thenReturn(null);
 
         PropBoardResponse resp = new PropBoardService(repo).board(date);
 
@@ -130,9 +160,89 @@ class PropBoardServiceTest {
             .filter(p -> p.market().equals("pitcher_k")).findFirst().orElseThrow();
         // expectedK 4.0 → anchor 4.5; P(over 4.5)=0.40 < 0.5 so the lean is the under,
         // with bestProb = 1 - 0.40 = 0.60.
+        assertThat(k.rankedBy()).isEqualTo("volume");
         assertThat(k.bestSide()).isEqualTo("under");
         assertThat(k.bestLine()).isEqualTo(4.5);
         assertThat(k.bestProb()).isEqualTo(0.60);
+    }
+
+    @Test
+    void board_pitcherEdgeRanking_beatsVolumeOrder() {
+        // The ace projects more Ks, but the SOFT TOSSER holds the bigger model-vs-line
+        // gap: model P(over 4.5)=0.40 vs de-vigged 0.60 → 20pt under edge. The ace's
+        // 5.5 line is fairly priced (0.52 vs 0.50 → 2pt). Edge mode must flip the
+        // volume order and recommend the soft tosser's under.
+        LocalDate date = LocalDate.of(2026, 6, 18);
+        PropBoardRepository repo = mockRepo(date);
+        when(repo.findPitcherRows(date)).thenReturn(List.of(pitcherRow(), softTosserRow()));
+        when(repo.findPitcherMarketQuotes(date, "pitcher_k")).thenReturn(Map.of(
+            new PropBoardRepository.PitcherQuoteKey(1L, 55),
+            new PropBoardRepository.PitcherQuotes(5.5, 0.52, 0.52,
+                new PropBoardRepository.PitcherPrice(5.5, "fanduel", -110, 1.91),
+                new PropBoardRepository.PitcherPrice(5.5, "fanduel", -110, 1.91)),
+            new PropBoardRepository.PitcherQuoteKey(2L, 56),
+            new PropBoardRepository.PitcherQuotes(4.5, 0.62, 0.42,
+                new PropBoardRepository.PitcherPrice(4.5, "draftkings", -160, 1.63),
+                new PropBoardRepository.PitcherPrice(4.5, "draftkings", 135, 2.35))));
+
+        PropBoardResponse resp = new PropBoardService(repo).board(date);
+
+        PitcherPropPickDto k = resp.pitcherPicks().stream()
+            .filter(p -> p.market().equals("pitcher_k")).findFirst().orElseThrow();
+        assertThat(k.rankedBy()).isEqualTo("edge");
+        assertThat(k.pitcherId()).isEqualTo(56);          // soft tosser, not the ace
+        assertThat(k.bestSide()).isEqualTo("under");      // edge points under
+        assertThat(k.bestLine()).isEqualTo(4.5);          // the book's consensus line
+        assertThat(k.bestProb()).isEqualTo(0.60);         // model P(under 4.5)
+        // fair P(over) = 0.62/(0.62+0.42) ≈ 0.5962; edge = |0.40 − 0.5962| ≈ 0.1962.
+        assertThat(k.edge()).isEqualTo(0.1962);
+        assertThat(k.fairProb()).isEqualTo(0.4038);       // de-vigged P(under)
+        assertThat(k.bestBook()).isEqualTo("draftkings"); // priced on the under side
+        assertThat(k.priceAmerican()).isEqualTo(135);
+        // EV = 0.60 × 2.35 − 1 = 0.41.
+        assertThat(k.evPct()).isEqualTo(0.41);
+        // The fairly-priced ace is the runner-up.
+        assertThat(k.runnersUp()).extracting(PitcherPropPickDto.RunnerUp::pitcherId)
+            .containsExactly(55);
+    }
+
+    @Test
+    void board_pitcherEdge_fallsBackToVolume_whenBookLineOffLadder() {
+        // A 3.5 K line the workload ladder (4.5/5.5/6.5) can't price → the model has no
+        // P(over) there → no edge candidates → volume fallback, not a bogus edge.
+        LocalDate date = LocalDate.of(2026, 6, 18);
+        PropBoardRepository repo = mockRepo(date);
+        when(repo.findPitcherRows(date)).thenReturn(List.of(pitcherRow()));
+        when(repo.findPitcherMarketQuotes(date, "pitcher_k")).thenReturn(Map.of(
+            new PropBoardRepository.PitcherQuoteKey(1L, 55),
+            new PropBoardRepository.PitcherQuotes(3.5, 0.70, 0.34,
+                new PropBoardRepository.PitcherPrice(3.5, "fanduel", -230, 1.43),
+                new PropBoardRepository.PitcherPrice(3.5, "fanduel", 185, 2.85))));
+
+        PropBoardResponse resp = new PropBoardService(repo).board(date);
+
+        PitcherPropPickDto k = resp.pitcherPicks().stream()
+            .filter(p -> p.market().equals("pitcher_k")).findFirst().orElseThrow();
+        assertThat(k.rankedBy()).isEqualTo("volume");
+        assertThat(k.edge()).isNull();
+    }
+
+    @Test
+    void board_pitcherEdge_requiresBothSidesQuoted() {
+        // One-sided quotes can't be de-vigged — treat as no odds (volume fallback).
+        LocalDate date = LocalDate.of(2026, 6, 18);
+        PropBoardRepository repo = mockRepo(date);
+        when(repo.findPitcherRows(date)).thenReturn(List.of(pitcherRow()));
+        when(repo.findPitcherMarketQuotes(date, "pitcher_k")).thenReturn(Map.of(
+            new PropBoardRepository.PitcherQuoteKey(1L, 55),
+            new PropBoardRepository.PitcherQuotes(5.5, 0.52, null,
+                new PropBoardRepository.PitcherPrice(5.5, "fanduel", -110, 1.91), null)));
+
+        PropBoardResponse resp = new PropBoardService(repo).board(date);
+
+        PitcherPropPickDto k = resp.pitcherPicks().stream()
+            .filter(p -> p.market().equals("pitcher_k")).findFirst().orElseThrow();
+        assertThat(k.rankedBy()).isEqualTo("volume");
     }
 
     @Test
@@ -141,15 +251,25 @@ class PropBoardServiceTest {
         // null and there's no sim histogram. A missing distribution must NOT surface as a
         // confident 100%-under pick: the card is dropped entirely.
         LocalDate date = LocalDate.of(2026, 6, 18);
-        PropBoardRepository repo = mock(PropBoardRepository.class);
-        when(repo.findSlateRows(date)).thenReturn(List.of());
-        when(repo.findClearRatesBatch(any(), any())).thenReturn(Map.of());
+        PropBoardRepository repo = mockRepo(date);
         when(repo.findPitcherRows(date)).thenReturn(List.of(noWorkloadRow()));
-        when(repo.findPitcherPrice(anyLong(), anyInt(), anyString(), anyString())).thenReturn(null);
 
         PropBoardResponse resp = new PropBoardService(repo).board(date);
 
         assertThat(resp.pitcherPicks()).isEmpty();
+    }
+
+    /** A repo mock with the no-data defaults every board test starts from. */
+    private static PropBoardRepository mockRepo(LocalDate date) {
+        PropBoardRepository repo = mock(PropBoardRepository.class);
+        when(repo.findSlateRows(date)).thenReturn(List.of());
+        when(repo.findClearRatesBatch(any(), any())).thenReturn(Map.of());
+        when(repo.findPitcherRows(date)).thenReturn(List.of());
+        when(repo.findBestOverPrice(any(), anyInt(), anyString())).thenReturn(null);
+        when(repo.findBatterLinePrice(any(), anyInt(), anyString())).thenReturn(null);
+        when(repo.findPitcherPrice(anyLong(), anyInt(), anyString(), anyString())).thenReturn(null);
+        when(repo.findPitcherMarketQuotes(any(), anyString())).thenReturn(Map.of());
+        return repo;
     }
 
     /** A starter with expected volumes but no distribution at all (workload null, no sim). */
@@ -173,6 +293,7 @@ class PropBoardServiceTest {
             2, true, 4.3,
             null, null, null, pBb1,
             null, null, null,
+            null, null, null, new int[0], new int[0],   // no sim tb/hrr distributions
             1.0, 1.0, null, null,
             1.0,
             null, null, "league_avg",
@@ -182,6 +303,26 @@ class PropBoardServiceTest {
             null, null, null,
             null,         // hrDistanceFt
             0.10, 0.22);  // oppPitcherBbRate, oppPitcherKRate
+    }
+
+    /** A slate row carrying only the simulator's tb/hrr histograms (1000 sims). */
+    private static SlateRow simSlateRow(int playerId, String name, int[] tbHist, int[] hrrHist) {
+        return new SlateRow(
+            1L, "AWY @ HOM",
+            playerId, name, "HOM",
+            3, true, 4.5,
+            null, null, null, null,
+            null, null, null,
+            1000, 1.8, 2.4, tbHist, hrrHist,
+            1.0, 1.0, null, 1.0,
+            1.0,
+            null, null, "league_avg",
+            null, "Some Pitcher", "Some Park",
+            "R",
+            null, null, null, null,
+            null, null, null,
+            null,
+            0.10, 0.22);
     }
 
     private static PitcherRow pitcherRow() {
