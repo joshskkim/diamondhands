@@ -1,76 +1,252 @@
 {
-  "sample_evt_824024": {
-    "id": "sample_evt_824024",
-    "commence_time": "2026-06-03T01:38:00Z",
-    "home_team": "Los Angeles Angels",
-    "away_team": "Colorado Rockies",
-    "bookmakers": [
-      {
-        "key": "draftkings",
-        "title": "DraftKings",
-        "last_update": "2026-06-03T18:30:00Z",
-        "markets": [
-          {
-            "key": "batter_hits",
-            "last_update": "2026-06-03T18:30:00Z",
-            "outcomes": [
-              { "name": "Over", "description": "Mike Trout", "price": -135, "point": 0.5 },
-              { "name": "Under", "description": "Mike Trout", "price": 110, "point": 0.5 },
-              { "name": "Over", "description": "Hunter Goodman", "price": 120, "point": 0.5 },
-              { "name": "Under", "description": "Hunter Goodman", "price": -145, "point": 0.5 }
-            ]
-          },
-          {
-            "key": "batter_home_runs",
-            "last_update": "2026-06-03T18:30:00Z",
-            "outcomes": [
-              { "name": "Over", "description": "Mike Trout", "price": 340, "point": 0.5 },
-              { "name": "Under", "description": "Mike Trout", "price": -440, "point": 0.5 },
-              { "name": "Over", "description": "Yoan Moncada", "price": 520, "point": 0.5 },
-              { "name": "Under", "description": "Yoan Moncada", "price": -700, "point": 0.5 }
-            ]
-          },
-          {
-            "key": "pitcher_strikeouts",
-            "last_update": "2026-06-03T18:30:00Z",
-            "outcomes": [
-              { "name": "Over", "description": "Walbert Urena", "price": -115, "point": 4.5 },
-              { "name": "Under", "description": "Walbert Urena", "price": -105, "point": 4.5 }
-            ]
-          },
-          {
-            "key": "pitcher_outs",
-            "last_update": "2026-06-03T18:30:00Z",
-            "outcomes": [
-              { "name": "Over", "description": "Michael Lorenzen", "price": -120, "point": 16.5 },
-              { "name": "Under", "description": "Michael Lorenzen", "price": 100, "point": 16.5 }
-            ]
-          }
-        ]
-      },
-      {
-        "key": "fanduel",
-        "title": "FanDuel",
-        "last_update": "2026-06-03T18:31:00Z",
-        "markets": [
-          {
-            "key": "batter_hits",
-            "last_update": "2026-06-03T18:31:00Z",
-            "outcomes": [
-              { "name": "Over", "description": "Mike Trout", "price": -125, "point": 0.5 },
-              { "name": "Under", "description": "Mike Trout", "price": 102, "point": 0.5 }
-            ]
-          },
-          {
-            "key": "batter_home_runs",
-            "last_update": "2026-06-03T18:31:00Z",
-            "outcomes": [
-              { "name": "Over", "description": "Mike Trout", "price": 360, "point": 0.5 },
-              { "name": "Under", "description": "Mike Trout", "price": -480, "point": 0.5 }
-            ]
-          }
-        ]
-      }
+ "sample_evt_824024": {
+  "id": "sample_evt_824024",
+  "commence_time": "2026-06-03T01:38:00Z",
+  "home_team": "Los Angeles Angels",
+  "away_team": "Colorado Rockies",
+  "bookmakers": [
+   {
+    "key": "draftkings",
+    "title": "DraftKings",
+    "last_update": "2026-06-03T18:30:00Z",
+    "markets": [
+     {
+      "key": "batter_hits",
+      "last_update": "2026-06-03T18:30:00Z",
+      "outcomes": [
+       {
+        "name": "Over",
+        "description": "Mike Trout",
+        "price": -135,
+        "point": 0.5
+       },
+       {
+        "name": "Under",
+        "description": "Mike Trout",
+        "price": 110,
+        "point": 0.5
+       },
+       {
+        "name": "Over",
+        "description": "Hunter Goodman",
+        "price": 120,
+        "point": 0.5
+       },
+       {
+        "name": "Under",
+        "description": "Hunter Goodman",
+        "price": -145,
+        "point": 0.5
+       }
+      ]
+     },
+     {
+      "key": "batter_home_runs",
+      "last_update": "2026-06-03T18:30:00Z",
+      "outcomes": [
+       {
+        "name": "Over",
+        "description": "Mike Trout",
+        "price": 340,
+        "point": 0.5
+       },
+       {
+        "name": "Under",
+        "description": "Mike Trout",
+        "price": -440,
+        "point": 0.5
+       },
+       {
+        "name": "Over",
+        "description": "Yoan Moncada",
+        "price": 520,
+        "point": 0.5
+       },
+       {
+        "name": "Under",
+        "description": "Yoan Moncada",
+        "price": -700,
+        "point": 0.5
+       }
+      ]
+     },
+     {
+      "key": "pitcher_strikeouts",
+      "last_update": "2026-06-03T18:30:00Z",
+      "outcomes": [
+       {
+        "name": "Over",
+        "description": "Walbert Urena",
+        "price": -115,
+        "point": 4.5
+       },
+       {
+        "name": "Under",
+        "description": "Walbert Urena",
+        "price": -105,
+        "point": 4.5
+       }
+      ]
+     },
+     {
+      "key": "pitcher_outs",
+      "last_update": "2026-06-03T18:30:00Z",
+      "outcomes": [
+       {
+        "name": "Over",
+        "description": "Michael Lorenzen",
+        "price": -120,
+        "point": 16.5
+       },
+       {
+        "name": "Under",
+        "description": "Michael Lorenzen",
+        "price": 100,
+        "point": 16.5
+       }
+      ]
+     },
+     {
+      "key": "batter_total_bases",
+      "last_update": "2026-06-03T18:30:00Z",
+      "outcomes": [
+       {
+        "name": "Over",
+        "description": "Mike Trout",
+        "price": -115,
+        "point": 1.5
+       },
+       {
+        "name": "Under",
+        "description": "Mike Trout",
+        "price": -105,
+        "point": 1.5
+       },
+       {
+        "name": "Over",
+        "description": "Hunter Goodman",
+        "price": 130,
+        "point": 1.5
+       },
+       {
+        "name": "Under",
+        "description": "Hunter Goodman",
+        "price": -155,
+        "point": 1.5
+       }
+      ]
+     },
+     {
+      "key": "batter_hits_runs_rbis",
+      "last_update": "2026-06-03T18:30:00Z",
+      "outcomes": [
+       {
+        "name": "Over",
+        "description": "Mike Trout",
+        "price": 105,
+        "point": 2.5
+       },
+       {
+        "name": "Under",
+        "description": "Mike Trout",
+        "price": -125,
+        "point": 2.5
+       },
+       {
+        "name": "Over",
+        "description": "Hunter Goodman",
+        "price": -110,
+        "point": 1.5
+       },
+       {
+        "name": "Under",
+        "description": "Hunter Goodman",
+        "price": -110,
+        "point": 1.5
+       }
+      ]
+     },
+     {
+      "key": "pitcher_hits_allowed",
+      "last_update": "2026-06-03T18:30:00Z",
+      "outcomes": [
+       {
+        "name": "Over",
+        "description": "Walbert Urena",
+        "price": -120,
+        "point": 4.5
+       },
+       {
+        "name": "Under",
+        "description": "Walbert Urena",
+        "price": 100,
+        "point": 4.5
+       }
+      ]
+     },
+     {
+      "key": "pitcher_earned_runs",
+      "last_update": "2026-06-03T18:30:00Z",
+      "outcomes": [
+       {
+        "name": "Over",
+        "description": "Walbert Urena",
+        "price": 115,
+        "point": 1.5
+       },
+       {
+        "name": "Under",
+        "description": "Walbert Urena",
+        "price": -140,
+        "point": 1.5
+       }
+      ]
+     }
     ]
-  }
+   },
+   {
+    "key": "fanduel",
+    "title": "FanDuel",
+    "last_update": "2026-06-03T18:31:00Z",
+    "markets": [
+     {
+      "key": "batter_hits",
+      "last_update": "2026-06-03T18:31:00Z",
+      "outcomes": [
+       {
+        "name": "Over",
+        "description": "Mike Trout",
+        "price": -125,
+        "point": 0.5
+       },
+       {
+        "name": "Under",
+        "description": "Mike Trout",
+        "price": 102,
+        "point": 0.5
+       }
+      ]
+     },
+     {
+      "key": "batter_home_runs",
+      "last_update": "2026-06-03T18:31:00Z",
+      "outcomes": [
+       {
+        "name": "Over",
+        "description": "Mike Trout",
+        "price": 360,
+        "point": 0.5
+       },
+       {
+        "name": "Under",
+        "description": "Mike Trout",
+        "price": -480,
+        "point": 0.5
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ }
 }

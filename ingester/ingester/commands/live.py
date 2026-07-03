@@ -78,6 +78,7 @@ def _box_player_rows(box: dict, game_pk, game_date) -> tuple[list[dict], list[di
                     "at_bats": bat.get("atBats"), "hits": bat.get("hits"),
                     "home_runs": bat.get("homeRuns"), "total_bases": bat.get("totalBases"),
                     "strikeouts": bat.get("strikeOuts"), "walks": bat.get("baseOnBalls"),
+                    "runs": bat.get("runs"), "rbi": bat.get("rbi"),
                 })
             pit = pl.get("stats", {}).get("pitching", {})
             if pit.get("gamesStarted") == 1 and pit.get("outs") is not None:
@@ -103,17 +104,19 @@ def _fetch_box_rows(game: tuple) -> tuple[list[dict], list[dict]]:
 _BATTER_UPSERT = """
 INSERT INTO player_game_live (
     player_id, game_id, game_date,
-    plate_appearances, at_bats, hits, home_runs, total_bases, strikeouts, walks, updated_at
+    plate_appearances, at_bats, hits, home_runs, total_bases, strikeouts, walks,
+    runs, rbi, updated_at
 ) VALUES (
     %(player_id)s, %(game_id)s, %(game_date)s,
     %(plate_appearances)s, %(at_bats)s, %(hits)s, %(home_runs)s, %(total_bases)s,
-    %(strikeouts)s, %(walks)s, NOW()
+    %(strikeouts)s, %(walks)s, %(runs)s, %(rbi)s, NOW()
 )
 ON CONFLICT (player_id, game_id) DO UPDATE SET
     game_date = EXCLUDED.game_date,
     plate_appearances = EXCLUDED.plate_appearances, at_bats = EXCLUDED.at_bats,
     hits = EXCLUDED.hits, home_runs = EXCLUDED.home_runs, total_bases = EXCLUDED.total_bases,
-    strikeouts = EXCLUDED.strikeouts, walks = EXCLUDED.walks, updated_at = NOW()
+    strikeouts = EXCLUDED.strikeouts, walks = EXCLUDED.walks,
+    runs = EXCLUDED.runs, rbi = EXCLUDED.rbi, updated_at = NOW()
 """
 
 _PITCHER_UPSERT = """

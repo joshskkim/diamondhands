@@ -4,7 +4,8 @@ Drives the existing base-running engine off our *projected* per-batter rates (no
 model needed), simulates a game many times, and derives EVERYTHING from the one run:
 team-run distributions (→ expected runs, win prob, over/under any total line),
 period (first-N-innings) run distributions (→ NRFI/YRFI for F1 and F5/F3/F7
-moneyline/run-line/totals), and per-batter event counts (→ hit/HR/TB/K props).
+moneyline/run-line/totals), and per-batter event counts (→ hit/HR/TB/K props, plus
+run/RBI attribution → H+R+RBI distributions).
 
 Period markets note: because our per-batter rates are adjusted for the opposing
 *starter* (no bullpen, no times-through-order penalty), the first-N-innings outputs
@@ -115,6 +116,8 @@ class TeamSim:
     slot_hr: np.ndarray         # (n_sims, 9)
     slot_tb: np.ndarray         # (n_sims, 9)
     slot_k: np.ndarray          # (n_sims, 9)
+    slot_runs: np.ndarray       # (n_sims, 9) runs scored, attributed to the scoring runner
+    slot_rbi: np.ndarray        # (n_sims, 9) RBI credited to the batter (no RBI on WP/PB/SB)
     starter_hits: np.ndarray    # (n_sims,) team hits through the opposing starter's exit
     starter_runs: np.ndarray    # (n_sims,) team runs through the opposing starter's exit
 
@@ -162,6 +165,8 @@ def _sim_team(
     slot_hr = np.zeros((n_sims, 9), dtype=np.int32)
     slot_tb = np.zeros((n_sims, 9), dtype=np.int32)
     slot_k = np.zeros((n_sims, 9), dtype=np.int32)
+    slot_runs = np.zeros((n_sims, 9), dtype=np.int32)
+    slot_rbi = np.zeros((n_sims, 9), dtype=np.int32)
     bptr = np.zeros(n_sims, dtype=np.int32)
 
     for inning in range(innings):
@@ -169,6 +174,12 @@ def _sim_team(
         cum = cum_bullpen if facing_bullpen else cum_starter
         outs = np.zeros(n_sims, dtype=np.int32)
         b1 = np.zeros(n_sims, bool); b2 = np.zeros(n_sims, bool); b3 = np.zeros(n_sims, bool)
+        # Occupant lineup slot per base (meaningful only where the matching bN is True).
+        # Every occupant move below mirrors its bN update exactly; runs are credited to
+        # the occupant who crosses the plate, RBIs to the batter at the plate.
+        o1 = np.zeros(n_sims, dtype=np.int32)
+        o2 = np.zeros(n_sims, dtype=np.int32)
+        o3 = np.zeros(n_sims, dtype=np.int32)
         while (outs < 3).any():
             s = np.where(outs < 3)[0]
             slot = bptr[s].copy()
@@ -199,57 +210,109 @@ def _sim_team(
 
             # Sac fly / productive out: runner on 3rd scores on an in-play out (not a K)
             # when there are fewer than 2 outs.
-            ipo = s[(oc == 0) & (outs[s] < 2) & b3[s]]
+            ipom = (oc == 0) & (outs[s] < 2) & b3[s]
+            ipo = s[ipom]
             if len(ipo):
                 scored = rng.random(len(ipo)) < P_RUN_SCORES_ON_OUT
                 runs[ipo] += scored
+                sc = ipo[scored]
+                np.add.at(slot_runs, (sc, o3[sc]), 1)
+                np.add.at(slot_rbi, (sc, slot[ipom][scored]), 1)  # productive out earns the RBI
                 b3[ipo] = b3[ipo] & ~scored
 
             outs[s[oc <= 1]] += 1  # in-play out or K
 
-            def sub(cat):
-                return s[oc == cat]
-
             for cat in (2, 3, 4, 5, 6):
-                ss = sub(cat)
+                cm = oc == cat
+                ss = s[cm]
                 if len(ss) == 0:
                     continue
+                bs = slot[cm]
                 r1, r2, r3 = b1[ss].copy(), b2[ss].copy(), b3[ss].copy()
+                o1c, o2c, o3c = o1[ss].copy(), o2[ss].copy(), o3[ss].copy()
                 if cat == 2:    # BB: force; run only if bases loaded
-                    runs[ss] += (r1 & r2 & r3)
+                    loaded = r1 & r2 & r3
+                    runs[ss] += loaded
+                    np.add.at(slot_runs, (ss[loaded], o3c[loaded]), 1)
+                    np.add.at(slot_rbi, (ss, bs), loaded)
                     b3[ss] = r3 | (r1 & r2); b2[ss] = r2 | r1; b1[ss] = True
+                    forced2 = r1 & r2                      # runner on 2nd forced to 3rd
+                    o3[ss[forced2]] = o2c[forced2]
+                    o2[ss[r1]] = o1c[r1]                   # runner on 1st forced to 2nd
+                    o1[ss] = bs
                 elif cat == 3:  # 1B: r3 scores; r2 scores ~60%, else 3rd; r1 -> 2nd/3rd
                     score2 = r2 & (rng.random(len(ss)) < P_2ND_SCORES_ON_1B)
                     stay3_from2 = r2 & ~score2
                     to3_from1 = r1 & (rng.random(len(ss)) < P_1ST_TO_3RD_ON_1B) & ~stay3_from2
+                    # NB: `+` on numpy BOOL arrays is a logical OR, so a multi-runner
+                    # play scores at most ONE run here (HR below is exempt — its
+                    # leading `1 +` upcasts to int). The advancement constants above
+                    # were calibrated against this behavior, so run attribution must
+                    # mirror it — credit only the LEAD scoring runner — rather than
+                    # "fix" it; true multi-runner scoring would need recalibration.
                     runs[ss] += r3 + score2
+                    lead2 = score2 & ~r3
+                    np.add.at(slot_runs, (ss[r3], o3c[r3]), 1)
+                    np.add.at(slot_runs, (ss[lead2], o2c[lead2]), 1)
+                    np.add.at(slot_rbi, (ss, bs), r3 + score2)
                     b3[ss] = stay3_from2 | to3_from1
                     b2[ss] = r1 & ~to3_from1
                     b1[ss] = True
+                    o3[ss[stay3_from2]] = o2c[stay3_from2]
+                    o3[ss[to3_from1]] = o1c[to3_from1]
+                    to2_from1 = r1 & ~to3_from1
+                    o2[ss[to2_from1]] = o1c[to2_from1]
+                    o1[ss] = bs
                 elif cat == 4:  # 2B: r2,r3 score; r1 scores ~45%, else 3rd
                     score1 = r1 & (rng.random(len(ss)) < P_1ST_SCORES_ON_2B)
-                    runs[ss] += r2 + r3 + score1
+                    runs[ss] += r2 + r3 + score1   # bool OR: at most one run (see 1B note)
+                    lead2 = r2 & ~r3
+                    lead1 = score1 & ~r2 & ~r3
+                    np.add.at(slot_runs, (ss[r3], o3c[r3]), 1)
+                    np.add.at(slot_runs, (ss[lead2], o2c[lead2]), 1)
+                    np.add.at(slot_runs, (ss[lead1], o1c[lead1]), 1)
+                    np.add.at(slot_rbi, (ss, bs), r2 + r3 + score1)
                     b3[ss] = r1 & ~score1
                     b2[ss] = True
                     b1[ss] = False
+                    held1 = r1 & ~score1
+                    o3[ss[held1]] = o1c[held1]
+                    o2[ss] = bs
                 elif cat == 5:  # 3B
-                    runs[ss] += r1 + r2 + r3
+                    runs[ss] += r1 + r2 + r3       # bool OR: at most one run (see 1B note)
+                    lead2 = r2 & ~r3
+                    lead1 = r1 & ~r2 & ~r3
+                    np.add.at(slot_runs, (ss[r3], o3c[r3]), 1)
+                    np.add.at(slot_runs, (ss[lead2], o2c[lead2]), 1)
+                    np.add.at(slot_runs, (ss[lead1], o1c[lead1]), 1)
+                    np.add.at(slot_rbi, (ss, bs), r1 + r2 + r3)
                     b3[ss] = True; b2[ss] = False; b1[ss] = False
-                else:           # HR
+                    o3[ss] = bs
+                else:           # HR: `1 +` upcasts to int, so ALL runners genuinely score
                     runs[ss] += 1 + r1 + r2 + r3
+                    np.add.at(slot_runs, (ss[r3], o3c[r3]), 1)
+                    np.add.at(slot_runs, (ss[r2], o2c[r2]), 1)
+                    np.add.at(slot_runs, (ss[r1], o1c[r1]), 1)
+                    np.add.at(slot_runs, (ss, bs), 1)      # the batter rounds the bases too
+                    np.add.at(slot_rbi, (ss, bs), 1 + r1 + r2 + r3)
                     b1[ss] = False; b2[ss] = False; b3[ss] = False
 
             # Extra advancement (SB/WP/PB/ROE) into open bases, lead runner first.
             # Only for innings still in progress (a WP after the 3rd out scores nobody).
+            # A run scored here credits the runner but NO RBI (nobody drove him in).
             a = s[outs[s] < 3]
             if len(a):
                 m3 = b3[a] & (rng.random(len(a)) < P_EXTRA_ADVANCE)
                 runs[a] += m3
+                sc = a[m3]
+                np.add.at(slot_runs, (sc, o3[sc]), 1)
                 b3[a] = b3[a] & ~m3
                 m2 = b2[a] & ~b3[a] & (rng.random(len(a)) < P_EXTRA_ADVANCE)
+                o3[a[m2]] = o2[a[m2]]
                 b3[a] = b3[a] | m2
                 b2[a] = b2[a] & ~m2
                 m1 = b1[a] & ~b2[a] & (rng.random(len(a)) < P_EXTRA_ADVANCE)
+                o2[a[m1]] = o1[a[m1]]
                 b2[a] = b2[a] | m1
                 b1[a] = b1[a] & ~m1
         done = inning + 1
@@ -260,7 +323,14 @@ def _sim_team(
             starter_runs = runs.copy()
 
     return TeamSim(runs, period_runs, slot_hits, slot_hr, slot_tb, slot_k,
-                   starter_hits, starter_runs)
+                   slot_runs, slot_rbi, starter_hits, starter_runs)
+
+
+# Histogram bin ceilings for the batter prop distributions (total bases and
+# hits+runs+RBI). Books quote TB lines up to ~3.5 and H+R+RBI up to ~4.5, so 10
+# comfortably covers every quotable O/U.
+BATTER_TB_HIST_MAX = 10
+BATTER_HRR_HIST_MAX = 10
 
 
 @dataclass
@@ -271,6 +341,9 @@ class BatterProps:
     p_k_1plus: float
     expected_tb: float
     expected_hits: float
+    expected_hrr: float    # E[hits + runs scored + RBI]
+    tb_hist: list[int]     # counts over n_sims, bins 0..BATTER_TB_HIST_MAX (last is >=)
+    hrr_hist: list[int]    # counts over n_sims, bins 0..BATTER_HRR_HIST_MAX (last is >=)
 
 
 # Histogram bin ceilings for the starting-pitcher prop distributions. Books rarely set
@@ -393,6 +466,13 @@ class GameSim:
         return self.full.p_away_cover(1.5)
 
     @property
+    def p_home_cover_plus_1_5(self) -> float:
+        """Full-game run line: P(home covers +1.5). Complements p_away_cover(-1.5) —
+        the orientation the stored pair (p_home_cover_1_5 / p_away_cover_1_5) can't
+        express, needed to price the underdog side when the book favorite is away."""
+        return self.full.p_home_cover(1.5)
+
+    @property
     def f5(self) -> PeriodMarket:
         return self.periods[5]
 
@@ -431,9 +511,9 @@ class GameSim:
 
 def _slot_props(team: TeamSim) -> list[BatterProps]:
     props: list[BatterProps] = []
-    n = team.runs.shape[0]
     for slot in range(9):
         hits = team.slot_hits[:, slot]
+        hrr = hits + team.slot_runs[:, slot] + team.slot_rbi[:, slot]
         props.append(BatterProps(
             p_hit_1plus=float((hits >= 1).mean()),
             p_hit_2plus=float((hits >= 2).mean()),
@@ -441,6 +521,9 @@ def _slot_props(team: TeamSim) -> list[BatterProps]:
             p_k_1plus=float((team.slot_k[:, slot] >= 1).mean()),
             expected_tb=float(team.slot_tb[:, slot].mean()),
             expected_hits=float(hits.mean()),
+            expected_hrr=float(hrr.mean()),
+            tb_hist=_counts_hist(team.slot_tb[:, slot], BATTER_TB_HIST_MAX),
+            hrr_hist=_counts_hist(hrr, BATTER_HRR_HIST_MAX),
         ))
     return props
 

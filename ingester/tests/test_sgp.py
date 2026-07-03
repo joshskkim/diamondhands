@@ -32,6 +32,8 @@ def _team(slot_hits, slot_hr=None, slot_k=None, period_runs=None) -> TeamSim:
         slot_hr=slot_hr if slot_hr is not None else z.copy(),
         slot_tb=z.copy(),
         slot_k=slot_k if slot_k is not None else z.copy(),
+        slot_runs=z.copy(),
+        slot_rbi=z.copy(),
         starter_hits=np.zeros(n, dtype=np.int32),
         starter_runs=np.zeros(n, dtype=np.int32),
     )

@@ -56,12 +56,19 @@ TOTAL_MARKETS = {"total", "total_f5", "total_f1"}
 RUN_LINE_MARKETS = {"run_line", "run_line_f5"}
 
 # Provider player-prop key -> canonical market key.
+# NOTE: every key here adds to the per-event credit cost of refresh-odds — the
+# tb/hrr and pitcher hits/ER markets exist so the prop board can anchor its
+# line-based cards (TB, H+R+RBI) and edge-rank pitcher props against real lines.
 PROP_MARKETS = {
     "batter_hits": "hit",
     "batter_home_runs": "hr",
     "batter_walks": "bb",
+    "batter_total_bases": "tb",
+    "batter_hits_runs_rbis": "hrr",
     "pitcher_strikeouts": "pitcher_k",
     "pitcher_outs": "pitcher_outs",
+    "pitcher_hits_allowed": "pitcher_hits_allowed",
+    "pitcher_earned_runs": "pitcher_earned_runs",
 }
 
 _FIXTURES = Path(__file__).parent / "fixtures"
