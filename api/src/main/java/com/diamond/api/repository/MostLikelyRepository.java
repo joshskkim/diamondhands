@@ -33,14 +33,20 @@ public class MostLikelyRepository {
                gsp.n_sims,
                gsp.expected_total,
                gsp.p_home_win, gsp.total_hist,
-               gsp.p_home_cover_1_5, gsp.p_away_cover_1_5,
+               gsp.p_home_cover_1_5, gsp.p_away_cover_1_5, gsp.p_home_cover_plus15,
                gsp.p_yrfi,
                (SELECT AVG(line) FROM game_odds o
                   WHERE o.game_id = gsp.game_id AND o.market = 'total' AND o.side = 'over') AS book_total,
                (SELECT AVG(implied_prob) FROM game_odds o
                   WHERE o.game_id = gsp.game_id AND o.market = 'run_line' AND o.line = -1.5) AS book_fav_implied,
                (SELECT AVG(implied_prob) FROM game_odds o
-                  WHERE o.game_id = gsp.game_id AND o.market = 'run_line' AND o.line = 1.5)  AS book_dog_implied
+                  WHERE o.game_id = gsp.game_id AND o.market = 'run_line' AND o.line = 1.5)  AS book_dog_implied,
+               -- Which side the book lays -1.5 on (its favorite). Lets the service pick the
+               -- sim's cover prob for the RIGHT team when it's the away side, rather than
+               -- assuming the sim and book agree on who's favored.
+               (SELECT o.side FROM game_odds o
+                  WHERE o.game_id = gsp.game_id AND o.market = 'run_line' AND o.line = -1.5
+                  GROUP BY o.side ORDER BY COUNT(*) DESC LIMIT 1) AS book_fav_side
         FROM game_sim_projections gsp
         JOIN games g  ON g.id  = gsp.game_id
         JOIN teams ht ON ht.id = g.home_team_id
@@ -85,10 +91,12 @@ public class MostLikelyRepository {
             toIntArray(rs.getArray("total_hist")),
             rs.getDouble("p_home_cover_1_5"),
             rs.getDouble("p_away_cover_1_5"),
+            toDouble(rs.getBigDecimal("p_home_cover_plus15")),
             rs.getDouble("p_yrfi"),
             toDouble(rs.getBigDecimal("book_total")),
             toDouble(rs.getBigDecimal("book_fav_implied")),
-            toDouble(rs.getBigDecimal("book_dog_implied")));
+            toDouble(rs.getBigDecimal("book_dog_implied")),
+            rs.getString("book_fav_side"));
     }
 
     private PropRow mapProp(ResultSet rs, int n) throws SQLException {
@@ -127,7 +135,12 @@ public class MostLikelyRepository {
         long gameId, String matchup, String homeAbbr, String awayAbbr, int nSims,
         double expectedTotal, double pHomeWin, int[] totalHist,
         double pHomeCover15, double pAwayCover15,
-        double pYrfi, Double bookTotal, Double bookFavImplied, Double bookDogImplied) {}
+        // P(home covers +1.5) — the underdog-side prob when home is the dog. Null on
+        // rows projected before V69 added the column (run-line falls back then).
+        Double pHomeCoverPlus15,
+        double pYrfi, Double bookTotal, Double bookFavImplied, Double bookDogImplied,
+        // "home"/"away": which team the book lays -1.5 on. Null when no run-line odds.
+        String bookFavSide) {}
 
     public record PropRow(
         int playerId, String player, String team, String matchup,

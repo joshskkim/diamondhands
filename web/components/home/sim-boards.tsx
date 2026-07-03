@@ -136,22 +136,23 @@ function RunLineCard({ data, games }: { data: MostLikely['runLine']; games: Map<
   return (
     <BoardCard
       title="Run Line"
-      blurb="Sim ±1.5 cover lean vs the de-vigged book price — strongest edges first"
+      blurb="Sim ±1.5 cover lean vs the de-vigged book price — best-edge side, strongest first"
     >
       {rows.length === 0 && <Empty />}
       {rows.map((r, i) => {
         const g = games.get(r.gameId)
         const outcome = g
-          ? runLineOutcome(r.favorite === g.homeAbbr, g.finalHome, g.finalAway) ??
+          ? runLineOutcome(r.side === 'home', r.line, g.finalHome, g.finalAway) ??
             (g.isLive ? 'live' : undefined)
           : undefined
+        const spread = r.line > 0 ? `+${r.line}` : `${r.line}`
         return (
         <div key={r.gameId} className="flex items-center gap-3 px-4 py-2 hover:bg-white/[0.03] transition-colors">
           <Rank n={i + 1} />
           <div className="min-w-0 flex-1">
             <RowMatchup gameId={r.gameId} label={r.matchup} outcome={outcome} />
             <div className="text-[11px] text-zinc-500 mt-0.5">
-              cover <span className="text-zinc-300 font-semibold">{r.favorite}</span> -1.5{' '}
+              cover <span className="text-zinc-300 font-semibold">{r.team}</span> {spread}{' '}
               {pct(r.coverProb)}
             </div>
           </div>
