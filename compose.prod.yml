@@ -167,6 +167,19 @@ services:
         condition: service_healthy
 
   # ── Observability (bound to localhost only; reach via SSH tunnel) ──
+  # Host metrics (disk / CPU / memory) for Prometheus. The root filesystem is bind-mounted
+  # read-only so node_filesystem_* reflects the real VPS disk — the signal behind the
+  # DiskSpaceLow alert. Without this Prometheus only sees app metrics and is blind to the box
+  # filling up (on 2026-07-04 the disk hit 100% and the first symptom was Postgres crashing).
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    command:
+      - '--path.rootfs=/host'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|run)($$|/)'
+    volumes:
+      - /:/host:ro,rslave
+
   prometheus:
     image: prom/prometheus:v2.54.1
     restart: unless-stopped

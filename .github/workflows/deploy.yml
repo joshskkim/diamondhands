@@ -129,7 +129,14 @@ jobs:
             fi
             docker compose -f compose.prod.yml pull
             docker compose -f compose.prod.yml up -d   # flyway migrates before api starts
-            docker image prune -f
+            # Reclaim disk. A bare `prune -f` only drops *dangling* images, but every deploy
+            # tags images :latest + :<sha>, so the superseded per-SHA images keep a tag, never
+            # go dangling, and pile up until the root disk hits 100% — which crash-loops
+            # Postgres on a checkpoint it can't write (the 2026-07-04 outage). `-a` also removes
+            # tagged images no running container references; the `until` filter keeps the last
+            # few days so a recent image is still around for a quick rollback. Build cache too.
+            docker image prune -af --filter "until=168h"
+            docker builder prune -f --filter "until=168h"
 
             # Smoke test: don't call a deploy green until the live site answers.
             # /api/games/today exercises the API through Caddy; / exercises the web app.
