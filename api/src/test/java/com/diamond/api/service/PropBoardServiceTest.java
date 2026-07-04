@@ -179,7 +179,9 @@ class PropBoardServiceTest {
             null, "Some Pitcher", "Some Park",
             "R",
             null, null, null, null,
-            null, null, null);
+            null, null, null,
+            null,         // hrDistanceFt
+            0.10, 0.22);  // oppPitcherBbRate, oppPitcherKRate
     }
 
     private static PitcherRow pitcherRow() {

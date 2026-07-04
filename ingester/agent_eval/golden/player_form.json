@@ -1,0 +1,9 @@
+{
+  "id": "player-recent-form",
+  "question": "How has Aaron Judge been hitting recently, and does the model like his hit prop tonight?",
+  "user_context": {"bankroll_units": 100, "kelly_fraction": 0.25},
+  "expected_tools": {"required": ["search_player", "get_player"], "optional": ["get_prop_board", "get_best_plays", "get_today_games"]},
+  "grounding": {"must_cite_from": ["get_player"], "forbid_invention": true},
+  "expects_recommendation": false,
+  "tags": ["player", "form"]
+}

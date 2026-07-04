@@ -31,7 +31,8 @@ public class AccuracyRepository {
         """;
 
     private static final String ROWS_SQL = """
-        SELECT slate_date, market, n, brier, baseline_brier, ece, calibration_buckets, mae
+        SELECT slate_date, market, n, brier, baseline_brier, ece,
+               log_loss, sharpness, calibration_buckets, mae
         FROM daily_accuracy
         WHERE model_version = ? AND slate_date >= ?
         ORDER BY market, slate_date
@@ -55,6 +56,8 @@ public class AccuracyRepository {
             toDouble(rs.getBigDecimal("brier")),
             toDouble(rs.getBigDecimal("baseline_brier")),
             toDouble(rs.getBigDecimal("ece")),
+            toDouble(rs.getBigDecimal("log_loss")),
+            toDouble(rs.getBigDecimal("sharpness")),
             rs.getString("calibration_buckets"), // jsonb arrives as its JSON text
             toDouble(rs.getBigDecimal("mae")));
     }
@@ -66,5 +69,6 @@ public class AccuracyRepository {
     public record AccuracyRow(
         LocalDate slateDate, String market, int n,
         Double brier, Double baselineBrier, Double ece,
+        Double logLoss, Double sharpness,
         String calibrationJson, Double mae) {}
 }

@@ -1,0 +1,164 @@
+package com.diamond.api.controller;
+
+import com.diamond.api.ai.AgentProposal;
+import com.diamond.api.ai.AgentService;
+import com.diamond.api.ai.AgentSink;
+import com.diamond.api.ai.LinkRef;
+import com.diamond.api.auth.AuthUser;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * The Diamond Analyst endpoints (authenticated). {@code POST /api/agent} streams the agentic
+ * answer as SSE — a {@code status} feed, {@code role} debate turns, optional {@code confirm}
+ * proposals, then the {@code answer}. {@code POST /api/agent/confirm} executes a confirmed write.
+ * Both require a session (SecurityConfig auto-authenticates non-GET /api/**).
+ */
+@RestController
+@RequestMapping("/api/agent")
+public class AgentController {
+
+    private static final int MAX_QUESTION_LEN = 1000;
+    private static final long STREAM_TIMEOUT_MS = 180_000L;
+
+    private final AgentService agent;
+    private final com.diamond.api.ai.AgentRateLimiter rateLimiter;
+    private final ObjectMapper mapper;
+    private final ExecutorService executor;
+
+    public AgentController(AgentService agent, com.diamond.api.ai.AgentRateLimiter rateLimiter,
+                           ObjectMapper mapper) {
+        this.agent = agent;
+        this.rateLimiter = rateLimiter;
+        this.mapper = mapper;
+        AtomicInteger n = new AtomicInteger();
+        this.executor = Executors.newFixedThreadPool(4, r -> {
+            Thread t = new Thread(r, "agent-sse-" + n.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
+    public record AgentRequest(String question, Long threadId) {}
+    public record ConfirmRequest(String token) {}
+
+    @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter ask(@AuthenticationPrincipal AuthUser user, @RequestBody AgentRequest request) {
+        requireUser(user);
+        if (!agent.isAvailable()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "AI assistant is disabled");
+        }
+        String raw = request == null || request.question() == null ? "" : request.question().trim();
+        if (raw.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "question is required");
+        }
+        String question = raw.length() > MAX_QUESTION_LEN ? raw.substring(0, MAX_QUESTION_LEN) : raw;
+        // Throttle before doing any (paid) model work; 429 propagates to the client.
+        rateLimiter.check(user.id());
+
+        Long threadId = request.threadId();
+        SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
+        executor.submit(() -> {
+            SseSink sink = new SseSink(emitter);
+            try {
+                agent.ask(user.id(), threadId, question, sink);
+            } catch (Exception e) {
+                sink.error("Something went wrong answering that.");
+            } finally {
+                emitter.complete();
+            }
+        });
+        return emitter;
+    }
+
+    @PostMapping("/confirm")
+    public Map<String, String> confirm(@AuthenticationPrincipal AuthUser user,
+                                       @RequestBody ConfirmRequest request) {
+        requireUser(user);
+        String token = request == null ? null : request.token();
+        try {
+            return Map.of("result", agent.confirm(user.id(), token));
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    private static void requireUser(AuthUser user) {
+        if (user == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "sign in required");
+        }
+    }
+
+    /** Adapts {@link AgentSink} onto the SSE stream; swallows post-disconnect writes. */
+    private final class SseSink implements AgentSink {
+        private final SseEmitter emitter;
+
+        SseSink(SseEmitter emitter) {
+            this.emitter = emitter;
+        }
+
+        @Override
+        public void thread(long threadId) {
+            send("thread", Map.of("threadId", threadId));
+        }
+
+        @Override
+        public void status(String toolName, String label) {
+            send("status", Map.of("tool", toolName, "label", label));
+        }
+
+        @Override
+        public void role(String role, String text) {
+            send("role", Map.of("role", role, "text", text == null ? "" : text));
+        }
+
+        @Override
+        public void links(List<LinkRef> links) {
+            send("links", Map.of("links", links));
+        }
+
+        @Override
+        public void confirm(String token, AgentProposal proposal) {
+            send("confirm", Map.of("token", token, "action", proposal.action(),
+                "summary", proposal.summary()));
+        }
+
+        @Override
+        public void answer(String text) {
+            send("answer", Map.of("text", text));
+        }
+
+        @Override
+        public void sources(List<String> toolNames) {
+            send("sources", Map.of("tools", toolNames));
+        }
+
+        @Override
+        public void error(String message) {
+            send("error", Map.of("message", message));
+        }
+
+        private void send(String event, Object data) {
+            try {
+                emitter.send(SseEmitter.event().name(event).data(mapper.writeValueAsString(data)));
+            } catch (IOException | IllegalStateException e) {
+                // client disconnected or stream complete — nothing to do
+            }
+        }
+    }
+}

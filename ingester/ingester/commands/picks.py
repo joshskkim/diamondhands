@@ -14,7 +14,9 @@ duplicate of the TS ones (the web computes live, this records the snapshot).
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import sys
 from datetime import date, datetime, timedelta, timezone
 
 import requests
@@ -39,6 +41,9 @@ MIN_MODEL_PROB = 0.40
 LONGSHOT_EDGE = 0.08
 STRONG_EDGE = 0.06
 MAX_PICKS = 3
+# The Analyst gate (V64) debates the wider candidate set (one per game) before promotion, so a
+# vetoed top pick can be replaced by the next-best and the veto annotates Best Lines.
+CANDIDATE_LIMIT = 6
 EXCLUDED_MARKETS = {"pitcher_k", "pitcher_outs", "hit"}
 HIT_RATE_VETO_MIN_N = 15  # season sample needed before the traffic light can veto
 # Per-market veto bands: (no OVER below, no UNDER above). Market-specific because
@@ -54,6 +59,9 @@ HIT_RATE_VETO_BANDS: dict[str, tuple[float, float]] = {
 # Mirrors the mcp-server's DIAMOND_API_URL. Local/host runs fall back to localhost. An
 # explicit --api still wins (see cmd_record_picks).
 DEFAULT_API = os.environ.get("DIAMOND_API_URL", "http://localhost:8080")
+# Shared key for the server-to-server debate gate (POST /api/debate/pick). Blank => the gate is
+# off and the board stays mechanical (graceful — the gate only ever demotes on an explicit pass).
+INTERNAL_KEY = os.environ.get("AGENT_INTERNAL_KEY", "")
 
 
 def _get_json(url: str) -> object:
@@ -114,9 +122,9 @@ def _hit_rate_veto(play: dict, hit_rates: dict | None) -> bool:
     return False
 
 
-def build_picks(plays: list[dict], sim: dict | None,
-                hit_rates: dict | None = None) -> list[dict]:
-    """Apply the Model's Picks bar; returns at most MAX_PICKS plays, board order."""
+def _scored_candidates(plays: list[dict], sim: dict | None,
+                       hit_rates: dict | None) -> list[tuple[float, dict, float, bool]]:
+    """Apply the Model's Picks bar + vetoes; return (score, play, edge, strong) sorted best-first."""
     candidates: list[tuple[float, dict, float, bool]] = []
     for p in plays:
         if p["market"] in EXCLUDED_MARKETS or p.get("fairProb") is None:
@@ -136,23 +144,162 @@ def build_picks(plays: list[dict], sim: dict | None,
         score = edge + 0.5 * p["evPct"] + (0.02 if corroborated else 0.0)
         strong = edge >= STRONG_EDGE and p["modelProb"] >= 0.5
         candidates.append((score, p, edge, strong))
-
     candidates.sort(key=lambda c: -c[0])
+    return candidates
+
+
+def _take_one_per_game(candidates: list[tuple[float, dict, float, bool]], cap: int) -> list[dict]:
+    """At most one pick per game, in board order, up to `cap`."""
     picks: list[dict] = []
     used_games: set[int] = set()
-    for score, p, edge, strong in candidates:
+    for _score, p, edge, strong in candidates:
         if p["gameId"] in used_games:
             continue
         used_games.add(p["gameId"])
         picks.append({**p, "edge": edge, "strong": strong})
+        if len(picks) == cap:
+            break
+    return picks
+
+
+def build_picks(plays: list[dict], sim: dict | None,
+                hit_rates: dict | None = None) -> list[dict]:
+    """Apply the Model's Picks bar; returns at most MAX_PICKS plays, board order."""
+    return _take_one_per_game(_scored_candidates(plays, sim, hit_rates), MAX_PICKS)
+
+
+def build_candidates(plays: list[dict], sim: dict | None, hit_rates: dict | None = None,
+                     limit: int = CANDIDATE_LIMIT) -> list[dict]:
+    """The wider candidate set (one per game) the Analyst gate debates before promotion."""
+    return _take_one_per_game(_scored_candidates(plays, sim, hit_rates), limit)
+
+
+def _active_slate(api: str) -> date:
+    """The slate users are currently shown (server resolves lineup+projection readiness)."""
+    return date.fromisoformat(_get_json(f"{api}/api/slate/active")["date"])
+
+
+def _pick_key(p: dict) -> tuple:
+    """Stable identity for a pick: one per selection per slate. line is excluded so a
+    line move keeps the first-shown pick; player_id is None for game markets."""
+    return (p["gameId"], p["market"], p["side"], p.get("playerId"))
+
+
+def plan_reconcile(picks: list[dict], existing: dict, now: datetime,
+                   board_loaded: bool) -> list[tuple]:
+    """Decide what to do with each pick given the current top set and what's on record.
+
+    Pure (no DB/IO) so it's unit-testable. ``existing`` maps a pick key
+    (see _pick_key) to (pick_id, active, start_time). Returns ops in apply order:
+      · ("keep",   pick_id, rank, pick)  — still in the top set; re-promote, keep locked line
+      · ("insert", rank, pick)           — newly qualifies; append at first-shown price
+      · ("bump",   pick_id)              — displaced before its game; mark inactive
+    A pick whose game has started is frozen (never bumped). When the board didn't load
+    (board_loaded False, i.e. odds expired mid-slate), nothing is bumped — an empty pull
+    must never wipe legitimately-shown picks.
+    """
+    ops: list[tuple] = []
+    desired_keys: set[tuple] = set()
+    for rank, p in enumerate(picks, start=1):
+        key = _pick_key(p)
+        desired_keys.add(key)
+        if key in existing:
+            ops.append(("keep", existing[key][0], rank, p))
+        else:
+            ops.append(("insert", rank, p))
+    if board_loaded:
+        for key, (pick_id, active, start) in existing.items():
+            if key in desired_keys:
+                continue
+            if start is not None and start <= now:
+                continue  # game started → frozen, leave as-is (stays gradeable)
+            if active:
+                ops.append(("bump", pick_id))
+    return ops
+
+
+# ── the Analyst promotion gate (V64) ─────────────────────────────────────────
+
+def _cached_verdict(conn, slate, cand: dict) -> str | None:
+    """A selection is debated once per slate; reuse the cached verdict if present."""
+    row = conn.execute(
+        "SELECT verdict FROM pick_verdicts WHERE slate_date=%s AND game_id=%s "
+        "AND market=%s AND side=%s AND player_id IS NOT DISTINCT FROM %s",
+        (slate, cand["gameId"], cand["market"], cand["side"], cand.get("playerId")),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _debate_and_store(conn, api: str, slate, cand: dict) -> str | None:
+    """Debate a candidate via the server gate and persist the verdict. Returns the verdict, or
+    None on any failure (gate off / AI disabled / error) so the candidate promotes mechanically —
+    the gate is additive and must never break record-picks."""
+    if not INTERNAL_KEY:
+        return None
+    try:
+        resp = requests.post(
+            f"{api}/api/debate/pick",
+            headers={"X-Internal-Key": INTERNAL_KEY},
+            json={
+                "gameId": cand["gameId"], "market": cand["market"], "side": cand["side"],
+                "line": cand.get("line"), "playerId": cand.get("playerId"),
+                "playerName": cand.get("playerName"), "priceAmerican": cand["priceAmerican"],
+                "modelProb": cand["modelProb"], "fairProb": cand["fairProb"],
+            },
+            timeout=90,
+        )
+        if resp.status_code != 200:
+            return None  # 503 (AI off) / 403 (no key) => no gate, promote mechanically
+        v = resp.json()
+    except Exception as exc:  # noqa: BLE001 — the gate must never break record-picks
+        who = cand.get("playerName") or cand.get("matchup")
+        print(f"[record-picks] debate failed for {who}: {exc}; promoting mechanically")
+        return None
+
+    conn.execute(
+        """
+        INSERT INTO pick_verdicts (
+            slate_date, game_id, market, side, line, player_id, player_name, matchup,
+            model_prob, fair_prob, edge, ev_pct, price_american, book,
+            verdict, confidence, rationale, risks
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+        ON CONFLICT (slate_date, game_id, market, side, player_id) DO UPDATE SET
+            verdict=EXCLUDED.verdict, confidence=EXCLUDED.confidence,
+            rationale=EXCLUDED.rationale, risks=EXCLUDED.risks, debated_at=now()
+        """,
+        (slate, cand["gameId"], cand["market"], cand["side"], cand.get("line"),
+         cand.get("playerId"), cand.get("playerName"), cand.get("matchup"),
+         cand["modelProb"], cand["fairProb"], cand["edge"], cand["evPct"],
+         cand["priceAmerican"], cand.get("bestBook"),
+         v.get("verdict", "pass"), v.get("confidence"), v.get("rationale"),
+         json.dumps(v.get("keyRisks", []))),
+    )
+    return v.get("verdict", "pass")
+
+
+def gate_candidates(conn, api: str, slate, candidates: list[dict]) -> list[dict]:
+    """Promote up to MAX_PICKS candidates the Analyst endorses, debating in score order.
+    verdict bet/lean (or None when the gate is off/unavailable) → promoted; 'pass' → demoted
+    (left in pick_verdicts only, surfaced on Best Lines). Cached verdicts are reused."""
+    picks: list[dict] = []
+    for cand in candidates:
+        verdict = _cached_verdict(conn, slate, cand)
+        if verdict is None:
+            verdict = _debate_and_store(conn, api, slate, cand)
+        if verdict is None or verdict in ("bet", "lean"):
+            picks.append(cand)
         if len(picks) == MAX_PICKS:
             break
     return picks
 
 
 def cmd_record_picks(args: argparse.Namespace) -> None:
-    slate = args.date if getattr(args, "date", None) is not None else eastern_today()
     api = getattr(args, "api", None) or DEFAULT_API
+    # Record the slate users are actually shown, not the wall-clock/projection date — so a
+    # pick is "first shown" (and locked) only once its slate is live on the board. An
+    # explicit --date still pins it (manual backfills); daily.py leaves date None so the
+    # nightly/quick runs self-resolve the active slate.
+    slate = args.date if getattr(args, "date", None) is not None else _active_slate(api)
 
     plays = _get_json(f"{api}/api/odds/best?date={slate}&limit=200")
     try:
@@ -167,28 +314,70 @@ def cmd_record_picks(args: argparse.Namespace) -> None:
         print(f"[record-picks] hit-rates unavailable ({exc}); recording without that veto")
         hit_rates = None
 
-    picks = build_picks(plays, sim, hit_rates)
+    candidates = build_candidates(plays, sim, hit_rates)
+    now = datetime.now(timezone.utc)
 
+    # Reconcile (never DELETE): a pick keeps its row once shown. Picks still in the top set
+    # stay active (locked at their first-shown line); a new pick is appended; a pick a
+    # better one displaces before its game is marked bumped (still graded + counted, shown
+    # as an "earlier" extra). Picks whose game has started are frozen as-is.
     conn = get_connection()
     try:
-        conn.execute("DELETE FROM model_picks WHERE slate_date = %s", (slate,))
-        for rank, p in enumerate(picks, start=1):
-            conn.execute(
-                """
-                INSERT INTO model_picks (
-                    slate_date, rank, game_id, market, side, line, player_id,
-                    player_name, matchup, model_prob, fair_prob, edge, ev_pct,
-                    price_american, book, strong, model_version, recorded_at
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                """,
-                (
-                    slate, rank, p["gameId"], p["market"], p["side"], p.get("line"),
-                    p.get("playerId"), p.get("playerName"), p.get("matchup"),
-                    p["modelProb"], p["fairProb"], p["edge"], p["evPct"],
-                    p["priceAmerican"], p.get("bestBook"), p["strong"],
-                    MODEL_VERSION, datetime.now(timezone.utc),
-                ),
-            )
+        # Analyst gate: debate the candidates and promote only those it endorses (bet/lean).
+        # Vetoed (pass) candidates stay in pick_verdicts → surfaced on Best Lines. No-op when
+        # the gate is off/unavailable (mechanical top-3). Verdicts + picks commit together below.
+        picks = gate_candidates(conn, api, slate, candidates)
+        existing = conn.execute(
+            """
+            SELECT mp.id, mp.game_id, mp.market, mp.side, mp.player_id, mp.active,
+                   g.start_time_utc
+            FROM model_picks mp JOIN games g ON g.id = mp.game_id
+            WHERE mp.slate_date = %s
+            """,
+            (slate,),
+        ).fetchall()
+        existing_by_key = {
+            (gid, market, side, pid): (pick_id, active, start)
+            for (pick_id, gid, market, side, pid, active, start) in existing
+        }
+
+        inserted = kept = bumped = 0
+        for op in plan_reconcile(picks, existing_by_key, now, board_loaded=bool(plays)):
+            if op[0] == "keep":
+                _, pick_id, rank, _p = op
+                # Re-promote to the active top set; DO NOT touch the locked first-shown
+                # line/price/probs.
+                conn.execute(
+                    "UPDATE model_picks SET active=true, rank=%s, bumped_at=NULL WHERE id=%s",
+                    (rank, pick_id),
+                )
+                kept += 1
+            elif op[0] == "insert":
+                _, rank, p = op
+                conn.execute(
+                    """
+                    INSERT INTO model_picks (
+                        slate_date, rank, game_id, market, side, line, player_id,
+                        player_name, matchup, model_prob, fair_prob, edge, ev_pct,
+                        price_american, book, strong, model_version, recorded_at,
+                        first_shown_at, active
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,true)
+                    """,
+                    (
+                        slate, rank, p["gameId"], p["market"], p["side"], p.get("line"),
+                        p.get("playerId"), p.get("playerName"), p.get("matchup"),
+                        p["modelProb"], p["fairProb"], p["edge"], p["evPct"],
+                        p["priceAmerican"], p.get("bestBook"), p["strong"],
+                        MODEL_VERSION, now, now,
+                    ),
+                )
+                inserted += 1
+            else:  # "bump"
+                conn.execute(
+                    "UPDATE model_picks SET active=false, bumped_at=%s WHERE id=%s",
+                    (now, op[1]),
+                )
+                bumped += 1
         conn.commit()
     except Exception:
         conn.rollback()
@@ -196,12 +385,95 @@ def cmd_record_picks(args: argparse.Namespace) -> None:
     finally:
         conn.close()
 
-    print(f"[record-picks] {slate}: recorded {len(picks)} pick(s) "
-          f"(from {len(plays)} priced plays).")
+    print(f"[record-picks] {slate}: {len(picks)} active pick(s) "
+          f"({inserted} new, {kept} kept, {bumped} bumped) from {len(plays)} priced plays.")
     for i, p in enumerate(picks, 1):
         who = p.get("playerName") or p.get("matchup")
         print(f"  #{i} {who} {p['market']} {p['side']} {p.get('line')} "
               f"model={p['modelProb']:.3f} fair={p['fairProb']:.3f} edge={p['edge']:+.3f}")
+
+
+# ── CLV (closing-line value) ────────────────────────────────────────────────
+
+# Opposite side per market, needed to de-vig the closing two-sided price.
+_OPPOSITE_SIDE = {"over": "under", "under": "over", "home": "away", "away": "home"}
+
+
+def _devig_two_way(side_decimal: float, opp_decimal: float) -> float | None:
+    """De-vig a two-sided market to this side's fair probability (matches OddsService).
+
+        fair = side_implied / (side_implied + opp_implied),   implied = 1 / decimal
+    Returns None for non-positive prices.
+    """
+    if side_decimal <= 0 or opp_decimal <= 0:
+        return None
+    side_implied = 1.0 / side_decimal
+    opp_implied = 1.0 / opp_decimal
+    if side_implied + opp_implied <= 0:
+        return None
+    return side_implied / (side_implied + opp_implied)
+
+
+def _closing_quote(
+    conn, game_id: int, market: str, side: str, line: float | None,
+    book: str | None, start_time, player_id: int | None,
+) -> tuple[int | None, float | None, float | None, object]:
+    """Find the closing quote for a pick's selection and its de-vigged fair prob.
+
+    "Closing" = the last odds_snapshots pull strictly before first pitch
+    (start_time_utc). We match the SAME player (props), book + line the pick was taken
+    at, then read both sides from that same pull (one refresh-odds run shares a
+    captured_at, so the opposite side is present at the same timestamp) and de-vig
+    exactly like OddsService:
+        fair = side_implied / (side_implied + opp_implied),  implied = 1/decimal.
+    Returns (close_american, close_decimal, close_fair_prob, captured_at); any field is
+    None when the selection or its opposite side can't be found at close.
+
+    NOTE the de-vigged close uses the pick's single book on both sides, whereas the
+    stored bet-time fair_prob came from OddsService's best-of-books de-vig — a small
+    vig-basis difference, so CLV here is a close approximation, not an exact line-move.
+
+    Book match is case-insensitive: odds_snapshots.bookmaker stores the lowercase Odds-API
+    key ("fanduel") but model_picks.book is observed title-cased ("FanDuel"); LOWER() on
+    both bridges them so CLV doesn't silently capture nothing on a case mismatch.
+    """
+    scope = "prop" if market in ("hit", "hr") else "game"
+    # player_id must match for props (multiple players share a market/line/book); it is
+    # NULL for game markets, where IS NOT DISTINCT FROM matches the NULL snapshot rows.
+    ts_row = conn.execute(
+        """
+        SELECT MAX(captured_at) FROM odds_snapshots
+        WHERE game_id = %s AND scope = %s AND player_id IS NOT DISTINCT FROM %s
+          AND market = %s AND side = %s
+          AND line IS NOT DISTINCT FROM %s AND LOWER(bookmaker) = LOWER(%s)
+          AND captured_at < %s
+        """,
+        (game_id, scope, player_id, market, side, line, book, start_time),
+    ).fetchone()
+    captured_at = ts_row[0] if ts_row else None
+    if captured_at is None:
+        return None, None, None, None
+
+    # Both sides at that pull (same player, book, line).
+    rows = conn.execute(
+        """
+        SELECT side, price_american, price_decimal FROM odds_snapshots
+        WHERE game_id = %s AND scope = %s AND player_id IS NOT DISTINCT FROM %s
+          AND market = %s AND LOWER(bookmaker) = LOWER(%s)
+          AND line IS NOT DISTINCT FROM %s AND captured_at = %s
+        """,
+        (game_id, scope, player_id, market, book, line, captured_at),
+    ).fetchall()
+    prices = {r[0]: (int(r[1]), float(r[2])) for r in rows}
+    if side not in prices:
+        return None, None, None, captured_at
+    close_american, close_decimal = prices[side]
+
+    opp = _OPPOSITE_SIDE.get(side)
+    fair = None
+    if opp is not None and opp in prices:
+        fair = _devig_two_way(close_decimal, prices[opp][1])
+    return close_american, close_decimal, fair, captured_at
 
 
 # ── scoring ───────────────────────────────────────────────────────────────────
@@ -239,23 +511,26 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
     try:
         rows = conn.execute(
             """
-            SELECT mp.slate_date, mp.rank, mp.game_id, mp.market, mp.side, mp.line,
+            SELECT mp.id, mp.rank, mp.game_id, mp.market, mp.side, mp.line,
                    mp.player_id, g.home_score, g.away_score, g.detailed_status,
-                   CASE mp.market WHEN 'hit' THEN pgs.hits WHEN 'hr' THEN pgs.home_runs END
+                   CASE mp.market WHEN 'hit' THEN pgs.hits WHEN 'hr' THEN pgs.home_runs END,
+                   mp.fair_prob, mp.book, g.start_time_utc
             FROM model_picks mp
             JOIN games g ON g.id = mp.game_id
             LEFT JOIN player_game_stats pgs
                    ON pgs.player_id = mp.player_id AND pgs.game_id = mp.game_id
             WHERE mp.slate_date = %s AND mp.scored_at IS NULL
-            ORDER BY mp.rank
+            ORDER BY mp.rank NULLS LAST, mp.first_shown_at
             """,
             (slate,),
         ).fetchall()
 
-        scored = pending = voided = 0
+        scored = pending = voided = clv_n = 0
         record: list[str] = []
-        for (slate_date, rank, game_id, market, side, line, player_id,
-             home, away, detailed_status, prop_val) in rows:
+        for (pick_id, rank, game_id, market, side, line, player_id,
+             home, away, detailed_status, prop_val,
+             fair_prob, book, start_time) in rows:
+            tag = f"#{rank}" if rank is not None else "(earlier)"
             if detailed_status in DEAD_GAME_STATUSES:
                 # The game won't be played — settle the pick as voided (no win/loss)
                 # rather than leaving it pending forever. record-picks normally rebuilds
@@ -263,11 +538,11 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
                 # catches a pick recorded before the postponement landed.
                 conn.execute(
                     "UPDATE model_picks SET result_value=NULL, won=NULL, scored_at=NOW() "
-                    "WHERE slate_date=%s AND rank=%s",
-                    (slate_date, rank),
+                    "WHERE id=%s",
+                    (pick_id,),
                 )
                 voided += 1
-                record.append(f"  #{rank} {market} {side} {line}: VOID ({detailed_status.lower()})")
+                record.append(f"  {tag} {market} {side} {line}: VOID ({detailed_status.lower()})")
                 continue
             if home is None or away is None:
                 pending += 1
@@ -279,14 +554,40 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
                 market, side, float(line) if line is not None else None,
                 int(home), int(away), int(prop_val) if prop_val is not None else None,
             )
+            # CLV: compare our bet-time de-vigged prob to the closing line. Captured at
+            # scoring (the close exists by now); independent of win/loss. Isolated in a
+            # SAVEPOINT + try/except: CLV is a measurement nicety and must never roll back
+            # or block the pick's grade (a bad closing-odds read would otherwise poison the
+            # whole scoring transaction). On any failure we record the grade with CLV NULL.
+            close_am = close_dec = close_fair = clv = captured_at = None
+            try:
+                with conn.transaction():  # SAVEPOINT — a read error rolls back only this
+                    close_am, close_dec, close_fair, captured_at = _closing_quote(
+                        conn, game_id, market, side,
+                        float(line) if line is not None else None, book, start_time,
+                        player_id,
+                    )
+                if close_fair is not None and fair_prob is not None:
+                    clv = round(close_fair - float(fair_prob), 4)
+                    clv_n += 1
+            except Exception as exc:  # noqa: BLE001 — never let CLV break grading
+                close_am = close_dec = close_fair = clv = captured_at = None
+                print(f"[score-picks] CLV capture failed for pick {pick_id} "
+                      f"(grade still recorded): {exc}", file=sys.stderr)
             conn.execute(
-                "UPDATE model_picks SET result_value=%s, won=%s, scored_at=NOW() "
-                "WHERE slate_date=%s AND rank=%s",
-                (value, won, slate_date, rank),
+                "UPDATE model_picks SET result_value=%s, won=%s, scored_at=NOW(), "
+                "close_price_american=%s, close_price_decimal=%s, close_fair_prob=%s, "
+                "clv=%s, clv_captured_at=%s "
+                "WHERE id=%s",
+                (value, won, close_am,
+                 round(close_dec, 3) if close_dec is not None else None,
+                 round(close_fair, 4) if close_fair is not None else None,
+                 clv, captured_at, pick_id),
             )
             scored += 1
             outcome = "PUSH" if won is None else ("WON" if won else "LOST")
-            record.append(f"  #{rank} {market} {side} {line}: {outcome} (actual {value})")
+            clv_str = f" clv={clv:+.4f}" if clv is not None else ""
+            record.append(f"  {tag} {market} {side} {line}: {outcome} (actual {value}){clv_str}")
         conn.commit()
     except Exception:
         conn.rollback()
@@ -294,8 +595,8 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
     finally:
         conn.close()
 
-    print(f"[score-picks] {slate}: scored {scored}, voided {voided}, pending {pending} "
-          f"(voided = game postponed/cancelled; "
+    print(f"[score-picks] {slate}: scored {scored} ({clv_n} with CLV), voided {voided}, "
+          f"pending {pending} (voided = game postponed/cancelled; "
           f"pending = missing final score or player stats; re-run after backfills).")
     for line_ in record:
         print(line_)

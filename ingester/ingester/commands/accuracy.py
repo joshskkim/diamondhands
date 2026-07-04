@@ -31,7 +31,9 @@ from ingester.metrics import (
     brier_score,
     calibration_buckets,
     expected_calibration_error,
+    log_loss,
     mae_per_game,
+    sharpness,
 )
 from ingester.projection.constants import MODEL_VERSION
 
@@ -132,6 +134,8 @@ def _upsert_binary(
     brier = brier_score(predicted, actual)
     base = baseline_brier(actual)
     ece = expected_calibration_error(buckets)
+    ll = log_loss(predicted, actual)
+    sharp = sharpness(predicted)
 
     def _num(v: float) -> float | None:
         return None if v != v else round(v, 5)  # NaN -> NULL
@@ -140,21 +144,25 @@ def _upsert_binary(
         """
         INSERT INTO daily_accuracy (
             slate_date, model_version, market, n,
-            brier, baseline_brier, ece, calibration_buckets, mae, computed_at
+            brier, baseline_brier, ece, log_loss, sharpness,
+            calibration_buckets, mae, computed_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, NULL, NOW())
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NULL, NOW())
         ON CONFLICT (slate_date, model_version, market) DO UPDATE SET
             n                   = EXCLUDED.n,
             brier               = EXCLUDED.brier,
             baseline_brier      = EXCLUDED.baseline_brier,
             ece                 = EXCLUDED.ece,
+            log_loss            = EXCLUDED.log_loss,
+            sharpness           = EXCLUDED.sharpness,
             calibration_buckets = EXCLUDED.calibration_buckets,
             mae                 = EXCLUDED.mae,
             computed_at         = EXCLUDED.computed_at
         """,
         (
             slate_date, model_version, market, len(predicted),
-            _num(brier), _num(base), _num(ece), json.dumps(buckets),
+            _num(brier), _num(base), _num(ece), _num(ll), _num(sharp),
+            json.dumps(buckets),
         ),
     )
 

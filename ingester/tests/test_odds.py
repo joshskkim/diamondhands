@@ -4,7 +4,27 @@ from __future__ import annotations
 import math
 
 from ingester import odds_api
-from ingester.commands.odds import _norm_name, odds_input_hash
+from ingester.commands.odds import _game_roster, _norm_name, odds_input_hash
+
+
+class _FakeCursor:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+class _FakeConn:
+    """Minimal psycopg-like stand-in: records execute() calls, returns canned rows."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.calls: list[tuple] = []
+
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+        return _FakeCursor(self._rows)
 
 
 class TestOddsMath:
@@ -97,6 +117,24 @@ class TestParseGameMarkets:
         assert by[("total_f1", "over")]["line"] == 0.5  # YRFI market
 
 
+class TestGameRoster:
+    """The prop name→id map now resolves off the two teams' rosters (one game-keyed
+    query), so props store before a game is projected — see _game_roster."""
+
+    def test_builds_normalized_name_map(self):
+        conn = _FakeConn([(660271, "Mike Trout"), (605483, "Ronald Acuña Jr.")])
+        roster = _game_roster(conn, 12345)
+        assert roster == {"mike trout": 660271, "ronald acuna jr": 605483}
+
+    def test_single_query_keyed_only_by_game_id(self):
+        # The behavioral change: one parameter (game_id), not the old projection-dependent
+        # three-game_id UNION — team rosters + probables are resolved in SQL.
+        conn = _FakeConn([(1, "A B")])
+        _game_roster(conn, 999)
+        assert len(conn.calls) == 1
+        assert conn.calls[0][1] == (999,)
+
+
 class TestParsePropMarkets:
     def test_player_and_side(self):
         event = {
@@ -117,6 +155,35 @@ class TestParsePropMarkets:
         assert {r["side"] for r in rows} == {"over", "under"}
         assert all(r["market"] == "hr" for r in rows)
         assert all(r["player_name"] == "Mike Trout" for r in rows)
+
+    def test_line_based_batter_and_pitcher_markets(self):
+        # The TB / H+R+RBI and pitcher hits/ER markets carry real (non-0.5) lines.
+        event = {
+            "bookmakers": [
+                {"key": "draftkings", "last_update": "t", "markets": [
+                    {"key": "batter_total_bases", "outcomes": [
+                        {"name": "Over", "description": "Mike Trout", "price": -115, "point": 1.5},
+                        {"name": "Under", "description": "Mike Trout", "price": -105, "point": 1.5},
+                    ]},
+                    {"key": "batter_hits_runs_rbis", "outcomes": [
+                        {"name": "Over", "description": "Mike Trout", "price": 105, "point": 2.5},
+                    ]},
+                    {"key": "pitcher_hits_allowed", "outcomes": [
+                        {"name": "Over", "description": "Walbert Urena", "price": -120, "point": 4.5},
+                    ]},
+                    {"key": "pitcher_earned_runs", "outcomes": [
+                        {"name": "Under", "description": "Walbert Urena", "price": -140, "point": 1.5},
+                    ]},
+                ]}
+            ]
+        }
+        rows = odds_api.parse_prop_markets(event)
+        by_market = {r["market"]: r for r in rows}
+        assert set(by_market) == {"tb", "hrr", "pitcher_hits_allowed", "pitcher_earned_runs"}
+        assert by_market["tb"]["line"] == 1.5
+        assert by_market["hrr"]["line"] == 2.5
+        assert by_market["pitcher_hits_allowed"]["side"] == "over"
+        assert by_market["pitcher_earned_runs"]["side"] == "under"
 
 
 class TestOddsInputHash:

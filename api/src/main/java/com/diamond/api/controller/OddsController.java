@@ -5,6 +5,7 @@ import com.diamond.api.dto.BestPlayDto;
 import com.diamond.api.dto.HitRateDto;
 import com.diamond.api.dto.LineShopDto;
 import com.diamond.api.service.OddsService;
+import com.diamond.api.service.SlateService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
 
@@ -16,9 +17,11 @@ import java.util.List;
 public class OddsController {
 
     private final OddsService oddsService;
+    private final SlateService slateService;
 
-    public OddsController(OddsService oddsService) {
+    public OddsController(OddsService oddsService, SlateService slateService) {
         this.oddsService = oddsService;
+        this.slateService = slateService;
     }
 
     /** Today's Best Lines board: model-edged selections across the slate, sorted by EV%. */
@@ -28,7 +31,7 @@ public class OddsController {
         @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
         @RequestParam(defaultValue = "50") int limit
     ) {
-        LocalDate target = date != null ? date : LocalDate.now();
+        LocalDate target = date != null ? date : slateService.activeSlateDate();
         int safeLimit = Math.min(Math.max(limit, 1), 200);
         List<BestPlayDto> plays = oddsService.bestPlays(target);
         return plays.size() > safeLimit ? plays.subList(0, safeLimit) : plays;
@@ -40,7 +43,7 @@ public class OddsController {
         @RequestParam(required = false)
         @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
     ) {
-        LocalDate target = date != null ? date : LocalDate.now();
+        LocalDate target = date != null ? date : slateService.activeSlateDate();
         return oddsService.batterProps(target);
     }
 
@@ -50,7 +53,7 @@ public class OddsController {
         @RequestParam(required = false)
         @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
     ) {
-        LocalDate target = date != null ? date : LocalDate.now();
+        LocalDate target = date != null ? date : slateService.activeSlateDate();
         return oddsService.hitRates(target);
     }
 
@@ -60,7 +63,7 @@ public class OddsController {
         @RequestParam(required = false)
         @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
     ) {
-        LocalDate target = date != null ? date : LocalDate.now();
+        LocalDate target = date != null ? date : slateService.activeSlateDate();
         return oddsService.lineShop(target);
     }
 }

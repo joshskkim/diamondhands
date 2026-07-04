@@ -2,6 +2,7 @@ package com.diamond.api.controller;
 
 import com.diamond.api.dto.PropBoardResponse;
 import com.diamond.api.service.PropBoardService;
+import com.diamond.api.service.SlateService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -16,9 +17,11 @@ import java.time.LocalDate;
 public class PropsController {
 
     private final PropBoardService service;
+    private final SlateService slateService;
 
-    public PropsController(PropBoardService service) {
+    public PropsController(PropBoardService service, SlateService slateService) {
         this.service = service;
+        this.slateService = slateService;
     }
 
     @GetMapping("/board")
@@ -26,6 +29,6 @@ public class PropsController {
         @RequestParam(required = false)
         @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
     ) {
-        return service.board(date != null ? date : LocalDate.now());
+        return service.board(date != null ? date : slateService.activeSlateDate());
     }
 }

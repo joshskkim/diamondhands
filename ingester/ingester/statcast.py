@@ -329,6 +329,7 @@ def agg_pitcher_vs_handedness(pa_chunks: list[pd.DataFrame]) -> list[dict]:
     needed_cols = [
         "pitcher", "stand", "events",
         "estimated_woba_using_speedangle", "woba_value", "woba_denom",
+        "estimated_ba_using_speedangle",  # Lever 5: xBA-against (de-luck hits)
     ]
 
     # Build incremental aggregation: accumulate numeric totals per (pitcher, stand)
@@ -345,6 +346,9 @@ def agg_pitcher_vs_handedness(pa_chunks: list[pd.DataFrame]) -> list[dict]:
         sub["xwoba_num"] = _xwoba_num(sub)
         sub["woba_value"] = _to_float64(sub.get("woba_value"))
         sub["woba_denom"] = _to_float64(sub.get("woba_denom")).fillna(0)
+        # Lever 5: expected hits = Σ xBA on balls in play (0 on K/BB/HBP, which it is
+        # NaN for) → de-luck the realized hit rate toward this in compute_pitcher_skill_rows.
+        sub["xba_num"] = _to_float64(sub.get("estimated_ba_using_speedangle")).fillna(0.0)
         sub["is_k"]   = sub["events"].isin({"strikeout", "strikeout_double_play"}).astype(int)
         sub["is_bb"]  = sub["events"].isin(BB_EVENTS).astype(int)
         sub["is_hit"] = sub["events"].isin(HIT_EVENTS).astype(int)
@@ -360,13 +364,15 @@ def agg_pitcher_vs_handedness(pa_chunks: list[pd.DataFrame]) -> list[dict]:
             xwoba_num=("xwoba_num", "sum"),
             woba_num=("woba_value", "sum"),
             woba_denom=("woba_denom", "sum"),
+            xba_num=("xba_num", "sum"),
         )
 
         for (pitcher, stand), row in chunk_agg.iterrows():
             key = (int(pitcher), str(stand))
             if key not in acc:
                 acc[key] = {"bf": 0, "k": 0, "bb": 0, "hits": 0, "hr": 0,
-                            "xwoba_num": 0.0, "woba_num": 0.0, "woba_denom": 0.0}
+                            "xwoba_num": 0.0, "woba_num": 0.0, "woba_denom": 0.0,
+                            "xba_num": 0.0}
             d = acc[key]
             d["bf"]         += int(row["bf"])
             d["k"]          += int(row["k"])
@@ -376,6 +382,7 @@ def agg_pitcher_vs_handedness(pa_chunks: list[pd.DataFrame]) -> list[dict]:
             d["xwoba_num"]  += float(row["xwoba_num"]) if not pd.isna(row["xwoba_num"]) else 0.0
             d["woba_num"]   += float(row["woba_num"])  if not pd.isna(row["woba_num"])  else 0.0
             d["woba_denom"] += float(row["woba_denom"])
+            d["xba_num"]    += float(row["xba_num"]) if not pd.isna(row["xba_num"]) else 0.0
 
     rows: list[dict] = []
     for (pitcher_id, stand), d in acc.items():
@@ -392,6 +399,8 @@ def agg_pitcher_vs_handedness(pa_chunks: list[pd.DataFrame]) -> list[dict]:
             "bb_rate":       round(d["bb"]   / bf, 4) if bf > 0 else None,
             "hr_per_pa":     round(d["hr"]   / bf, 4) if bf > 0 else None,
             "hits_per_pa":   round(d["hits"] / bf, 4) if bf > 0 else None,
+            # Lever 5: expected hits per PA (xBA-against); used to de-luck hits_per_pa.
+            "xba_against":   round(d["xba_num"] / bf, 4) if bf > 0 else None,
         })
     return rows
 
@@ -602,8 +611,12 @@ def agg_batter_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
     needed = ["batter", "stand", "launch_speed", "launch_angle",
               "hc_x", "hc_y", "bb_type", "launch_speed_angle"]
     acc: dict[int, dict] = {}
+    # p90 EV on FB/LD can't be summed incrementally — collect the raw per-ball EV
+    # list per batter and take the percentile once at the end (plan Phase 1).
+    fbld_ev: dict[int, list[float]] = {}
     sum_keys = ("bip", "pull", "center", "oppo", "gb", "ld", "fb", "pu",
-                "ev_sum", "la_sum", "ev_cnt", "la_cnt", "hard", "barrel")
+                "ev_sum", "la_sum", "ev_cnt", "la_cnt", "hard", "barrel",
+                "pull_air", "sweet")
 
     for df in chunks:
         if df is None or df.empty:
@@ -637,18 +650,25 @@ def agg_batter_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
         center = ~(pull | oppo)
         bb = sub["bb_type"].astype(str)
         lsa = _to_float64(sub["launch_speed_angle"])
+        fb_np = bb.eq("fly_ball").to_numpy()
+        ld_np = bb.eq("line_drive").to_numpy()
+        # 66% of HRs are pulled fly balls; 8-32° is the launch-angle sweet spot.
+        pull_air = (pull & fb_np)
+        sweet = ((la >= 8) & (la <= 32)).fillna(False).to_numpy()
 
         per = pd.DataFrame({
             "batter": sub["batter"].astype("int64").to_numpy(),
             "pull": pull.astype(int), "center": center.astype(int), "oppo": oppo.astype(int),
             "gb": bb.eq("ground_ball").astype(int).to_numpy(),
-            "ld": bb.eq("line_drive").astype(int).to_numpy(),
-            "fb": bb.eq("fly_ball").astype(int).to_numpy(),
+            "ld": ld_np.astype(int),
+            "fb": fb_np.astype(int),
             "pu": bb.eq("popup").astype(int).to_numpy(),
             "ev_sum": ev.fillna(0.0).to_numpy(), "ev_cnt": ev.notna().astype(int).to_numpy(),
             "la_sum": la.fillna(0.0).to_numpy(), "la_cnt": la.notna().astype(int).to_numpy(),
             "hard": (ev >= 95).fillna(False).astype(int).to_numpy(),
             "barrel": (lsa == 6).fillna(False).astype(int).to_numpy(),
+            "pull_air": pull_air.astype(int),
+            "sweet": sweet.astype(int),
         })
         per["bip"] = 1
         grp = per.groupby("batter").sum()
@@ -657,12 +677,28 @@ def agg_batter_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
             for k in sum_keys:
                 d[k] += float(row[k])
 
+        # Accumulate raw EV on air balls (FB + LD) for the end-of-run p90.
+        fbld_mask = (fb_np | ld_np) & ev.notna().to_numpy()
+        if fbld_mask.any():
+            bat_np = sub["batter"].astype("int64").to_numpy()
+            ev_np = ev.to_numpy()
+            for b, e in zip(bat_np[fbld_mask], ev_np[fbld_mask]):
+                fbld_ev.setdefault(int(b), []).append(float(e))
+
     def _pct(num: float, den: float) -> float | None:
         return round(num / den, 4) if den > 0 else None
+
+    # p90 EV on air balls needs a minimum sample or the percentile is pure noise.
+    _MIN_FBLD_FOR_P90 = 10
 
     rows: list[dict] = []
     for bid, d in acc.items():
         bip = int(d["bip"])
+        ev_list = fbld_ev.get(bid, [])
+        p90_ev_fbld = (
+            round(float(np.percentile(ev_list, 90)), 2)
+            if len(ev_list) >= _MIN_FBLD_FOR_P90 else None
+        )
         rows.append({
             "player_id": bid,
             "bip": bip,
@@ -675,6 +711,131 @@ def agg_batter_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
             "pu_pct": _pct(d["pu"], bip),
             "avg_launch_speed": round(d["ev_sum"] / d["ev_cnt"], 2) if d["ev_cnt"] > 0 else None,
             "avg_launch_angle": round(d["la_sum"] / d["la_cnt"], 2) if d["la_cnt"] > 0 else None,
+            "hard_hit_pct": _pct(d["hard"], bip),
+            "barrel_pct": _pct(d["barrel"], bip),
+            "pulled_air_pct": _pct(d["pull_air"], bip),
+            "sweet_spot_pct": _pct(d["sweet"], bip),
+            "p90_ev_fbld": p90_ev_fbld,
+        })
+    return rows
+
+
+def batted_ball_events(chunks: list[pd.DataFrame], season: int) -> list[dict]:
+    """One row per batted ball (measured contact) — the xHR training corpus (Phase 2).
+
+    A batted ball = a pitch with a measured ``launch_speed`` AND ``launch_angle``,
+    which crucially INCLUDES home runs: they carry exit velo / launch angle even when
+    the hit-coordinate is missing, so requiring hc_x/hc_y (as the season aggregator
+    does) would zero out the positive class. ``spray_deg`` is left NULL when the
+    coordinate is absent and the trainer handles it. ``park`` is the home-team code
+    (a stadium proxy). Rebuilt per season (writer does delete-then-insert), so rows
+    carry no natural unique key. Returns DB-ready dicts (NaN/NA already → None).
+    """
+    cols = ["batter", "launch_speed", "launch_angle", "hc_x", "hc_y", "bb_type",
+            "estimated_woba_using_speedangle", "hit_distance_sc", "events",
+            "home_team", "game_pk"]
+    out: list[dict] = []
+    for df in chunks:
+        if df is None or df.empty:
+            continue
+        sub = df[[c for c in cols if c in df.columns]].copy()
+        for c in cols:
+            if c not in sub.columns:
+                sub[c] = np.nan
+        ls = _to_float64(sub["launch_speed"])
+        la = _to_float64(sub["launch_angle"])
+        batter = pd.to_numeric(sub["batter"], errors="coerce")
+        # In play only: bb_type is populated solely for balls in play, so this excludes
+        # tracked FOULS (which carry launch_speed but can never be HR and would bias the
+        # base rate down). HRs are kept explicitly in case bb_type is null on the ball.
+        events = sub["events"].astype("string")
+        in_play = sub["bb_type"].astype("string").notna() | events.eq("home_run")
+        keep = in_play & ls.notna() & la.notna() & batter.notna()
+        sub = sub[keep]
+        if sub.empty:
+            continue
+        spray = _spray_angle_deg(_to_float64(sub["hc_x"]), _to_float64(sub["hc_y"]))
+        res = pd.DataFrame({
+            "season": season,
+            "player_id": pd.to_numeric(sub["batter"], errors="coerce").astype("int64"),
+            "game_pk": pd.to_numeric(sub["game_pk"], errors="coerce").astype("Int64"),
+            "park": sub["home_team"].astype("string"),
+            "launch_speed": _to_float64(sub["launch_speed"]).round(2),
+            "launch_angle": _to_float64(sub["launch_angle"]).round(2),
+            "spray_deg": spray.round(2),
+            "bb_type": sub["bb_type"].astype("string"),
+            "estimated_woba": _to_float64(sub["estimated_woba_using_speedangle"]).round(4),
+            "hit_distance": pd.to_numeric(sub["hit_distance_sc"], errors="coerce").round().astype("Int64"),
+            "is_hr": sub["events"].astype("string").eq("home_run").fillna(False),
+        })
+        # NaN / pandas-NA → None so the rows are directly insertable.
+        res = res.astype(object).where(pd.notna(res), None)
+        out.extend(res.to_dict("records"))
+    return out
+
+
+def agg_pitcher_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
+    """
+    Aggregate a season's contact-quality-allowed per (pitcher, batter-stand).
+
+    The pitcher-side mirror of ``agg_batter_batted_ball`` (Lever 1), grouped by the
+    stand of the batter who put the ball in play so it aligns with pitcher_skill's
+    handedness split. Uses balls in play (rows with launch_speed + bb_type); emits
+    fly-ball share, hard-hit (EV≥95) and Statcast barrels (launch_speed_angle == 6)
+    per BIP. No spray — park-fit is batter-side. One dict per (pitcher, vs_handedness).
+    """
+    needed = ["pitcher", "stand", "launch_speed", "bb_type", "launch_speed_angle"]
+    acc: dict[tuple[int, str], dict] = {}
+    sum_keys = ("bip", "fb", "hard", "barrel")
+
+    for df in chunks:
+        if df is None or df.empty:
+            continue
+        sub = df[[c for c in needed if c in df.columns]].copy()
+        for col in ("launch_speed", "launch_speed_angle"):
+            if col not in sub.columns:
+                sub[col] = np.nan
+        if "stand" not in sub.columns or "bb_type" not in sub.columns:
+            continue
+        sub = sub[sub["stand"].isin(["L", "R"])]
+        ev = _to_float64(sub["launch_speed"])
+        keep = ev.notna() & sub["bb_type"].notna()
+        sub = sub[keep]
+        if sub.empty:
+            continue
+        sub["pitcher"] = pd.to_numeric(sub["pitcher"], errors="coerce")
+        sub = sub[sub["pitcher"].notna()]
+        if sub.empty:
+            continue
+
+        ev = _to_float64(sub["launch_speed"])
+        bb = sub["bb_type"].astype(str)
+        lsa = _to_float64(sub["launch_speed_angle"])
+        per = pd.DataFrame({
+            "pitcher": sub["pitcher"].astype("int64").to_numpy(),
+            "stand": sub["stand"].to_numpy(),
+            "fb": bb.eq("fly_ball").astype(int).to_numpy(),
+            "hard": (ev >= 95).fillna(False).astype(int).to_numpy(),
+            "barrel": (lsa == 6).fillna(False).astype(int).to_numpy(),
+        })
+        per["bip"] = 1
+        grp = per.groupby(["pitcher", "stand"]).sum()
+        for (pid, stand), row in grp.iterrows():
+            d = acc.setdefault((int(pid), str(stand)), {k: 0.0 for k in sum_keys})
+            for k in sum_keys:
+                d[k] += float(row[k])
+
+    def _pct(num: float, den: float) -> float | None:
+        return round(num / den, 4) if den > 0 else None
+
+    rows: list[dict] = []
+    for (pid, stand), d in acc.items():
+        bip = int(d["bip"])
+        rows.append({
+            "player_id": pid,
+            "vs_handedness": stand,
+            "bip": bip,
+            "fb_pct": _pct(d["fb"], bip),
             "hard_hit_pct": _pct(d["hard"], bip),
             "barrel_pct": _pct(d["barrel"], bip),
         })
@@ -813,5 +974,43 @@ def agg_batter_spray_bins(chunks: list[pd.DataFrame]) -> list[dict]:
             "hr": int(d["hr"]),
             "avg_distance_ft": round(d["dist_sum"] / d["dist_cnt"], 1)
             if d["dist_cnt"] > 0 else None,
+        })
+    return rows
+
+
+def agg_batter_hr_distance(chunks: list[pd.DataFrame]) -> list[dict]:
+    """Aggregate per-batter home-run distance from Statcast chunks.
+
+    Only batted balls whose event is a home run AND that carry a Statcast distance count.
+    Unlike batter_spray_bins.avg_distance_ft (averaged over every ball in play), this is
+    HR-only: per batter, the number of measured HRs, their mean distance, and the 90th-
+    percentile distance — the tail that decides "longest HR of the day". One dict per batter
+    with at least one measured HR.
+    """
+    per_batter: dict[int, list[float]] = {}
+    for df in chunks:
+        if df is None or df.empty:
+            continue
+        cols = ["batter", "events", "hit_distance_sc"]
+        if not all(c in df.columns for c in cols):
+            continue
+        sub = df[cols].copy()
+        sub = sub[sub["events"].astype(str).eq("home_run")]
+        if sub.empty:
+            continue
+        bid = pd.to_numeric(sub["batter"], errors="coerce")
+        dist = _to_float64(sub["hit_distance_sc"])
+        keep = bid.notna() & dist.notna()
+        for b, d in zip(bid[keep].astype("int64").to_numpy(), dist[keep].to_numpy()):
+            per_batter.setdefault(int(b), []).append(float(d))
+
+    rows: list[dict] = []
+    for bid, dists in per_batter.items():
+        arr = np.asarray(dists, dtype="float64")
+        rows.append({
+            "player_id": bid,
+            "hr_n": int(arr.size),
+            "avg_distance_ft": round(float(arr.mean()), 1),
+            "p90_distance_ft": round(float(np.percentile(arr, 90)), 1),
         })
     return rows

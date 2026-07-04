@@ -19,7 +19,7 @@ import java.util.List;
 public class ResultsRepository {
 
     private static final String BATTERS_SQL = """
-        SELECT player_id, game_id, hits, home_runs, strikeouts, walks
+        SELECT player_id, game_id, at_bats, hits, home_runs, strikeouts, walks
         FROM player_game_stats
         WHERE game_date = ? AND game_id IS NOT NULL
         """;
@@ -28,6 +28,20 @@ public class ResultsRepository {
         SELECT player_id, game_id, strikeouts, outs, hits_allowed, earned_runs
         FROM pitcher_starts
         WHERE game_date = ?
+        """;
+
+    // Live (in-progress) counts from player_game_live — same DTO shapes as the Final reads
+    // so the client grades/tracks them identically. pitcher_strikeouts aliased to strikeouts.
+    private static final String LIVE_BATTERS_SQL = """
+        SELECT player_id, game_id, at_bats, hits, home_runs, strikeouts, walks
+        FROM player_game_live
+        WHERE game_date = ? AND plate_appearances IS NOT NULL
+        """;
+
+    private static final String LIVE_PITCHERS_SQL = """
+        SELECT player_id, game_id, pitcher_strikeouts AS strikeouts, outs, hits_allowed, earned_runs
+        FROM player_game_live
+        WHERE game_date = ? AND outs IS NOT NULL
         """;
 
     private final JdbcTemplate jdbc;
@@ -44,10 +58,19 @@ public class ResultsRepository {
         return jdbc.query(PITCHERS_SQL, this::mapPitcher, date);
     }
 
+    public List<BatterResultDto> findLiveBatters(LocalDate date) {
+        return jdbc.query(LIVE_BATTERS_SQL, this::mapBatter, date);
+    }
+
+    public List<PitcherResultDto> findLivePitchers(LocalDate date) {
+        return jdbc.query(LIVE_PITCHERS_SQL, this::mapPitcher, date);
+    }
+
     private BatterResultDto mapBatter(ResultSet rs, int n) throws SQLException {
         return new BatterResultDto(
             rs.getInt("player_id"),
             rs.getLong("game_id"),
+            nullableInt(rs, "at_bats"),
             nullableInt(rs, "hits"),
             nullableInt(rs, "home_runs"),
             nullableInt(rs, "strikeouts"),

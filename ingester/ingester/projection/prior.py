@@ -8,10 +8,11 @@ the player's established skill and multi-year form.
 
 This module computes the better baseline: a Marcel-style projection from the
 player's prior three seasons — recency-weighted (5/4/3), PA-weighted, and itself
-regressed toward the league mean so a thin track record reverts to league. No
-aging curve in v1 (we don't store birthdates); that's the polish, not the bulk
-of the value, and the ``ProjectionPrior`` interface leaves room to swap in a
-licensed projection set (Steamer/ZiPS/THE BAT) without touching the model.
+regressed toward the league mean so a thin track record reverts to league. An
+optional component-specific aging curve (Phase 3a, env-gated ``DIAMOND_AGING_ENABLED``,
+OFF by default) ages the regressed xwOBA/ISO forward to the target season; the
+``ProjectionPrior`` interface also leaves room to swap in a licensed projection set
+(Steamer/ZiPS/THE BAT) without touching the model.
 
 The pure functions here carry the math and are unit-tested without a DB;
 ``ingester.commands.refresh_priors`` wires them to ``player_game_stats``.
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ingester.projection import constants as C
 from ingester.projection.constants import (
     BAT_SPEED_ISO_PER_Z,
     BAT_SPEED_MEAN,
@@ -35,6 +37,24 @@ from ingester.projection.constants import (
     WHIFF_MEAN,
     WHIFF_SD,
 )
+
+
+def aging_factor(
+    age: float, peak: float, up_per_year: float, down_per_year: float,
+    clamp: tuple[float, float],
+) -> float:
+    """Multiplicative age adjustment for a 'higher-is-better' rate, ages forward to target.
+
+    A player below ``peak`` is still improving, so the projection from his (younger) track
+    record is nudged up; above peak it's nudged down (decline is usually steeper). 1.0 at
+    the peak. Bounded by ``clamp`` so the tails stay sane.
+    """
+    if age <= peak:
+        factor = 1.0 + up_per_year * (peak - age)
+    else:
+        factor = 1.0 - down_per_year * (age - peak)
+    lo, hi = clamp
+    return min(max(factor, lo), hi)
 
 
 @dataclass(frozen=True)
@@ -103,6 +123,7 @@ def compute_marcel_prior(
     regression_pa_iso: float = MARCEL_REGRESSION_PA_ISO,
     iso_anchor: float | None = None,
     k_rate_anchor: float | None = None,
+    age: float | None = None,
 ) -> ProjectionPrior | None:
     """Project ``target_season`` from the prior three seasons.
 
@@ -148,10 +169,24 @@ def compute_marcel_prior(
 
     iso_target = iso_anchor if iso_anchor is not None else league_iso
     k_target = k_rate_anchor if k_rate_anchor is not None else league_k_rate
+    xwoba = _weighted_regress(xwoba_pairs, league_xwoba, regression_pa_xwoba)
+    k_rate = _weighted_regress(k_pairs, k_target, regression_pa_k)
+    iso = _weighted_regress(iso_pairs, iso_target, regression_pa_iso)
+
+    # Age the regressed projection forward to the target season (Phase 3a, gated OFF).
+    # K-rate is intentionally left unaged. No age (debut / missing birth_date) → no change.
+    if C.AGING_ENABLED and age is not None:
+        xwoba *= aging_factor(
+            age, C.AGING_PEAK_AGE_XWOBA,
+            C.AGING_XWOBA_UP_PER_YEAR, C.AGING_XWOBA_DOWN_PER_YEAR, C.AGING_XWOBA_CLAMP)
+        iso *= aging_factor(
+            age, C.AGING_PEAK_AGE_ISO,
+            C.AGING_ISO_UP_PER_YEAR, C.AGING_ISO_DOWN_PER_YEAR, C.AGING_ISO_CLAMP)
+
     return ProjectionPrior(
-        xwoba=round(_weighted_regress(xwoba_pairs, league_xwoba, regression_pa_xwoba), 4),
-        k_rate=round(_weighted_regress(k_pairs, k_target, regression_pa_k), 4),
-        iso=round(_weighted_regress(iso_pairs, iso_target, regression_pa_iso), 4),
+        xwoba=round(xwoba, 4),
+        k_rate=round(k_rate, 4),
+        iso=round(iso, 4),
         proj_pa=int(weighted_pa),
     )
 
@@ -184,6 +219,10 @@ def whiff_k_anchor(whiff_rate: float | None, league_k_rate: float) -> float | No
     K ≈ league_k + .0401·whiff_z. Centered on the league K rate (not the fitted
     intercept, which carries ≥200-PA survivor bias), same as bat_speed_iso_anchor.
     Returns None without whiff data → caller falls back to the flat league anchor.
+
+    (Lever 3 chase was moved OUT of this prior anchor and onto the matchup K driver —
+    see matchup.batter_chase_k_delta — because the prior's K is bypassed by the matchup
+    for ~88% of projections, so a prior-side chase term never reached them.)
     """
     if whiff_rate is None:
         return None

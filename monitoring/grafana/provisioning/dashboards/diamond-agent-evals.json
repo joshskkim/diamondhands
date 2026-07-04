@@ -1,0 +1,138 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "schemaVersion": 39,
+  "title": "Diamond — Agent Evals",
+  "tags": ["diamond", "agent", "evals"],
+  "time": { "from": "now-30d", "to": "now" },
+  "refresh": "5m",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Latest run",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Faithfulness pass-rate",
+      "datasource": { "type": "postgres", "uid": "diamond-postgres" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0, "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "yellow", "value": 0.8 },
+            { "color": "green", "value": 0.9 }
+          ] }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [ {
+        "datasource": { "type": "postgres", "uid": "diamond-postgres" },
+        "rawQuery": true, "format": "table", "refId": "A",
+        "rawSql": "SELECT faithfulness_pass_rate FROM eval_runs WHERE faithfulness_pass_rate IS NOT NULL ORDER BY id DESC LIMIT 1"
+      } ]
+    },
+    {
+      "type": "stat",
+      "title": "Tool-trajectory recall",
+      "datasource": { "type": "postgres", "uid": "diamond-postgres" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0, "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "yellow", "value": 0.8 },
+            { "color": "green", "value": 0.9 }
+          ] }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [ {
+        "datasource": { "type": "postgres", "uid": "diamond-postgres" },
+        "rawQuery": true, "format": "table", "refId": "A",
+        "rawSql": "SELECT trajectory_recall FROM eval_runs WHERE trajectory_recall IS NOT NULL ORDER BY id DESC LIMIT 1"
+      } ]
+    },
+    {
+      "type": "stat",
+      "title": "Outcome hit-rate (graded recs)",
+      "datasource": { "type": "postgres", "uid": "diamond-postgres" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [ {
+        "datasource": { "type": "postgres", "uid": "diamond-postgres" },
+        "rawQuery": true, "format": "table", "refId": "A",
+        "rawSql": "SELECT outcome_hit_rate FROM eval_runs WHERE outcome_hit_rate IS NOT NULL ORDER BY id DESC LIMIT 1"
+      } ]
+    },
+    {
+      "type": "stat",
+      "title": "Judge-confidence Brier (lower better)",
+      "datasource": { "type": "postgres", "uid": "diamond-postgres" },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 3,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 0.2 },
+            { "color": "red", "value": 0.25 }
+          ] }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [ {
+        "datasource": { "type": "postgres", "uid": "diamond-postgres" },
+        "rawQuery": true, "format": "table", "refId": "A",
+        "rawSql": "SELECT outcome_brier FROM eval_runs WHERE outcome_brier IS NOT NULL ORDER BY id DESC LIMIT 1"
+      } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Faithfulness & trajectory over time",
+      "datasource": { "type": "postgres", "uid": "diamond-postgres" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "custom": { "drawStyle": "line", "showPoints": "always" } } },
+      "targets": [ {
+        "datasource": { "type": "postgres", "uid": "diamond-postgres" },
+        "rawQuery": true, "format": "time_series", "refId": "A",
+        "rawSql": "SELECT started_at AS \"time\", faithfulness_pass_rate AS \"faithfulness\", trajectory_recall AS \"trajectory recall\" FROM eval_runs WHERE $__timeFilter(started_at) ORDER BY started_at"
+      } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Outcome over time (hit-rate, ROI, CLV, Brier)",
+      "datasource": { "type": "postgres", "uid": "diamond-postgres" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "showPoints": "always" } } },
+      "targets": [ {
+        "datasource": { "type": "postgres", "uid": "diamond-postgres" },
+        "rawQuery": true, "format": "time_series", "refId": "A",
+        "rawSql": "SELECT started_at AS \"time\", outcome_hit_rate AS \"hit rate\", outcome_roi AS \"roi\", outcome_avg_clv AS \"avg clv\", outcome_brier AS \"brier\" FROM eval_runs WHERE $__timeFilter(started_at) ORDER BY started_at"
+      } ]
+    },
+    {
+      "type": "row",
+      "title": "Recent failures",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 }
+    },
+    {
+      "type": "table",
+      "title": "Failing eval cases (most recent)",
+      "datasource": { "type": "postgres", "uid": "diamond-postgres" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 15 },
+      "targets": [ {
+        "datasource": { "type": "postgres", "uid": "diamond-postgres" },
+        "rawQuery": true, "format": "table", "refId": "A",
+        "rawSql": "SELECT er.created_at AS \"when\", ev.git_sha AS \"sha\", er.case_id AS \"case\", er.layer, er.score, er.judge_rationale AS \"rationale\", er.details_json::text AS \"details\" FROM eval_results er JOIN eval_runs ev ON ev.id = er.eval_run_id WHERE er.passed IS FALSE ORDER BY er.created_at DESC LIMIT 50"
+      } ]
+    }
+  ]
+}

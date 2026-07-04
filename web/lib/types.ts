@@ -66,12 +66,39 @@ export interface TodayGame {
    *  drives the NRFI/YRFI hit/miss marker on the Sim Signals board. */
   finalHomeFirstInningRuns: number | null
   finalAwayFirstInningRuns: number | null
+  /** Live in-game state (null for scheduled games), hydrated on load and then patched in
+   *  place by the SSE stream (see use-live-stream). Distinct from the Final score above. */
+  liveHomeScore: number | null
+  liveAwayScore: number | null
+  liveCurrentInning: number | null
+  liveInningState: string | null
+  liveIsTop: boolean | null
+  /** When the live_* state was last written (ISO-8601), or null. Used to treat live state
+   *  as stale once the feed stops — so a finished game never stays stuck reading "Live".
+   *  Not carried on the SSE LiveGame delta (a per-tick timestamp would defeat its diff). */
+  liveUpdatedAt: string | null
+}
+
+/** GET /api/games/live/stream — a lean live-state delta pushed over SSE. */
+export interface LiveGame {
+  gameId: number
+  status: string
+  liveHomeScore: number | null
+  liveAwayScore: number | null
+  liveCurrentInning: number | null
+  liveInningState: string | null
+  liveIsTop: boolean | null
+  /** First-inning runs per side once the 1st completes — streamed so NRFI/YRFI grades live
+   *  (patched onto the game's finalHome/AwayFirstInningRuns). */
+  liveHomeFirstInningRuns: number | null
+  liveAwayFirstInningRuns: number | null
 }
 
 /** GET /api/model-picks — a persisted Model's Pick with its graded outcome. */
 export interface ModelPickResult {
   slateDate: string
-  rank: number
+  /** Board order among active picks; null for an earlier/bumped pick. */
+  rank: number | null
   gameId: number
   market: string
   side: string
@@ -91,6 +118,12 @@ export interface ModelPickResult {
   won: boolean | null
   /** true once score-picks has settled it (won may still be null on a push). */
   scored: boolean
+  /** false once a better late pick displaced this one from the top set (still graded). */
+  active: boolean
+  /** ISO-8601 (UTC) instant the pick first made the board — its line is locked here. */
+  firstShownAt: string | null
+  /** ISO-8601 (UTC) instant it was displaced, or null if it never was. */
+  bumpedAt: string | null
 }
 
 export interface BatterPlayer {
@@ -315,6 +348,49 @@ export interface BestPlay {
   evPct: number
   playerId: number | null
   playerName: string | null
+  /**
+   * Analyst promotion-gate verdict (bet | lean | pass), or null when not vetted (AI off /
+   * not yet debated). 'pass' is hidden from Today's Board and shown on Best Lines with the
+   * rationale; null means "show normally" (mechanical board).
+   */
+  debateVerdict?: string | null
+  debateConfidence?: number | null
+  debateRationale?: string | null
+}
+
+/**
+ * GET /api/lotto — the "Lotto of the Day" HR boom pick (or null when none qualifies).
+ * NOT chosen on price/edge: a bottom-of-order hitter who's gone cold but has real raw power,
+ * in a park/pitcher/weather setup that amplifies home runs today. Age-blind by design. The
+ * implied wager is always HR over 0.5; price fields are the best HR-over price across books
+ * and are null when no book has posted it yet (the pick stands on the model). `reasons` are
+ * server-built so the card matches the recorded pick.
+ */
+export interface BoomPick {
+  gameId: number
+  matchup: string
+  playerId: number
+  playerName: string
+  bats: string | null
+  isHome: boolean
+  lineupPosition: number
+  opposingPitcher: string
+  pHr: number
+  barrelRate: number
+  isoSeason: number
+  xwoba: number | null
+  xwobaL30: number | null
+  coldGap: number
+  adjPark: number
+  adjPitcher: number
+  adjWeatherHr: number
+  condBoost: number
+  hrDistanceFt: number | null
+  priceAmerican: number | null
+  priceDecimal: number | null
+  bestBook: string | null
+  boomScore: number
+  reasons: string[]
 }
 
 /**
@@ -390,6 +466,11 @@ export interface PropBoardPick {
   opposingPitcher: string | null
   /** 'matchup' | 'overall' | 'league_avg' */
   pitcherDataQuality: string | null
+  /** Opposing starter's season walk rate (per PA, BF-weighted across handedness) — the
+   *  walk card's driver. Null for a TBD starter or one with no skill row. */
+  opposingPitcherBbRate: number | null
+  /** Opposing starter's season K rate (per PA) — lets the walk card flag a contact arm. */
+  opposingPitcherKRate: number | null
   matchupXwoba: number | null
   /** 'matchup' | 'fallback_overall' */
   matchupQuality: string | null
@@ -407,6 +488,9 @@ export interface PropBoardPick {
   /** Fence distance/wall height on the batter's pull side; null for switch hitters. */
   pullFenceFt: number | null
   pullWallFt: number | null
+  /** Projected HR carry (ft) in this game's park/weather — the long-ball-upside axis on the
+   *  HR card. Orthogonal to the HR likelihood; null when the batter has no HR-distance sample. */
+  hrDistanceFt: number | null
   rateL10: number | null
   rateSeason: number | null
   nSeason: number | null
@@ -550,13 +634,17 @@ export interface CalibrationBucket {
   actualRate: number
 }
 
-/** One day's accuracy snapshot for a market (brier/baseline/ece null for total_runs). */
+/** One day's accuracy snapshot for a market (binary metrics null for total_runs). */
 export interface AccuracyPoint {
   date: string
   n: number
   brier: number | null
   baselineBrier: number | null
   ece: number | null
+  /** Log-loss: proper scoring rule, sharper than Brier on rare events. */
+  logLoss: number | null
+  /** Sharpness = variance of predicted probs; read with ece ("sharpness subject to calibration"). */
+  sharpness: number | null
 }
 
 /** Rolling accuracy for one market + its latest calibration curve. */
@@ -610,6 +698,12 @@ export interface TrackRecord {
   byTier: RecordSummary[]
   equity: EquityPoint[]
   pickBrier: number | null
+  /** CLV sample size: settled picks for which a closing quote was found. Null until any CLV. */
+  clvN: number | null
+  /** Share of clvN with positive closing-line value (we beat the close). */
+  clvRate: number | null
+  /** Mean CLV (de-vigged probability points beaten) over clvN. */
+  avgClv: number | null
 }
 
 // ── Most Likely board (GET /api/most-likely) ─────────────────────────────────
@@ -678,6 +772,7 @@ export interface MostLikely {
 export interface BatterResult {
   playerId: number
   gameId: number
+  atBats: number | null
   hits: number | null
   homeRuns: number | null
   strikeouts: number | null

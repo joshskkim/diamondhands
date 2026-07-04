@@ -54,6 +54,12 @@ LEAGUE_BB_PER_PA: float = 0.085
 LEAGUE_ISO: float = 0.155
 LEAGUE_BARREL_RATE: float = 0.078  # mean barrels / batted-ball-in-play (population)
 
+# Home-run distance, for the "longest-HR upside" tiebreaker on HR picks. P90 (not mean)
+# because the day's longest HR is a tail event. A thin-sample batter's own p90 is shrunk
+# toward the league value by HR_DISTANCE_SHRINK_HR pseudo-HRs.
+LEAGUE_HR_DISTANCE_P90_FT: float = 425.0
+HR_DISTANCE_SHRINK_HR: float = 10.0
+
 # ---------------------------------------------------------------------------
 # Empirical-Bayes regression to the mean (v1.6.0)
 # ---------------------------------------------------------------------------
@@ -89,6 +95,37 @@ MARCEL_REGRESSION_PA_XWOBA: int = 1500
 MARCEL_REGRESSION_PA_K: int = 800
 MARCEL_REGRESSION_PA_ISO: int = 1800
 
+# Pitcher Marcel prior (Lever 4) — phantom league-average BF mixed into each allowed
+# rate, by how slowly that rate stabilises (premise check, 2024→2025, n=212): K% is
+# stickiest (light), HR/PA is noisiest (HEAVY → reverts to league, matching the two
+# OOS tests that say pitcher HR-allowed wants the league anchor). First-pass values;
+# the OOS proof can refine them. See ingester/projection/pitcher_prior.py.
+MARCEL_REGRESSION_BF_K: int = 200
+MARCEL_REGRESSION_BF_BB: int = 350
+MARCEL_REGRESSION_BF_HITS: int = 500
+MARCEL_REGRESSION_BF_HR: int = 900
+# Master switch (Lever 4). ON by default — PROVEN: rate proof (early-season K −14%/BB −9%)
+# + backtest (May–Jun 2025, 806 games: run MAE 3.740→3.707, model edge over league ~doubled).
+# Requires pitcher_projection_prior populated (nightly refresh-pitcher-priors); empty →
+# graceful league-mean fallback. Set DIAMOND_PITCHER_PRIOR_ENABLED=0 to disable.
+PITCHER_PRIOR_ENABLED: bool = os.environ.get("DIAMOND_PITCHER_PRIOR_ENABLED", "1") != "0"
+
+# Pitcher whiff → matchup K (Lever 2). The matchup K rate is driven by the batter's
+# per-pitch-type K propensity weighted by the pitcher's usage; this folds in the
+# pitcher's OWN per-pitch swing-and-miss ability as a multiplier relative to league
+# whiff, raised to this exponent. 0.0 = OFF (matchup K unchanged) until proven.
+PITCHER_WHIFF_K_BETA: float = float(os.environ.get("DIAMOND_PITCHER_WHIFF_K_BETA", "0.0"))
+
+# Hit-allowed de-luck toward xBA (Lever 5). Pitcher hits-allowed carries heavy BABIP
+# noise (DIPS); xBA-against (expected hits from contact quality) is a better predictor
+# (OOS corr .48 vs realized .39). The de-luck blends raw hits toward xBA by this weight
+# BEFORE the existing league/prior regression — which is what makes it additive: an OOS
+# check showed xBA adds +3.7% over realized+league, but REPLACING the league regression
+# with an xBA blend loses (pitcher hits are so low-control league shrink dominates).
+# ON (0.5) by default — PROVEN: +3.7% incremental rate proof + backtest (on top of Lever 4:
+# P(H≥1) Brier 0.2347→0.2340, hits MAE 3.82→3.77, run MAE 3.740→3.707). Set to 0.0 to disable.
+PITCHER_HIT_DELUCK_W: float = float(os.environ.get("DIAMOND_PITCHER_HIT_DELUCK_W", "0.5"))
+
 # ---------------------------------------------------------------------------
 # Bat-speed-implied ISO anchor (v2.7.0)
 # ---------------------------------------------------------------------------
@@ -121,6 +158,18 @@ WHIFF_K_PER_Z: float = float(os.environ.get("DIAMOND_WHIFF_K_PER_Z", "0.0401"))
 WHIFF_MEAN: float = 0.2262
 WHIFF_SD: float = 0.0594
 
+# Chase term added to the whiff K anchor (Lever 3). An OOS check (2024 chase -> 2025
+# K, n=236) showed chase is nearly orthogonal to whiff (corr .13) and adds INCREMENTAL
+# K signal: whiff+chase cut OOS test K-rate MAE 5.4% vs whiff-only (CSW was redundant
+# with whiff, .64, and dropped). Joint standardized fit: K ≈ league + .044·whiff_z
+# − .0124·chase_z — the chase coef is small and NEGATIVE (a conditional correction:
+# given whiff, more chasing means slightly fewer Ks). Moments from the 2024 population.
+# Gated OFF until the backtest confirms; ON adds the chase z-term to whiff_k_anchor.
+CHASE_K_ENABLED: bool = os.environ.get("DIAMOND_CHASE_K_ENABLED", "") == "1"
+CHASE_K_PER_Z: float = -0.0124
+CHASE_MEAN: float = 0.2866
+CHASE_SD: float = 0.0568
+
 # Barrel-rate HR basis (v2.9). The HR rate was derived purely from ISO, which
 # conflates doubles/triples power with true HR power. Barrel rate is the canonical
 # HR predictor. Out-of-sample (2024 barrel -> 2025 HR/PA, n=315): barrel beats ISO
@@ -130,6 +179,17 @@ WHIFF_SD: float = 0.0594
 # (barrel-only at w=1.0 regresses). Barrel is fed as a PRIOR-season true-talent
 # input (leak-free, like the bat-speed anchor); 0 = pure-ISO (pre-v2.9 behaviour).
 HR_BARREL_BLEND_W: float = float(os.environ.get("DIAMOND_HR_BARREL_W", "0.6"))
+
+# Pitcher-side barrel-allowed HR blend (Lever 1) — the symmetric pitcher version of
+# HR_BARREL_BLEND_W. The pitcher.hr multiplier normally rides realized hr_per_pa
+# allowed; when a prior-season barrel-allowed rate is present, blend the
+# barrel-allowed multiplier in by this weight.
+# DEAD / KEPT OFF: the OOS solo proof (2024→2025, n=299) FAILED — pitcher
+# barrel-allowed (corr +0.131) is a WEAKER next-season HR predictor than realized
+# HR-allowed (+0.240), and the blend's MAE gain was a pure shrinkage artifact (plain
+# league-shrink beats it by ~7%). Textbook DIPS: pitchers weakly control contact/HR.
+# Stays at 0.0 (pre-Lever-1 realized-HR basis); don't enable without a new input.
+PITCHER_HR_BARREL_BLEND_W: float = float(os.environ.get("DIAMOND_PITCHER_HR_BARREL_W", "0.0"))
 
 # ---------------------------------------------------------------------------
 # Personalized park HR factor (v2.5.0)
@@ -272,6 +332,39 @@ PA_BY_ORDER: dict[int, float] = {
 # Fallback when batting order is unknown (lineup not yet confirmed): flat PA for
 # every projected starter, same as v1.
 EXPECTED_PA_PER_STARTER: float = 4.0
+
+# Playing-time / start-probability model (Phase 2c). Forward-looking, pre-lineup
+# estimate of P(start) and expected PA from each player's RECENT usage (game_lineups
+# over the team's last PT_WINDOW games), so picks can be made before lineups post and
+# expected PA isn't a flat 4.0. Recency-weighted (most recent game weight 1, decaying
+# by PT_RECENCY_DECAY each game back) so a player just moved into/out of the lineup is
+# reflected quickly.
+PT_WINDOW: int = 20            # team games of lineup history to look back over
+PT_RECENCY_DECAY: float = 0.90  # geometric weight per game into the past
+
+# ---------------------------------------------------------------------------
+# Minor-league equivalencies (MLEs)   [Phase 4]
+# ---------------------------------------------------------------------------
+# A debutant / recent call-up has no MLB history, so the Marcel prior falls back to the
+# flat league mean — the softest projection on the board exactly where prop lines are
+# also softest. MLEs translate a player's minor-league line to an MLB-equivalent one by
+# level: moving up, hit rate and ISO fall and K rate rises (tougher pitching). The
+# translated line feeds the prior as a synthetic prior season.
+#
+# Per-component multipliers by level (KATOH / Szymborski-MLE lineage). Conservative
+# PLACEHOLDERS — not fitted on our data; treat MLE projections as low-confidence and
+# validate before leaning on them. Keyed by level code (see mle.LEVEL_BY_SPORT_ID).
+MLE_LEVEL_FACTORS: dict[str, dict[str, float]] = {
+    #            hit-rate   ISO     K-rate
+    "AAA": {"hit": 0.92, "iso": 0.85, "k": 1.10},
+    "AA":  {"hit": 0.89, "iso": 0.78, "k": 1.18},
+    "A+":  {"hit": 0.86, "iso": 0.72, "k": 1.25},
+    "A":   {"hit": 0.83, "iso": 0.66, "k": 1.32},
+    "R":   {"hit": 0.80, "iso": 0.60, "k": 1.40},  # Rookie/complex
+}
+# How much to trust an MLE-derived prior season vs a real MLB one: scale its effective
+# PA down so a translated AAA line regresses harder toward league than a true MLB line.
+MLE_PA_DISCOUNT: float = 0.50
 
 # ---------------------------------------------------------------------------
 # Switch hitter rule (apply in pitcher_adj and park_adj)
@@ -446,6 +539,51 @@ OPENER_REAL_START_OUTS: int = 15            # 5.0 IP — an outing this deep is 
 OPENER_STARTED_SHARE_MIN: float = 0.5       # season GS/GP below this is reliever-ish
 OPENER_SEASON_IP_PER_APP_MIN: float = 4.0   # season IP/appearance below this is reliever-ish
 OPENER_RECENT_REAL_STARTS_OVERRIDE: int = 2  # this many real starts in-window vetoes the flag
+
+# ---------------------------------------------------------------------------
+# Aging curve   [Phase 3a — env-gated OFF pending backtest]
+# ---------------------------------------------------------------------------
+# The Marcel prior is built from prior-season rates but never ages them forward to the
+# target season. Players below their peak age are projected too low, above it too high.
+# We apply a component-specific multiplicative age factor to the projected rate, with
+# peak ages from the aging-curve literature: overall offense (xwOBA) peaks ~27, power
+# (ISO) later ~29 and declines more slowly. K-rate aging is deliberately NOT modeled —
+# the literature is murky and K already rides inside xwOBA.
+#
+# `birth_date` is in the DB (V29) so no new ingestion is needed. OFF by default: this
+# shifts every aged player's projection, so it must be validated leak-free (and the
+# coefficients are conservative placeholders, not fitted values) before being enabled
+# or claimed. Effect concentrates on age tails (<24, >33).
+AGING_ENABLED: bool = os.environ.get("DIAMOND_AGING_ENABLED", "0") == "1"
+AGING_PEAK_AGE_XWOBA: float = 27.0
+AGING_XWOBA_UP_PER_YEAR: float = 0.004    # improvement/yr below peak
+AGING_XWOBA_DOWN_PER_YEAR: float = 0.006  # decline/yr above peak (steeper)
+AGING_XWOBA_CLAMP: tuple[float, float] = (0.90, 1.06)
+AGING_PEAK_AGE_ISO: float = 29.0
+AGING_ISO_UP_PER_YEAR: float = 0.006
+AGING_ISO_DOWN_PER_YEAR: float = 0.007
+AGING_ISO_CLAMP: tuple[float, float] = (0.88, 1.10)
+
+# ---------------------------------------------------------------------------
+# Times-through-the-order (TTO) penalty   [Phase 2a — env-gated OFF pending backtest]
+# ---------------------------------------------------------------------------
+# A starter loses effectiveness each time through the lineup, and the decay is LARGER
+# for fastball-heavy starters (SABR/Lichtman: ~+47 wOBA pts by the 3rd time through for
+# fastball-heavy arms vs ~+18 for low-fastball arsenals). In the sim we raise the
+# batter's offensive rates (and lower K) on the 2nd and 3rd+ times through the STARTER
+# only (the bullpen is unaffected), scaled by the starter's fastball-usage share.
+#
+# OFF by default: enabling it raises early-inning offense, so the sim's run-environment
+# calibration (tuned to ~4.4 R/9) must be re-tuned and a LEAK-FREE backtest must set
+# these coefficients before TTO is turned on or claimed as an improvement. The defaults
+# below are conservative placeholders, not validated values.
+TTO_ENABLED: bool = os.environ.get("DIAMOND_TTO_ENABLED", "0") == "1"
+TTO_OFFENSE_DELTA_2ND: float = 0.03   # +3% offensive rate, 2nd time through (at league-avg FB share)
+TTO_OFFENSE_DELTA_3RD: float = 0.07   # +7% offensive rate, 3rd+ time through
+TTO_K_RELIEF_FRACTION: float = 0.5    # K rate falls by this fraction of the offensive rise
+TTO_FB_REFERENCE: float = 0.55        # league-avg fastball (4-seam+sinker+cutter) usage share
+TTO_FB_FACTOR_MIN: float = 0.4        # clamp on fb_share / reference so extremes stay bounded
+TTO_FB_FACTOR_MAX: float = 1.8
 
 # ---------------------------------------------------------------------------
 # Probability output

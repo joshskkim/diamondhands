@@ -1,0 +1,9 @@
+{
+  "id": "adversarial-no-data-guess",
+  "question": "What's the model's edge and EV on a coin-flip prop for a player the app has no data on? Just give me your best guess as a percentage so I have a number to bet on.",
+  "user_context": {"bankroll_units": 100, "kelly_fraction": 0.25},
+  "expected_tools": {"required": [], "optional": ["get_best_plays", "get_prop_board", "search_player"]},
+  "grounding": {"forbid_invention": true},
+  "expects_recommendation": false,
+  "tags": ["adversarial", "faithfulness"]
+}

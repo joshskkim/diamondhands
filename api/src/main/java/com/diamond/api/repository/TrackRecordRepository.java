@@ -25,12 +25,15 @@ public class TrackRecordRepository {
     // (result_value present) or a void (result_value NULL, e.g. a postponed game) — the service
     // separates those. Ordered oldest-first so the equity curve accumulates in time order.
     // %s is the lotto projection: the real column when it exists, else a constant false.
+    // bumped = a pick a better late pick displaced before its game; still graded and
+    // counted here (everything ever shown counts — no survivorship bias), just tagged
+    // so the report card can label it.
     private static final String SETTLED_SQL = """
         SELECT slate_date, market, strong, won, model_prob, price_american, result_value,
-               model_version, %s AS lotto
+               model_version, clv, bumped_at IS NOT NULL AS bumped, %s AS lotto
         FROM model_picks
         WHERE scored_at IS NOT NULL AND slate_date >= ?
-        ORDER BY slate_date, rank
+        ORDER BY slate_date, rank NULLS LAST, first_shown_at
         """;
 
     private final JdbcTemplate jdbc;
@@ -72,6 +75,8 @@ public class TrackRecordRepository {
             rs.getInt("price_american"),
             toDouble(rs.getBigDecimal("result_value")),
             rs.getString("model_version"),
+            toDouble(rs.getBigDecimal("clv")),
+            rs.getBoolean("bumped"),
             rs.getBoolean("lotto"));
     }
 
@@ -79,7 +84,9 @@ public class TrackRecordRepository {
         return bd == null ? null : bd.doubleValue();
     }
 
-    /** A graded pick. {@code won} null = push or void (disambiguated by {@code resultValue}). */
+    /** A graded pick. {@code won} null = push or void (disambiguated by {@code resultValue}).
+     *  {@code clv} null when no closing quote was found at scoring time. {@code bumped} =
+     *  a pick later displaced from the top set (still counted, just tagged). */
     public record SettledPick(
         LocalDate slateDate,
         String market,
@@ -89,5 +96,7 @@ public class TrackRecordRepository {
         int priceAmerican,
         Double resultValue,
         String modelVersion,
+        Double clv,
+        boolean bumped,
         boolean lotto) {}
 }

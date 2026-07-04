@@ -16,6 +16,12 @@ SLATE_GAME_TYPES = {"R", "F", "D", "L", "W"}
 # "nine players present" as the confirmation signal.
 LINEUP_SLOTS = 9
 
+# How long before first pitch we start consulting the boxscore for a batting order the
+# schedule 'lineups' hydration hasn't filled in yet (see fetch_boxscore_batting_orders and
+# lineups._process_date). Lineup cards post ~2-3 h out; 6 h is a generous cushion that still
+# avoids hammering the per-game boxscore endpoint all afternoon for games not close to start.
+LINEUP_LOOKAHEAD_HOURS = 6
+
 
 def fetch_schedule(game_date: date, hydrate: str = "probablePitcher") -> list[dict]:
     """
@@ -90,6 +96,39 @@ def parse_game_first_inning(game: dict) -> tuple[int, int] | None:
     return int(h), int(a)
 
 
+def parse_game_linescore_live(game: dict) -> dict | None:
+    """Return the live in-game state from a game hydrated with ``linescore``, or None
+    when there's nothing live yet (Scheduled/Preview, or no linescore present).
+
+    Unlike ``parse_game_score`` this does NOT gate on Final — it returns the running
+    state for in-progress games so the home board can track them live. Final games are
+    still returned (the linescore carries the final running total), but the Final
+    home_score/away_score columns remain the source of truth for grading.
+
+    Shape returned:
+        {"home": int, "away": int,            # running runs each side
+         "inning": int | None,                # currentInning
+         "inning_state": str | None,          # 'Top' | 'Middle' | 'Bottom' | 'End'
+         "is_top": bool | None}               # isTopInning
+    """
+    state = (game.get("status") or {}).get("abstractGameState")
+    if state in (None, "Scheduled", "Preview"):
+        return None
+    ls = game.get("linescore") or {}
+    teams = ls.get("teams") or {}
+    h = (teams.get("home") or {}).get("runs")
+    a = (teams.get("away") or {}).get("runs")
+    if h is None or a is None:
+        return None
+    return {
+        "home": int(h),
+        "away": int(a),
+        "inning": ls.get("currentInning"),
+        "inning_state": ls.get("inningState"),
+        "is_top": ls.get("isTopInning"),
+    }
+
+
 def parse_home_plate_umpire(game: dict) -> tuple[int, str] | None:
     """
     Extract the home-plate umpire from a schedule game hydrated with ``officials``.
@@ -133,6 +172,42 @@ def parse_game_lineups(game: dict) -> dict[bool, list[tuple[int, str]]]:
             for p in players
             if p.get("id") is not None
         ]
+        if len(slots) >= LINEUP_SLOTS:
+            result[is_home] = slots[:LINEUP_SLOTS]
+    return result
+
+
+def fetch_boxscore_batting_orders(game_pk: int) -> dict[bool, list[tuple[int, str]]]:
+    """Confirmed batting orders from GET /game/{pk}/boxscore, as a drop-in fallback for
+    ``parse_game_lineups`` (same return shape) when the schedule ``lineups`` hydration lags.
+
+    ``teams.{home,away}.battingOrder`` is a list of personIds in batting order — populated
+    when the lineup card posts (pre-game), earlier and more reliably than the schedule
+    hydration, which is what strands late games behind the projector's nine-man gate. Names
+    come from ``teams.{side}.players['ID{pid}'].person.fullName``.
+
+    Returns ``{is_home: [(player_id, full_name), ...]}`` for each side that has a full nine;
+    a short/missing side is omitted. Any network/shape error returns ``{}`` so the caller
+    simply keeps whatever the schedule gave (one bad fetch never wipes the slate).
+    """
+    try:
+        resp = requests.get(f"{MLB_BASE}/game/{game_pk}/boxscore", timeout=15)
+        resp.raise_for_status()
+        teams = (resp.json().get("teams") or {})
+    except Exception:  # noqa: BLE001 — one bad fetch shouldn't break the lineup refresh
+        return {}
+
+    result: dict[bool, list[tuple[int, str]]] = {}
+    for is_home, key in ((True, "home"), (False, "away")):
+        side = teams.get(key) or {}
+        order = side.get("battingOrder") or []
+        players = side.get("players") or {}
+        slots: list[tuple[int, str]] = []
+        for pid in order:
+            if pid is None:
+                continue
+            person = (players.get(f"ID{pid}") or {}).get("person") or {}
+            slots.append((int(pid), person.get("fullName") or f"Unknown#{pid}"))
         if len(slots) >= LINEUP_SLOTS:
             result[is_home] = slots[:LINEUP_SLOTS]
     return result
@@ -199,4 +274,39 @@ def fetch_pitcher_season_stats(player_id: int, season: int) -> dict | None:
         "games_pitched": stat.get("gamesPitched"),
         "innings_pitched": _parse_innings(stat.get("inningsPitched")),
         "games_finished": stat.get("gamesFinished"),
+    }
+
+
+def fetch_minor_league_hitting(player_id: int, season: int, sport_id: int) -> dict | None:
+    """One player's minor-league hitting line for a season at a level (sportId).
+
+    sportId codes: 11 AAA, 12 AA, 13 High-A, 14 Low-A, 16 Rookie (see mle.LEVEL_BY_SPORT_ID).
+    Returns the counting totals {pa, ab, hits, hr, tb, k} or None when the player has no
+    hitting split at that level/season (or on a network error). Used by the MLE pipeline
+    to project call-ups with no MLB history.
+    """
+    try:
+        resp = requests.get(
+            f"{MLB_BASE}/people/{player_id}/stats",
+            params={"stats": "season", "group": "hitting",
+                    "season": season, "sportId": sport_id},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        splits = (resp.json().get("stats") or [{}])[0].get("splits") or []
+        if not splits:
+            return None
+        stat = splits[0].get("stat", {})
+    except Exception:  # noqa: BLE001 — one bad fetch shouldn't break the pipeline
+        return None
+    pa = stat.get("plateAppearances")
+    if not pa:
+        return None
+    return {
+        "pa": pa,
+        "ab": stat.get("atBats"),
+        "hits": stat.get("hits"),
+        "hr": stat.get("homeRuns"),
+        "tb": stat.get("totalBases"),
+        "k": stat.get("strikeOuts"),
     }

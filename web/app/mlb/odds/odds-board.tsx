@@ -7,6 +7,7 @@ import { bestPlaysQueryOptions, hitRatesQueryOptions, lineShopQueryOptions } fro
 import type { BestPlay, HitRate, LineShop } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { MARKET_LABEL, teamForSide } from '@/lib/odds'
+import { QueryError } from '@/components/ui/query-states'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
@@ -189,6 +190,11 @@ function PlayCard({
               </Link>
             )}
           </div>
+          {r.debateVerdict === 'pass' && (
+            <div className="mt-1 text-[11px] leading-snug text-amber-300/80">
+              Analyst passed{r.debateRationale ? ` — ${r.debateRationale}` : ''}
+            </div>
+          )}
         </div>
         <span
           className={cn(
@@ -260,7 +266,7 @@ function PlayCard({
 export function OddsBoard() {
   const [filter, setFilter] = useState<Filter>('liked')
   const [expanded, setExpanded] = useState<string | null>(null)
-  const { data, isPending, isError } = useQuery(bestPlaysQueryOptions(undefined, 100))
+  const { data, isPending, isError, refetch } = useQuery(bestPlaysQueryOptions(undefined, 100))
   const { data: hitRateData } = useQuery(hitRatesQueryOptions())
   const { data: lineShopData } = useQuery(lineShopQueryOptions())
 
@@ -329,7 +335,7 @@ export function OddsBoard() {
       {isPending ? (
         <p className="text-zinc-400">Loading odds…</p>
       ) : isError ? (
-        <p className="text-rose-400">Failed to load odds.</p>
+        <QueryError message="Couldn’t load the odds board." onRetry={refetch} />
       ) : rows.length === 0 ? (
         <p className="text-amber-300 bg-amber-400/10 border border-amber-400/30 rounded-xl p-4 text-sm">
           No odds loaded yet. Run <span className="font-mono">refresh-odds</span> (needs{' '}
@@ -434,6 +440,14 @@ export function OddsBoard() {
                           >
                             {r.matchup}
                           </Link>
+                        )}
+                        {r.debateVerdict === 'pass' && (
+                          <div
+                            className="mt-0.5 whitespace-normal text-[10px] leading-snug text-amber-300/80"
+                            title={r.debateRationale ?? undefined}
+                          >
+                            Analyst passed{r.debateRationale ? ` — ${r.debateRationale}` : ''}
+                          </div>
                         )}
                       </td>
                       <td className="px-3 py-2 text-zinc-300 whitespace-nowrap">

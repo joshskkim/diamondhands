@@ -71,10 +71,16 @@ public class SecurityConfig {
                 // etc.) re-enter the chain on /error and get masked as 401.
                 .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
+                // The personal Tracker is user-owned; the default permits GET /api/**, so gate it.
+                .requestMatchers(HttpMethod.GET, "/api/tracker").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/auth/signup", "/api/auth/signin", "/api/auth/signout").permitAll()
                 // "Ask Diamond" AI query is a public read-like endpoint (POST only because it
                 // takes a question body). Gate to .authenticated() later if it needs sign-in.
                 .requestMatchers(HttpMethod.POST, "/api/ask").permitAll()
+                // Server-to-server debate gate (record-picks). Not session-auth'd — guarded by
+                // the X-Internal-Key header in DebateController. Permit here so the filter chain
+                // doesn't 401 it before the controller's key check runs.
+                .requestMatchers(HttpMethod.POST, "/api/debate/pick").permitAll()
                 // Stripe webhook is public but authenticated by its signature, not the
                 // session cookie (it's a server-to-server callback). Checkout/portal POSTs
                 // are not GET, so they fall through to .authenticated() below.
