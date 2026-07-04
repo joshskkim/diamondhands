@@ -17,6 +17,7 @@ import psycopg
 
 from ingester.db import get_connection
 from ingester.metrics import (
+    average_precision,
     baseline_brier,
     brier_score,
     calibration_buckets,
@@ -24,6 +25,8 @@ from ingester.metrics import (
     mae,
     mae_per_game,
     pearson,
+    roc_auc,
+    top_k_lift,
 )
 from ingester.projection.constants import LEAGUE_RUNS_PER_GAME_BASE, MODEL_VERSION
 from ingester.projection.runner import run_backtest_projections
@@ -167,6 +170,10 @@ class _Outcomes:
     sim_hit1: list[float | None]
     sim_hr:   list[float | None]
     sim_k:    list[float | None]
+    # Prior-season HR-ranker features (leak-free), each None when the hitter has no
+    # prior-season batted-ball profile. Aligned 1:1 to p_hr/a_hr. Keyed by feature
+    # name: barrel, pulled_air, sweet_spot, p90_ev. The baselines the model must beat.
+    hr_rankers: dict[str, list[float | None]]
 
 
 def _load_outcomes(
@@ -191,7 +198,8 @@ def _load_outcomes(
             CASE WHEN pgs.hits      >= 2 THEN 1 ELSE 0 END,
             CASE WHEN pgs.home_runs >= 1 THEN 1 ELSE 0 END,
             CASE WHEN pgs.strikeouts>= 1 THEN 1 ELSE 0 END,
-            bp.sim_p_hit_1plus, bp.sim_p_hr, bp.sim_p_k_1plus
+            bp.sim_p_hit_1plus, bp.sim_p_hr, bp.sim_p_k_1plus,
+            bbb.barrel_pct, bbb.pulled_air_pct, bbb.sweet_spot_pct, bbb.p90_ev_fbld
         FROM backtest_projections bp
         JOIN games g ON g.id = bp.game_id
         JOIN player_game_stats pgs
@@ -199,6 +207,11 @@ def _load_outcomes(
             AND pgs.game_id  = bp.game_id
             AND pgs.plate_appearances > 0
             AND pgs.plate_appearances IS NOT NULL
+        -- Naive-barrel-rank baseline: each hitter's PRIOR-season barrel rate (leak-free,
+        -- known before the game). The yardstick the model's HR ranking must beat.
+        LEFT JOIN batter_batted_ball bbb
+            ON bbb.player_id = bp.player_id
+            AND bbb.season = EXTRACT(YEAR FROM g.game_date)::int - 1
         WHERE bp.backtest_run_id = %s
           AND pgs.game_id IS NOT NULL
           AND bp.p_hit_1plus IS NOT NULL
@@ -220,13 +233,15 @@ def _load_outcomes(
         n_games=int(n_total[1]),
         csv_rows=[],
         sim_hit1=[], sim_hr=[], sim_k=[],
+        hr_rankers={"barrel": [], "pulled_air": [], "sweet_spot": [], "p90_ev": []},
     )
 
     for row in rows:
         (pred_h1, pred_h2, pred_hr, pred_k,
          exp_hits, game_id, player_id, game_date,
          actual_hits, act_h1, act_h2, act_hr, act_k,
-         sim_h1, sim_hr, sim_k) = row
+         sim_h1, sim_hr, sim_k,
+         f_barrel, f_pull_air, f_sweet, f_p90) = row
 
         out.p_hit1.append(float(pred_h1))
         out.p_hit2.append(float(pred_h2) if pred_h2 is not None else float(pred_h1))
@@ -237,6 +252,10 @@ def _load_outcomes(
         out.sim_hit1.append(float(sim_h1) if sim_h1 is not None else None)
         out.sim_hr.append(float(sim_hr) if sim_hr is not None else None)
         out.sim_k.append(float(sim_k) if sim_k is not None else None)
+        out.hr_rankers["barrel"].append(float(f_barrel) if f_barrel is not None else None)
+        out.hr_rankers["pulled_air"].append(float(f_pull_air) if f_pull_air is not None else None)
+        out.hr_rankers["sweet_spot"].append(float(f_sweet) if f_sweet is not None else None)
+        out.hr_rankers["p90_ev"].append(float(f_p90) if f_p90 is not None else None)
 
         gid = int(game_id)
         eh = float(exp_hits) if exp_hits is not None else 0.0
@@ -553,6 +572,48 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     # Log-loss (sharper than Brier on rare events; lower is better).
     print("\nLog-loss (proper scoring, rewards sharp+correct):")
     print(f"  hit1plus={ll_h1:.5f}  hit2plus={ll_h2:.5f}  hr={ll_hr:.5f}  k1plus={ll_k:.5f}")
+
+    # Discrimination + lift (ranking quality Brier is blind to on the rare HR event).
+    # ROC-AUC = P(rank a homer above a non-homer); PR-AUC concentrates on the top of
+    # the list where our picks live; top-decile lift = realized rate of the top 10%
+    # ranked vs the base rate (1.0 = no skill). These are what "getting HR right" means.
+    _disc_markets = [
+        ("hit1plus", out.p_hit1, out.a_hit1),
+        ("hit2plus", out.p_hit2, out.a_hit2),
+        ("hr",       out.p_hr,   out.a_hr),
+        ("k1plus",   out.p_k,    out.a_k),
+    ]
+    def _n(v: float, p: int = 3) -> str:
+        return f"{v:.{p}f}" if v == v else "N/A"
+    print("\nDiscrimination (rank quality; AUC/PR-AUC higher=better; lift 1.0=no skill):")
+    print(f"  {'market':<10}{'ROC-AUC':>9}{'PR-AUC':>9}{'base':>8}"
+          f"{'top10% rate':>13}{'lift':>8}")
+    for name, preds, acts in _disc_markets:
+        auc = roc_auc(preds, acts)
+        ap = average_precision(preds, acts)
+        lift = top_k_lift(preds, acts, max(1, len(preds) // 10))
+        print(f"  {name:<10}{_n(auc):>9}{_n(ap):>9}{_n(lift['base_rate']):>8}"
+              f"{_n(lift['top_k_rate']):>13}{_n(lift['lift']):>8}")
+
+    # HR gate: does the model out-rank naive prior-season batted-ball features? Scored on
+    # the shared subset of rows that HAVE a prior-season profile (apples-to-apples). Each
+    # raw feature is a leak-free single-number HR ranker; the model must beat all of them.
+    idx = [i for i, b in enumerate(out.hr_rankers["barrel"]) if b is not None]
+    print(f"\nHR gate — model vs naive prior-season feature ranks "
+          f"({len(idx)}/{len(out.p_hr)} rows w/ prior profile; higher=better):")
+    if idx:
+        a_hr = [out.a_hr[i] for i in idx]
+        k = max(1, len(idx) // 10)
+        rankers = [("model", [out.p_hr[i] for i in idx])]
+        rankers += [(name, [vals[i] for i in idx])
+                    for name, vals in out.hr_rankers.items()]
+        print(f"  {'ranker':<12}{'ROC-AUC':>9}{'PR-AUC':>9}{'top10%-lift':>13}")
+        for label, scores in rankers:
+            lift = top_k_lift(scores, a_hr, k)
+            print(f"  {label:<12}{_n(roc_auc(scores, a_hr)):>9}"
+                  f"{_n(average_precision(scores, a_hr)):>9}{_n(lift['lift']):>13}")
+    else:
+        print("  (no rows with a prior-season profile — load a prior season w/ refresh-batted-ball)")
 
     # Sim-blend weight fitting (only when --sim-props captured the simulator's estimate).
     if sim_props:
