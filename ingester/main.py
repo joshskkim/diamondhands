@@ -59,6 +59,7 @@ from ingester.commands.tune_prior_blend import (
 from ingester.commands.refresh_bullpen import cmd_refresh_bullpen
 from ingester.commands.refresh_batted_ball import cmd_refresh_batted_ball
 from ingester.commands.refresh_batted_ball_events import cmd_refresh_batted_ball_events
+from ingester.commands.train_xhr import cmd_train_xhr
 from ingester.commands.refresh_team_defense import cmd_refresh_team_defense
 from ingester.commands.refresh_bat_tracking import cmd_refresh_bat_tracking
 from ingester.commands.skill_snapshots import cmd_refresh_skill_snapshots
@@ -260,6 +261,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Build the per-batted-ball xHR training corpus (batted_ball_events) from Statcast",
     )
     p_bbe.add_argument("--season", type=int, default=CURRENT_SEASON, help="Season year (default: current season)")
+
+    p_xhr = sub.add_parser(
+        "train-xhr",
+        help="Train the learned xHR model on batted_ball_events (leak-free temporal split)",
+    )
+    p_xhr.add_argument("--test-season", type=int, default=None,
+                       help="Out-of-time evaluation season (default: current season)")
+    p_xhr.add_argument("--train-seasons", type=str, default=None,
+                       help="Comma-separated train seasons (default: all seasons before test)")
+    p_xhr.add_argument("--out", type=str, default=None, help="Artifact path (default: models/xhr_gbm.pkl)")
 
     p_teamdef = sub.add_parser(
         "refresh-team-defense",
@@ -650,6 +661,7 @@ COMMANDS = {
     "refresh-bullpen":          cmd_refresh_bullpen,
     "refresh-batted-ball":      cmd_refresh_batted_ball,
     "refresh-batted-ball-events": cmd_refresh_batted_ball_events,
+    "train-xhr":                cmd_train_xhr,
     "refresh-team-defense":     cmd_refresh_team_defense,
     "refresh-bat-tracking":     cmd_refresh_bat_tracking,
     "refresh-skill-snapshots":  cmd_refresh_skill_snapshots,
