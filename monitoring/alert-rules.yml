@@ -67,3 +67,30 @@ groups:
         annotations:
           summary: "HikariCP pool fully utilized (active == max) for 1m"
           description: "Imminent connection-timeout errors; investigate slow queries (Jaeger) immediately."
+
+  # Host saturation (from node-exporter). Added after the 2026-07-04 outage, where the root
+  # disk filled to 100% (Docker image bloat) and the first anyone knew of it was Postgres
+  # crash-looping on a checkpoint it couldn't write. These page/warn while there's still runway.
+  - name: diamond-host
+    rules:
+      - alert: DiskSpaceFillingUp
+        expr: |
+          node_filesystem_avail_bytes{job="node", mountpoint="/", fstype!~"tmpfs|overlay"}
+          / node_filesystem_size_bytes{job="node", mountpoint="/", fstype!~"tmpfs|overlay"} < 0.20
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Root disk below 20% free on the VPS"
+          description: "Free space on / is under 20%. Reclaim before it becomes critical — `docker image prune -af` clears superseded deploy images."
+
+      - alert: DiskSpaceCritical
+        expr: |
+          node_filesystem_avail_bytes{job="node", mountpoint="/", fstype!~"tmpfs|overlay"}
+          / node_filesystem_size_bytes{job="node", mountpoint="/", fstype!~"tmpfs|overlay"} < 0.10
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Root disk below 10% free on the VPS"
+          description: "Critically low disk on /. At 0% Postgres can't write its checkpoint and crash-loops (2026-07-04). Reclaim now: `docker image prune -af && docker builder prune -af`."

@@ -27,3 +27,10 @@ scrape_configs:
       - targets: ["mcp-server:8090"]
         labels:
           application: diamond-mcp
+
+  # Host metrics (disk/CPU/memory) — feeds the DiskSpaceLow saturation alert.
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          application: diamond-host
