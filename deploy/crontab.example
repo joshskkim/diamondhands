@@ -1,5 +1,16 @@
 # Diamond scheduled jobs — install on the host with:  crontab deploy/crontab.example
-# (or paste into `crontab -e`). CRON_TZ requires Vixie/cronie (Debian/Ubuntu default).
+# (or paste into `crontab -e`).
+#
+# TIMEZONE — IMPORTANT. Every schedule below is written in ET, but Ubuntu/Debian's default
+# cron does NOT honor the `CRON_TZ=` line — that's a Vixie/cronie feature; the stock Ubuntu
+# build ignores it and fires jobs in the HOST's local time. So these ET times only actually
+# fire at ET if the host clock is ET. On a fresh box, set it once:
+#     sudo timedatectl set-timezone America/New_York && sudo systemctl restart cron
+# Leaving the box on UTC silently shifts every job ~4-5h: e.g. the evening quick loop below
+# (`*/30 12-23`) dies at 19:30 ET instead of 23:30, so late West-Coast games never reach their
+# ~2h-before-first-pitch projection gate and go unprojected all day. The `CRON_TZ=` line further
+# down is kept only as a harmless no-op safety net for cronie-based hosts — the host TZ is what
+# actually matters here.
 #
 # ONE-TIME bulk backfill on a fresh box (NOT scheduled below): these only ever ingest the
 # current day incrementally, so a new deploy starts with no history. Without it the workload
@@ -16,7 +27,7 @@
 #   ./deploy/run-ingester.sh refresh-skill-snapshots --season 2024 --start 2024-03-20 --end 2024-10-01
 #   ./deploy/run-ingester.sh refresh-skill-snapshots --season 2025 --start 2025-03-18 --end 2025-10-01
 #   # refresh-pitch-snapshots likewise, where the pitch Statcast cache covers the range.
-CRON_TZ=America/New_York
+CRON_TZ=America/New_York   # no-op on stock Ubuntu cron; see TIMEZONE note above — set the host TZ
 DIAMOND_DIR=/opt/diamond
 # Optional offsite backup target (rclone remote:bucket). When set, backup.sh mirrors each
 # nightly dump there. Configure the rclone remote on the host first (e.g. `rclone config`).
