@@ -98,6 +98,28 @@ def _load_barrel_rates(conn: psycopg.Connection, prior_season: int) -> dict[int,
     return out
 
 
+def barrel_coverage_warning(
+    season: int, n_batters: int, n_with_barrel: int
+) -> str | None:
+    """Loud warning string when prior-season barrel is entirely missing, else None.
+
+    Barrel is the #1 HR feature, but it only reaches the model once the PRIOR season's
+    batted-ball profiles have been aggregated (``_load_barrel_rates`` reads
+    ``batter_batted_ball WHERE season = season - 1``). If every batter is missing it,
+    the HR base rate silently falls back to pure ISO — a regression Brier can't see, so
+    it can rot unnoticed (it did: prod ran ISO-only HR for all of 2026). Emitting a
+    greppable warning with the exact fix makes the gap self-announcing. Pure so it's
+    unit-testable; the caller prints the result.
+    """
+    if n_batters > 0 and n_with_barrel == 0:
+        return (
+            f"[refresh-skills] WARNING: no prior-season ({season - 1}) barrel rates for "
+            f"any of {n_batters} batters — HR base rate falls back to pure ISO. "
+            f"Fix: run `refresh-batted-ball --season {season - 1}`."
+        )
+    return None
+
+
 def _load_pitcher_barrel_allowed(
     conn: psycopg.Connection, prior_season: int
 ) -> dict[tuple[int, str], float]:
@@ -283,6 +305,9 @@ def compute_batter_skill_rows(
     # when no prior exists (debutants) or refresh-priors hasn't run this season.
     priors = _load_priors(conn, season, prior_method)
     barrel_rates = _load_barrel_rates(conn, season - 1)  # prior-season true-talent HR signal
+    _barrel_warn = barrel_coverage_warning(season, len(season_rows), len(barrel_rates))
+    if _barrel_warn:
+        print(_barrel_warn)
 
     rows: list[dict] = []
     for r in season_rows:
