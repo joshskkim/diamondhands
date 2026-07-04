@@ -199,7 +199,8 @@ def _load_outcomes(
             CASE WHEN pgs.home_runs >= 1 THEN 1 ELSE 0 END,
             CASE WHEN pgs.strikeouts>= 1 THEN 1 ELSE 0 END,
             bp.sim_p_hit_1plus, bp.sim_p_hr, bp.sim_p_k_1plus,
-            bbb.barrel_pct, bbb.pulled_air_pct, bbb.sweet_spot_pct, bbb.p90_ev_fbld
+            bbb.barrel_pct, bbb.pulled_air_pct, bbb.sweet_spot_pct, bbb.p90_ev_fbld,
+            bx.xhr_per_bb
         FROM backtest_projections bp
         JOIN games g ON g.id = bp.game_id
         JOIN player_game_stats pgs
@@ -212,6 +213,10 @@ def _load_outcomes(
         LEFT JOIN batter_batted_ball bbb
             ON bbb.player_id = bp.player_id
             AND bbb.season = EXTRACT(YEAR FROM g.game_date)::int - 1
+        -- Learned prior-season true-talent xHR/BB (Phase 2), same leak-free join.
+        LEFT JOIN batter_xhr bx
+            ON bx.player_id = bp.player_id
+            AND bx.season = EXTRACT(YEAR FROM g.game_date)::int - 1
         WHERE bp.backtest_run_id = %s
           AND pgs.game_id IS NOT NULL
           AND bp.p_hit_1plus IS NOT NULL
@@ -233,7 +238,7 @@ def _load_outcomes(
         n_games=int(n_total[1]),
         csv_rows=[],
         sim_hit1=[], sim_hr=[], sim_k=[],
-        hr_rankers={"barrel": [], "pulled_air": [], "sweet_spot": [], "p90_ev": []},
+        hr_rankers={"barrel": [], "pulled_air": [], "sweet_spot": [], "p90_ev": [], "xhr": []},
     )
 
     for row in rows:
@@ -241,7 +246,7 @@ def _load_outcomes(
          exp_hits, game_id, player_id, game_date,
          actual_hits, act_h1, act_h2, act_hr, act_k,
          sim_h1, sim_hr, sim_k,
-         f_barrel, f_pull_air, f_sweet, f_p90) = row
+         f_barrel, f_pull_air, f_sweet, f_p90, f_xhr) = row
 
         out.p_hit1.append(float(pred_h1))
         out.p_hit2.append(float(pred_h2) if pred_h2 is not None else float(pred_h1))
@@ -256,6 +261,7 @@ def _load_outcomes(
         out.hr_rankers["pulled_air"].append(float(f_pull_air) if f_pull_air is not None else None)
         out.hr_rankers["sweet_spot"].append(float(f_sweet) if f_sweet is not None else None)
         out.hr_rankers["p90_ev"].append(float(f_p90) if f_p90 is not None else None)
+        out.hr_rankers["xhr"].append(float(f_xhr) if f_xhr is not None else None)
 
         gid = int(game_id)
         eh = float(exp_hits) if exp_hits is not None else 0.0
@@ -595,12 +601,14 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         print(f"  {name:<10}{_n(auc):>9}{_n(ap):>9}{_n(lift['base_rate']):>8}"
               f"{_n(lift['top_k_rate']):>13}{_n(lift['lift']):>8}")
 
-    # HR gate: does the model out-rank naive prior-season batted-ball features? Scored on
-    # the shared subset of rows that HAVE a prior-season profile (apples-to-apples). Each
-    # raw feature is a leak-free single-number HR ranker; the model must beat all of them.
-    idx = [i for i, b in enumerate(out.hr_rankers["barrel"]) if b is not None]
-    print(f"\nHR gate — model vs naive prior-season feature ranks "
-          f"({len(idx)}/{len(out.p_hr)} rows w/ prior profile; higher=better):")
+    # HR gate: does the model out-rank prior-season HR rankers (naive batted-ball
+    # features + the learned xHR)? Scored on the shared subset where EVERY ranker is
+    # present, so the comparison is apples-to-apples and no metric sees a NULL.
+    _rk_names = list(out.hr_rankers.keys())
+    idx = [i for i in range(len(out.p_hr))
+           if all(out.hr_rankers[nm][i] is not None for nm in _rk_names)]
+    print(f"\nHR gate — model vs prior-season rankers "
+          f"({len(idx)}/{len(out.p_hr)} rows w/ all profiles; higher=better):")
     if idx:
         a_hr = [out.a_hr[i] for i in idx]
         k = max(1, len(idx) // 10)
