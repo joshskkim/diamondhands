@@ -58,6 +58,7 @@ from ingester.commands.tune_prior_blend import (
 )
 from ingester.commands.refresh_bullpen import cmd_refresh_bullpen
 from ingester.commands.refresh_batted_ball import cmd_refresh_batted_ball
+from ingester.commands.refresh_batted_ball_events import cmd_refresh_batted_ball_events
 from ingester.commands.refresh_team_defense import cmd_refresh_team_defense
 from ingester.commands.refresh_bat_tracking import cmd_refresh_bat_tracking
 from ingester.commands.skill_snapshots import cmd_refresh_skill_snapshots
@@ -253,6 +254,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Aggregate per-batter spray / batted-ball profiles from Statcast into batter_batted_ball",
     )
     p_batted.add_argument("--season", type=int, default=CURRENT_SEASON, help="Season year (default: current season)")
+
+    p_bbe = sub.add_parser(
+        "refresh-batted-ball-events",
+        help="Build the per-batted-ball xHR training corpus (batted_ball_events) from Statcast",
+    )
+    p_bbe.add_argument("--season", type=int, default=CURRENT_SEASON, help="Season year (default: current season)")
 
     p_teamdef = sub.add_parser(
         "refresh-team-defense",
@@ -642,6 +649,7 @@ COMMANDS = {
     "tune-prior-blend":         cmd_tune_prior_blend,
     "refresh-bullpen":          cmd_refresh_bullpen,
     "refresh-batted-ball":      cmd_refresh_batted_ball,
+    "refresh-batted-ball-events": cmd_refresh_batted_ball_events,
     "refresh-team-defense":     cmd_refresh_team_defense,
     "refresh-bat-tracking":     cmd_refresh_bat_tracking,
     "refresh-skill-snapshots":  cmd_refresh_skill_snapshots,

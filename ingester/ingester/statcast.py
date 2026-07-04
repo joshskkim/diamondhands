@@ -720,6 +720,60 @@ def agg_batter_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
     return rows
 
 
+def batted_ball_events(chunks: list[pd.DataFrame], season: int) -> list[dict]:
+    """One row per batted ball (measured contact) — the xHR training corpus (Phase 2).
+
+    A batted ball = a pitch with a measured ``launch_speed`` AND ``launch_angle``,
+    which crucially INCLUDES home runs: they carry exit velo / launch angle even when
+    the hit-coordinate is missing, so requiring hc_x/hc_y (as the season aggregator
+    does) would zero out the positive class. ``spray_deg`` is left NULL when the
+    coordinate is absent and the trainer handles it. ``park`` is the home-team code
+    (a stadium proxy). Rebuilt per season (writer does delete-then-insert), so rows
+    carry no natural unique key. Returns DB-ready dicts (NaN/NA already → None).
+    """
+    cols = ["batter", "launch_speed", "launch_angle", "hc_x", "hc_y", "bb_type",
+            "estimated_woba_using_speedangle", "hit_distance_sc", "events",
+            "home_team", "game_pk"]
+    out: list[dict] = []
+    for df in chunks:
+        if df is None or df.empty:
+            continue
+        sub = df[[c for c in cols if c in df.columns]].copy()
+        for c in cols:
+            if c not in sub.columns:
+                sub[c] = np.nan
+        ls = _to_float64(sub["launch_speed"])
+        la = _to_float64(sub["launch_angle"])
+        batter = pd.to_numeric(sub["batter"], errors="coerce")
+        # In play only: bb_type is populated solely for balls in play, so this excludes
+        # tracked FOULS (which carry launch_speed but can never be HR and would bias the
+        # base rate down). HRs are kept explicitly in case bb_type is null on the ball.
+        events = sub["events"].astype("string")
+        in_play = sub["bb_type"].astype("string").notna() | events.eq("home_run")
+        keep = in_play & ls.notna() & la.notna() & batter.notna()
+        sub = sub[keep]
+        if sub.empty:
+            continue
+        spray = _spray_angle_deg(_to_float64(sub["hc_x"]), _to_float64(sub["hc_y"]))
+        res = pd.DataFrame({
+            "season": season,
+            "player_id": pd.to_numeric(sub["batter"], errors="coerce").astype("int64"),
+            "game_pk": pd.to_numeric(sub["game_pk"], errors="coerce").astype("Int64"),
+            "park": sub["home_team"].astype("string"),
+            "launch_speed": _to_float64(sub["launch_speed"]).round(2),
+            "launch_angle": _to_float64(sub["launch_angle"]).round(2),
+            "spray_deg": spray.round(2),
+            "bb_type": sub["bb_type"].astype("string"),
+            "estimated_woba": _to_float64(sub["estimated_woba_using_speedangle"]).round(4),
+            "hit_distance": pd.to_numeric(sub["hit_distance_sc"], errors="coerce").round().astype("Int64"),
+            "is_hr": sub["events"].astype("string").eq("home_run").fillna(False),
+        })
+        # NaN / pandas-NA → None so the rows are directly insertable.
+        res = res.astype(object).where(pd.notna(res), None)
+        out.extend(res.to_dict("records"))
+    return out
+
+
 def agg_pitcher_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
     """
     Aggregate a season's contact-quality-allowed per (pitcher, batter-stand).
