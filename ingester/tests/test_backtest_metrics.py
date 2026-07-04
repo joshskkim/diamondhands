@@ -10,7 +10,15 @@ from ingester.commands.backtest import (
     calibration_buckets,
     mae_per_game,
 )
-from ingester.metrics import crps_count, crps_count_mean, log_loss, sharpness
+from ingester.metrics import (
+    average_precision,
+    crps_count,
+    crps_count_mean,
+    log_loss,
+    roc_auc,
+    sharpness,
+    top_k_lift,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +256,121 @@ class TestCrpsCount:
 
     def test_mean_empty_nan(self):
         assert math.isnan(crps_count_mean([]))
+
+
+# ---------------------------------------------------------------------------
+# roc_auc  (discrimination; validated against sklearn as oracle)
+# ---------------------------------------------------------------------------
+
+class TestRocAuc:
+    def test_empty_returns_nan(self):
+        assert math.isnan(roc_auc([], []))
+
+    def test_single_class_undefined(self):
+        # No negatives (or no positives) → AUC undefined.
+        assert math.isnan(roc_auc([0.2, 0.8], [1, 1]))
+        assert math.isnan(roc_auc([0.2, 0.8], [0, 0]))
+
+    def test_perfect_ranking(self):
+        # Every positive scored above every negative → 1.0
+        assert roc_auc([0.1, 0.2, 0.8, 0.9], [0, 0, 1, 1]) == pytest.approx(1.0)
+
+    def test_inverted_ranking(self):
+        assert roc_auc([0.9, 0.8, 0.2, 0.1], [0, 0, 1, 1]) == pytest.approx(0.0)
+
+    def test_ties_count_as_half(self):
+        # One positive, one negative at the same score → AUC = 0.5
+        assert roc_auc([0.5, 0.5], [1, 0]) == pytest.approx(0.5)
+
+    def test_matches_sklearn_oracle(self):
+        sk = pytest.importorskip("sklearn.metrics")
+        import random
+        rng = random.Random(42)
+        preds = [rng.random() for _ in range(200)]
+        # ~15% base rate, correlated with preds so it isn't degenerate
+        actual = [1 if (p + rng.uniform(-0.3, 0.3)) > 0.75 else 0 for p in preds]
+        if 0 < sum(actual) < len(actual):
+            assert roc_auc(preds, actual) == pytest.approx(
+                sk.roc_auc_score(actual, preds), rel=1e-9
+            )
+
+    def test_matches_sklearn_with_ties(self):
+        sk = pytest.importorskip("sklearn.metrics")
+        import random
+        rng = random.Random(7)
+        # Coarse grid forces many ties.
+        preds = [rng.choice([0.1, 0.2, 0.2, 0.5, 0.5, 0.5, 0.9]) for _ in range(300)]
+        actual = [rng.choice([0, 0, 0, 0, 1]) for _ in range(300)]
+        assert roc_auc(preds, actual) == pytest.approx(
+            sk.roc_auc_score(actual, preds), rel=1e-9
+        )
+
+
+# ---------------------------------------------------------------------------
+# average_precision  (PR-AUC; validated against sklearn as oracle)
+# ---------------------------------------------------------------------------
+
+class TestAveragePrecision:
+    def test_empty_returns_nan(self):
+        assert math.isnan(average_precision([], []))
+
+    def test_no_positives_nan(self):
+        assert math.isnan(average_precision([0.2, 0.8], [0, 0]))
+
+    def test_perfect_ranking_is_one(self):
+        assert average_precision([0.1, 0.2, 0.8, 0.9], [0, 0, 1, 1]) == pytest.approx(1.0)
+
+    def test_matches_sklearn_oracle(self):
+        sk = pytest.importorskip("sklearn.metrics")
+        import random
+        rng = random.Random(123)
+        preds = [rng.random() for _ in range(200)]
+        actual = [1 if (p + rng.uniform(-0.3, 0.3)) > 0.75 else 0 for p in preds]
+        if sum(actual) > 0:
+            assert average_precision(preds, actual) == pytest.approx(
+                sk.average_precision_score(actual, preds), rel=1e-9
+            )
+
+    def test_matches_sklearn_with_ties(self):
+        sk = pytest.importorskip("sklearn.metrics")
+        import random
+        rng = random.Random(99)
+        preds = [rng.choice([0.1, 0.4, 0.4, 0.4, 0.8]) for _ in range(300)]
+        actual = [rng.choice([0, 0, 0, 1]) for _ in range(300)]
+        if sum(actual) > 0:
+            assert average_precision(preds, actual) == pytest.approx(
+                sk.average_precision_score(actual, preds), rel=1e-9
+            )
+
+
+# ---------------------------------------------------------------------------
+# top_k_lift
+# ---------------------------------------------------------------------------
+
+class TestTopKLift:
+    def test_empty_returns_nan_fields(self):
+        r = top_k_lift([], [], 5)
+        assert math.isnan(r["lift"]) and r["k"] == 0
+
+    def test_k_clamped_to_n(self):
+        r = top_k_lift([0.1, 0.9], [0, 1], 10)
+        assert r["k"] == 2
+
+    def test_perfect_concentration(self):
+        # base rate 0.25; top-1 is the lone positive → rate 1.0 → lift 4.0
+        r = top_k_lift([0.9, 0.1, 0.2, 0.3], [1, 0, 0, 0], 1)
+        assert r["base_rate"] == pytest.approx(0.25)
+        assert r["top_k_rate"] == pytest.approx(1.0)
+        assert r["lift"] == pytest.approx(4.0)
+
+    def test_no_skill_lift_one(self):
+        # Uniform outcomes → top-k rate equals base rate → lift 1.0
+        r = top_k_lift([0.4, 0.3, 0.2, 0.1], [1, 0, 1, 0], 2)
+        assert r["lift"] == pytest.approx(1.0)
+
+    def test_zero_base_rate_lift_nan(self):
+        r = top_k_lift([0.9, 0.1], [0, 0], 1)
+        assert math.isnan(r["lift"])
 
 
 # ---------------------------------------------------------------------------

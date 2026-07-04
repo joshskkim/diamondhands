@@ -47,9 +47,11 @@ def cmd_refresh_batted_ball(args: argparse.Namespace) -> None:
                 INSERT INTO batter_batted_ball (
                     player_id, season, bip, pull_pct, center_pct, oppo_pct,
                     gb_pct, ld_pct, fb_pct, pu_pct,
-                    avg_launch_speed, avg_launch_angle, hard_hit_pct, barrel_pct, updated_at
+                    avg_launch_speed, avg_launch_angle, hard_hit_pct, barrel_pct,
+                    pulled_air_pct, sweet_spot_pct, p90_ev_fbld, updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, NOW())
                 ON CONFLICT (player_id, season) DO UPDATE SET
                     bip = EXCLUDED.bip,
                     pull_pct = EXCLUDED.pull_pct, center_pct = EXCLUDED.center_pct,
@@ -59,6 +61,9 @@ def cmd_refresh_batted_ball(args: argparse.Namespace) -> None:
                     avg_launch_speed = EXCLUDED.avg_launch_speed,
                     avg_launch_angle = EXCLUDED.avg_launch_angle,
                     hard_hit_pct = EXCLUDED.hard_hit_pct, barrel_pct = EXCLUDED.barrel_pct,
+                    pulled_air_pct = EXCLUDED.pulled_air_pct,
+                    sweet_spot_pct = EXCLUDED.sweet_spot_pct,
+                    p90_ev_fbld = EXCLUDED.p90_ev_fbld,
                     updated_at = NOW()
                 """,
                 (
@@ -66,6 +71,7 @@ def cmd_refresh_batted_ball(args: argparse.Namespace) -> None:
                     r["oppo_pct"], r["gb_pct"], r["ld_pct"], r["fb_pct"], r["pu_pct"],
                     r["avg_launch_speed"], r["avg_launch_angle"], r["hard_hit_pct"],
                     r["barrel_pct"],
+                    r["pulled_air_pct"], r["sweet_spot_pct"], r["p90_ev_fbld"],
                 ),
             )
             written += 1

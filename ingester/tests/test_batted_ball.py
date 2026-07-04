@@ -64,6 +64,33 @@ class TestBattedBallAgg(unittest.TestCase):
         self.assertEqual(agg_batter_batted_ball([]), [])
         self.assertEqual(agg_batter_batted_ball([pd.DataFrame()]), [])
 
+    def test_pulled_air_and_sweet_spot(self) -> None:
+        # RHB (LF=pull). Only a pulled fly ball counts as pulled-air.
+        df = pd.DataFrame([
+            _row(10, "R", 70, 100, bb_type="fly_ball", la=25),     # pull + air + sweet
+            _row(10, "R", 70, 100, bb_type="ground_ball", la=5),   # pull, not air, not sweet
+            _row(10, "R", 180, 100, bb_type="fly_ball", la=25),    # oppo air, sweet, NOT pulled-air
+            _row(10, "R", 125.42, 95, bb_type="line_drive", la=15),  # center, sweet
+        ])
+        r = self._by_id(agg_batter_batted_ball([df]))[10]
+        self.assertEqual(r["bip"], 4)
+        self.assertAlmostEqual(r["pulled_air_pct"], 0.25, places=3)  # only row 1
+        self.assertAlmostEqual(r["sweet_spot_pct"], 0.75, places=3)  # rows 1,3,4 (la in 8-32)
+        # only 3 air balls (< 10) → p90 is null
+        self.assertIsNone(r["p90_ev_fbld"])
+
+    def test_p90_ev_fbld_needs_min_sample(self) -> None:
+        # 9 fly balls → below the 10-ball floor → null.
+        nine = [_row(11, "R", 70, 100, bb_type="fly_ball", ev=95.0) for _ in range(9)]
+        r9 = self._by_id(agg_batter_batted_ball([pd.DataFrame(nine)]))[11]
+        self.assertIsNone(r9["p90_ev_fbld"])
+
+        # 10 air balls (FB/LD) with EV 90..99 → p90 = 98.1 (linear interpolation).
+        evs = list(range(90, 100))
+        ten = [_row(12, "R", 70, 100, bb_type="fly_ball", ev=float(e)) for e in evs]
+        r10 = self._by_id(agg_batter_batted_ball([pd.DataFrame(ten)]))[12]
+        self.assertAlmostEqual(r10["p90_ev_fbld"], 98.1, places=2)
+
 
 if __name__ == "__main__":
     unittest.main()

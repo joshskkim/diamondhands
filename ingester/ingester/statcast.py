@@ -611,8 +611,12 @@ def agg_batter_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
     needed = ["batter", "stand", "launch_speed", "launch_angle",
               "hc_x", "hc_y", "bb_type", "launch_speed_angle"]
     acc: dict[int, dict] = {}
+    # p90 EV on FB/LD can't be summed incrementally — collect the raw per-ball EV
+    # list per batter and take the percentile once at the end (plan Phase 1).
+    fbld_ev: dict[int, list[float]] = {}
     sum_keys = ("bip", "pull", "center", "oppo", "gb", "ld", "fb", "pu",
-                "ev_sum", "la_sum", "ev_cnt", "la_cnt", "hard", "barrel")
+                "ev_sum", "la_sum", "ev_cnt", "la_cnt", "hard", "barrel",
+                "pull_air", "sweet")
 
     for df in chunks:
         if df is None or df.empty:
@@ -646,18 +650,25 @@ def agg_batter_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
         center = ~(pull | oppo)
         bb = sub["bb_type"].astype(str)
         lsa = _to_float64(sub["launch_speed_angle"])
+        fb_np = bb.eq("fly_ball").to_numpy()
+        ld_np = bb.eq("line_drive").to_numpy()
+        # 66% of HRs are pulled fly balls; 8-32° is the launch-angle sweet spot.
+        pull_air = (pull & fb_np)
+        sweet = ((la >= 8) & (la <= 32)).fillna(False).to_numpy()
 
         per = pd.DataFrame({
             "batter": sub["batter"].astype("int64").to_numpy(),
             "pull": pull.astype(int), "center": center.astype(int), "oppo": oppo.astype(int),
             "gb": bb.eq("ground_ball").astype(int).to_numpy(),
-            "ld": bb.eq("line_drive").astype(int).to_numpy(),
-            "fb": bb.eq("fly_ball").astype(int).to_numpy(),
+            "ld": ld_np.astype(int),
+            "fb": fb_np.astype(int),
             "pu": bb.eq("popup").astype(int).to_numpy(),
             "ev_sum": ev.fillna(0.0).to_numpy(), "ev_cnt": ev.notna().astype(int).to_numpy(),
             "la_sum": la.fillna(0.0).to_numpy(), "la_cnt": la.notna().astype(int).to_numpy(),
             "hard": (ev >= 95).fillna(False).astype(int).to_numpy(),
             "barrel": (lsa == 6).fillna(False).astype(int).to_numpy(),
+            "pull_air": pull_air.astype(int),
+            "sweet": sweet.astype(int),
         })
         per["bip"] = 1
         grp = per.groupby("batter").sum()
@@ -666,12 +677,28 @@ def agg_batter_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
             for k in sum_keys:
                 d[k] += float(row[k])
 
+        # Accumulate raw EV on air balls (FB + LD) for the end-of-run p90.
+        fbld_mask = (fb_np | ld_np) & ev.notna().to_numpy()
+        if fbld_mask.any():
+            bat_np = sub["batter"].astype("int64").to_numpy()
+            ev_np = ev.to_numpy()
+            for b, e in zip(bat_np[fbld_mask], ev_np[fbld_mask]):
+                fbld_ev.setdefault(int(b), []).append(float(e))
+
     def _pct(num: float, den: float) -> float | None:
         return round(num / den, 4) if den > 0 else None
+
+    # p90 EV on air balls needs a minimum sample or the percentile is pure noise.
+    _MIN_FBLD_FOR_P90 = 10
 
     rows: list[dict] = []
     for bid, d in acc.items():
         bip = int(d["bip"])
+        ev_list = fbld_ev.get(bid, [])
+        p90_ev_fbld = (
+            round(float(np.percentile(ev_list, 90)), 2)
+            if len(ev_list) >= _MIN_FBLD_FOR_P90 else None
+        )
         rows.append({
             "player_id": bid,
             "bip": bip,
@@ -686,6 +713,9 @@ def agg_batter_batted_ball(chunks: list[pd.DataFrame]) -> list[dict]:
             "avg_launch_angle": round(d["la_sum"] / d["la_cnt"], 2) if d["la_cnt"] > 0 else None,
             "hard_hit_pct": _pct(d["hard"], bip),
             "barrel_pct": _pct(d["barrel"], bip),
+            "pulled_air_pct": _pct(d["pull_air"], bip),
+            "sweet_spot_pct": _pct(d["sweet"], bip),
+            "p90_ev_fbld": p90_ev_fbld,
         })
     return rows
 
