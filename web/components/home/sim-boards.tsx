@@ -5,11 +5,18 @@ import { useQuery } from '@tanstack/react-query'
 import { mostLikelyQueryOptions, todayGamesQueryOptions } from '@/lib/api'
 import type { MostLikely } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { nrfiOutcome, runLineOutcome, totalLeanOutcome, type PickOutcome } from '@/lib/picks'
+import {
+  liveNrfiOutcome,
+  liveTotalOutcome,
+  nrfiOutcome,
+  runLineOutcome,
+  totalLeanOutcome,
+  type PickOutcome,
+} from '@/lib/picks'
 import { BoardCard, Rank } from './pick-boards'
 import { OutcomeBadge } from './outcome-badge'
 
-// Final scores + first-inning runs per game, for live ✓/✗ grading of the sim leans.
+// Final scores + first-inning runs (and live state) per game, for live ✓/✗ grading.
 interface GameResult {
   finalHome: number | null
   finalAway: number | null
@@ -17,6 +24,12 @@ interface GameResult {
   away1st: number | null
   homeAbbr: string
   awayAbbr: string
+  liveTotal: number | null
+  liveHome: number | null
+  liveAway: number | null
+  liveCurrentInning: number | null
+  isFinal: boolean
+  isLive: boolean
 }
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -80,7 +93,10 @@ function TotalsCard({ data, games }: { data: MostLikely['totals']; games: Map<nu
       {rows.length === 0 && <Empty />}
       {rows.map((t, i) => {
         const g = games.get(t.gameId)
-        const outcome = totalLeanOutcome(t.lean, t.bookLine, g?.finalHome ?? null, g?.finalAway ?? null)
+        const lean = t.lean === 'over' || t.lean === 'under' ? t.lean : null
+        const outcome =
+          totalLeanOutcome(t.lean, t.bookLine, g?.finalHome ?? null, g?.finalAway ?? null) ??
+          liveTotalOutcome(lean, t.bookLine, g?.liveTotal, g?.isFinal ?? false)
         return (
         <div key={t.gameId} className="flex items-center gap-3 px-4 py-2 hover:bg-white/[0.03] transition-colors">
           <Rank n={i + 1} />
@@ -126,7 +142,8 @@ function RunLineCard({ data, games }: { data: MostLikely['runLine']; games: Map<
       {rows.map((r, i) => {
         const g = games.get(r.gameId)
         const outcome = g
-          ? runLineOutcome(r.favorite === g.homeAbbr, g.finalHome, g.finalAway)
+          ? runLineOutcome(r.favorite === g.homeAbbr, g.finalHome, g.finalAway) ??
+            (g.isLive ? 'live' : undefined)
           : undefined
         return (
         <div key={r.gameId} className="flex items-center gap-3 px-4 py-2 hover:bg-white/[0.03] transition-colors">
@@ -167,7 +184,9 @@ function NrfiCard({ data, games }: { data: MostLikely['nrfi']; games: Map<number
       {rows.length === 0 && <Empty />}
       {rows.map((n, i) => {
         const g = games.get(n.gameId)
-        const outcome = nrfiOutcome(n.lean, g?.home1st ?? null, g?.away1st ?? null)
+        const outcome =
+          nrfiOutcome(n.lean, g?.home1st ?? null, g?.away1st ?? null) ??
+          liveNrfiOutcome(n.lean, g?.liveHome, g?.liveAway, g?.liveCurrentInning, g?.isFinal ?? false)
         return (
         <div key={n.gameId} className="flex items-center gap-3 px-4 py-2 hover:bg-white/[0.03] transition-colors">
           <Rank n={i + 1} />
@@ -195,30 +214,72 @@ function NrfiCard({ data, games }: { data: MostLikely['nrfi']; games: Map<number
   )
 }
 
+function SimBoardsSkeleton() {
+  return (
+    <section className="mb-10">
+      <h2 className="text-sm font-semibold tracking-tight text-zinc-100 mb-1">Sim Signals</h2>
+      <p className="text-zinc-500 text-xs mb-3">
+        Monte-Carlo game-simulator leans — totals vs the book line, the ±1.5 run line, and
+        first-inning runs. Top {N} per market.
+      </p>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div
+            key={i}
+            className="rounded-xl border border-white/10 bg-[#0e1015] p-4 space-y-2.5"
+          >
+            <div className="h-4 w-32 animate-pulse rounded bg-white/5" />
+            <div className="h-3 w-48 animate-pulse rounded bg-white/5" />
+            {Array.from({ length: N }).map((_, r) => (
+              <div key={r} className="h-7 w-full animate-pulse rounded bg-white/5" />
+            ))}
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 /**
  * The game-sim leans that used to live on the standalone Most Likely page,
  * condensed into one section of Today's Board. Renders nothing until the sim
  * has produced output for the slate.
  */
 export function SimBoards() {
-  const { data } = useQuery(mostLikelyQueryOptions())
+  const { data, isPending } = useQuery(mostLikelyQueryOptions())
   // Reuse the home page's today-games query (final scores + first-inning runs) to grade
   // each lean ✓/✗ once its game is final — same source the projected-favorites badge uses.
   const { data: games } = useQuery(todayGamesQueryOptions())
   const gamesById = new Map<number, GameResult>(
-    (games ?? []).map((g) => [
-      g.gameId,
-      {
-        finalHome: g.finalHomeScore,
-        finalAway: g.finalAwayScore,
-        home1st: g.finalHomeFirstInningRuns,
-        away1st: g.finalAwayFirstInningRuns,
-        homeAbbr: g.home.abbr,
-        awayAbbr: g.away.abbr,
-      },
-    ]),
+    (games ?? []).map((g) => {
+      const isFinal = g.finalHomeScore != null && g.finalAwayScore != null
+      const liveTotal =
+        g.liveHomeScore != null && g.liveAwayScore != null
+          ? g.liveHomeScore + g.liveAwayScore
+          : null
+      return [
+        g.gameId,
+        {
+          finalHome: g.finalHomeScore,
+          finalAway: g.finalAwayScore,
+          home1st: g.finalHomeFirstInningRuns,
+          away1st: g.finalAwayFirstInningRuns,
+          homeAbbr: g.home.abbr,
+          awayAbbr: g.away.abbr,
+          liveTotal,
+          liveHome: g.liveHomeScore,
+          liveAway: g.liveAwayScore,
+          liveCurrentInning: g.liveCurrentInning,
+          isFinal,
+          isLive: !isFinal && (g.status === 'Live' || liveTotal != null),
+        },
+      ]
+    }),
   )
 
+  // While the sim loads, hold the section's shape with skeletons so the page
+  // below doesn't jump when the boards arrive.
+  if (isPending) return <SimBoardsSkeleton />
   if (!data) return null
   if (data.totals.length === 0 && data.runLine.length === 0 && data.nrfi.length === 0) return null
 

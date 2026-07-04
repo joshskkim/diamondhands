@@ -22,4 +22,11 @@ public class ResultsService {
         return new PlayerResultsResponse(
             date.toString(), repo.findBatters(date), repo.findPitchers(date));
     }
+
+    /** In-progress counts from player_game_live. Uncached — it must reflect the latest tick
+     *  (the table is rewritten every ~30s while games are live) and the read is cheap. */
+    public PlayerResultsResponse livePlayerResults(LocalDate date) {
+        return new PlayerResultsResponse(
+            date.toString(), repo.findLiveBatters(date), repo.findLivePitchers(date));
+    }
 }

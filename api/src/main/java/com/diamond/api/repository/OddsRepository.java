@@ -173,6 +173,38 @@ public class OddsRepository {
         }, date);
     }
 
+    // ── Analyst verdicts for the slate (the promotion gate, see V64) ──
+    // Keyed by selection identity (line excluded, like model_picks/pick_verdicts identity) so a
+    // line move keeps the verdict. The board joins this to gate + annotate; a missing key means
+    // "not vetted" (show mechanically).
+    public record VerdictRow(String verdict, Double confidence, String rationale) {}
+
+    private static final String PICK_VERDICTS_SQL = """
+        SELECT game_id, market, side, player_id, verdict, confidence, rationale
+        FROM pick_verdicts
+        WHERE slate_date = ?
+        """;
+
+    public Map<String, VerdictRow> findPickVerdictsByDate(LocalDate date) {
+        return jdbc.query(PICK_VERDICTS_SQL, rs -> {
+            Map<String, VerdictRow> out = new HashMap<>();
+            while (rs.next()) {
+                Integer pid = rs.getObject("player_id") == null ? null : rs.getInt("player_id");
+                String key = verdictKey(rs.getLong("game_id"), rs.getString("market"),
+                    rs.getString("side"), pid);
+                BigDecimal conf = rs.getBigDecimal("confidence");
+                out.put(key, new VerdictRow(rs.getString("verdict"),
+                    conf == null ? null : conf.doubleValue(), rs.getString("rationale")));
+            }
+            return out;
+        }, date);
+    }
+
+    /** Selection key for joining a verdict onto a best-play row (line excluded). */
+    public static String verdictKey(long gameId, String market, String side, Integer playerId) {
+        return gameId + ":" + market + ":" + side + ":" + (playerId == null ? "" : playerId);
+    }
+
     // ── slate-wide batter prop over-prices, one row per game+player+market ──
     // Best (highest decimal = best for the bettor) price across the books we ingest
     // (FanDuel / DraftKings / Fanatics). We no longer pin a single preferred book.

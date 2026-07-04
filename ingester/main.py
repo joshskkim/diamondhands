@@ -33,6 +33,7 @@ from ingester.commands.daily import cmd_daily
 from ingester.commands.odds import cmd_refresh_odds
 from ingester.commands.lineups import cmd_backfill_lineups, cmd_refresh_lineups
 from ingester.commands.scores import cmd_backfill_scores
+from ingester.commands.live import cmd_live_refresh
 from ingester.commands.backfill_pitcher_starts import cmd_backfill_pitcher_starts
 from ingester.commands.backfill_batter_lines import cmd_backfill_batter_lines
 from ingester.commands.backfill_weather import cmd_backfill_weather
@@ -40,6 +41,7 @@ from ingester.commands.refresh_weather import cmd_refresh_weather
 from ingester.commands.refresh_umpires import cmd_refresh_umpires
 from ingester.commands.refresh_skills import cmd_refresh_skills
 from ingester.commands.refresh_priors import cmd_refresh_priors
+from ingester.commands.refresh_pitcher_priors import cmd_refresh_pitcher_priors
 from ingester.commands.backfill_birthdates import cmd_backfill_birthdates
 from ingester.commands.ingest_steamer import cmd_ingest_steamer
 from ingester.commands.refresh_projections import (
@@ -66,6 +68,10 @@ from ingester.commands.pitch_aggregations import (
 from ingester.commands.backtest import cmd_backtest
 from ingester.commands.accuracy import cmd_compute_accuracy
 from ingester.commands.picks import cmd_record_picks, cmd_score_picks
+from ingester.commands.briefing import cmd_daily_briefing
+from agent_eval.score_recs import cmd_score_agent_recs
+from agent_eval.runner import cmd_agent_eval
+from agent_eval.compare import cmd_compare_evals
 from ingester.ml.dataset import cmd_build_training_data
 from ingester.ml.train import cmd_train_xgb, cmd_tune_blend
 from ingester.ml.perpa import cmd_train_pa
@@ -199,6 +205,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Compute Marcel-style multi-year true-talent priors into batter_projection_prior",
     )
     p_priors.add_argument("--season", type=int, default=2026, help="Target season year (default: 2026)")
+
+    p_pitcher_priors = sub.add_parser(
+        "refresh-pitcher-priors",
+        help="Compute Marcel-style multi-year true-talent priors into pitcher_projection_prior (Lever 4)",
+    )
+    p_pitcher_priors.add_argument("--season", type=int, default=2026, help="Target season year (default: 2026)")
 
     p_projections = sub.add_parser(
         "refresh-projections",
@@ -354,6 +366,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_bf_scores.add_argument("--start", metavar="YYYY-MM-DD", type=_date_arg, required=True)
     p_bf_scores.add_argument("--end", metavar="YYYY-MM-DD", type=_date_arg, required=True)
 
+    p_live = sub.add_parser(
+        "live-refresh",
+        help="High-cadence in-game state (running score + inning) into games.live_*",
+    )
+    p_live.add_argument("--date", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+                        help="Slate date (default: today, Eastern)")
+    p_live.add_argument("--loop", action="store_true", default=False,
+                        help="Poll repeatedly for a bounded window instead of a single tick")
+    p_live.add_argument("--for-minutes", type=int, default=30, dest="for_minutes",
+                        help="With --loop: total minutes to keep polling (default 30)")
+    p_live.add_argument("--interval-seconds", type=int, default=30, dest="interval_seconds",
+                        help="With --loop: seconds between ticks (default 30)")
+
     p_bf_starts = sub.add_parser(
         "backfill-pitcher-starts",
         help="Backfill per-start pitcher workload lines (outs/BF/K/ER/pitches) from boxscores",
@@ -500,6 +525,51 @@ def build_parser() -> argparse.ArgumentParser:
         help="Slate date to score (default: yesterday in US/Eastern)",
     )
 
+    # ── Diamond Analyst (agent) ──────────────────────────────────────────────
+    p_score_recs = sub.add_parser(
+        "score-agent-recs",
+        help="Grade agent recommendations + user bets vs actuals (reuses score-picks machinery)",
+    )
+    p_score_recs.add_argument(
+        "--date", metavar="YYYY-MM-DD", type=_date_arg, default=None,
+        help="Slate date to score (default: yesterday in US/Eastern)",
+    )
+
+    p_agent_eval = sub.add_parser(
+        "agent-eval",
+        help="Run the agent over a golden dataset: faithfulness + trajectory (gated) + outcome",
+    )
+    p_agent_eval.add_argument(
+        "--golden", default="agent_eval/golden", help="Directory of golden case JSON files")
+    p_agent_eval.add_argument(
+        "--layer", choices=["all", "faithfulness", "trajectory", "outcome"], default="all",
+        help="Which layer(s) to run (default all; 'outcome' only aggregates graded recs)")
+    p_agent_eval.add_argument(
+        "--api", default=None, help="Agent API base URL (default: DIAMOND_API_URL or localhost)")
+    p_agent_eval.add_argument(
+        "--since-days", type=int, default=None, dest="since_days",
+        help="Limit the outcome aggregation to this many recent days")
+    p_agent_eval.add_argument(
+        "--label", default=None,
+        help="Tag this run with a config name (e.g. 'pro-judge') for compare-evals A/B")
+    p_agent_eval.add_argument(
+        "--replay", default=None, metavar="DIR",
+        help="Hermetic mode: score recorded cassettes in DIR (no LLM/API/DB) — the CI gate")
+    p_agent_eval.add_argument(
+        "--record", default=None, metavar="DIR",
+        help="In live mode, save each run as a cassette in DIR for later --replay")
+
+    p_compare_evals = sub.add_parser(
+        "compare-evals", help="A/B agent-eval runs: latest run per config label, side by side")
+    p_compare_evals.add_argument(
+        "--limit", type=int, default=50, help="How many recent eval runs to scan")
+
+    p_briefing = sub.add_parser(
+        "daily-briefing", help="Post a proactive recap (yesterday's results + tonight's pick) to Discord")
+    p_briefing.add_argument("--webhook", default=None, help="Discord webhook URL (default: DISCORD_WEBHOOK_URL)")
+    p_briefing.add_argument("--no-agent", action="store_true", default=False, dest="no_agent",
+                            help="Skip the LLM recap; post the templated summary only")
+
     sub.add_parser("smoke",        help="DB connectivity sanity check")
     sub.add_parser("smoke-skills", help="Print top batters/pitchers from skill tables")
     p_smoke_slate    = sub.add_parser("smoke-slate",    help="Print today's slate with weather and probables")
@@ -556,6 +626,7 @@ COMMANDS = {
     "refresh-lineups":          cmd_refresh_lineups,
     "backfill-lineups":         cmd_backfill_lineups,
     "backfill-scores":          cmd_backfill_scores,
+    "live-refresh":             cmd_live_refresh,
     "backfill-pitcher-starts":  cmd_backfill_pitcher_starts,
     "backfill-batter-lines":    cmd_backfill_batter_lines,
     "backfill-weather":         cmd_backfill_weather,
@@ -563,6 +634,7 @@ COMMANDS = {
     "refresh-umpires":          cmd_refresh_umpires,
     "refresh-skills":           cmd_refresh_skills,
     "refresh-priors":           cmd_refresh_priors,
+    "refresh-pitcher-priors":   cmd_refresh_pitcher_priors,
     "backfill-birthdates":      cmd_backfill_birthdates,
     "ingest-steamer":           cmd_ingest_steamer,
     "refresh-projections":      cmd_refresh_projections,
@@ -589,6 +661,10 @@ COMMANDS = {
     "compute-accuracy":         cmd_compute_accuracy,
     "record-picks":             cmd_record_picks,
     "score-picks":              cmd_score_picks,
+    "score-agent-recs":         cmd_score_agent_recs,
+    "agent-eval":               cmd_agent_eval,
+    "compare-evals":            cmd_compare_evals,
+    "daily-briefing":           cmd_daily_briefing,
     "smoke":                    cmd_smoke,
     "smoke-skills":             cmd_smoke_skills,
     "smoke-slate":              cmd_smoke_slate,

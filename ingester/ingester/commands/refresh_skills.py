@@ -23,10 +23,13 @@ from ingester.projection.constants import (
     LEAGUE_XWOBA,
     L30_MIN_PA,
     MIN_PA_BATTER_SEASON,
+    PITCHER_HIT_DELUCK_W,
+    PITCHER_PRIOR_ENABLED,
     REGRESSION_K_BF,
     REGRESSION_K_PA,
     REGRESSION_K_PA_L30,
 )
+from ingester.projection.pitcher_prior import PitcherPrior
 from ingester.projection.prior import ProjectionPrior
 from ingester.statcast import (
     _terminal_pa,
@@ -53,7 +56,22 @@ def _regress(raw: float | None, league: float, weight_player: float) -> float:
     return round(weight_player * raw + (1.0 - weight_player) * league, 4)
 
 
+def _deluck_hits(raw_hits: float | None, xba: float | None) -> float | None:
+    """Blend raw hits-allowed toward xBA (Lever 5), BEFORE the league/prior regression.
+
+    Off (weight 0) or missing xBA → raw hits unchanged. Applied pre-regression so the
+    existing league shrinkage still runs on top — the OOS proof showed xBA is additive
+    that way but loses if it replaces the league regression (pitcher hits are low-control).
+    """
+    if raw_hits is None or xba is None or PITCHER_HIT_DELUCK_W <= 0.0:
+        return raw_hits
+    return (1.0 - PITCHER_HIT_DELUCK_W) * raw_hits + PITCHER_HIT_DELUCK_W * xba
+
+
 BARREL_REGRESSION_BIP = 50  # barrels stabilise ~50 batted balls (gate-fit prior weight)
+# Heavier than the batter constant: the pitcher barrel-allowed split is per
+# handedness (thinner), so a thin (pitcher, hand) sample reverts harder to league.
+PITCHER_BARREL_REGRESSION_BIP = 75
 
 
 def _load_barrel_rates(conn: psycopg.Connection, prior_season: int) -> dict[int, float]:
@@ -77,6 +95,59 @@ def _load_barrel_rates(conn: psycopg.Connection, prior_season: int) -> dict[int,
             n + BARREL_REGRESSION_BIP
         )
         out[int(pid)] = round(reg, 4)
+    return out
+
+
+def _load_pitcher_barrel_allowed(
+    conn: psycopg.Connection, prior_season: int
+) -> dict[tuple[int, str], float]:
+    """Prior-season barrel-allowed per (pitcher, batter-hand), EB-regressed to league.
+
+    The pitcher-side mirror of ``_load_barrel_rates`` (Lever 1) — a true-talent HR
+    signal blended into the pitcher.hr multiplier. Strictly prior-season, so it's
+    leak-free for both the backtest (2024 → 2025) and live (2025 → 2026). Empty for
+    seasons before pitcher_batted_ball is populated → callers leave barrel_allowed
+    NULL and the model falls back to the realized-HR basis. Regresses harder than the
+    batter loader (PITCHER_BARREL_REGRESSION_BIP) because the handedness split is thin.
+    """
+    rows = conn.execute(
+        "SELECT player_id, vs_handedness, barrel_pct, bip "
+        "FROM pitcher_batted_ball WHERE season = %s",
+        (prior_season,),
+    ).fetchall()
+    out: dict[tuple[int, str], float] = {}
+    for pid, hand, barrel, bip in rows:
+        if barrel is None or not bip:
+            continue
+        n = float(bip)
+        reg = (float(barrel) * n + LEAGUE_BARREL_RATE * PITCHER_BARREL_REGRESSION_BIP) / (
+            n + PITCHER_BARREL_REGRESSION_BIP
+        )
+        out[(int(pid), str(hand))] = round(reg, 4)
+    return out
+
+
+def _load_pitcher_priors(
+    conn: psycopg.Connection, season: int, method: str = "marcel"
+) -> dict[int, PitcherPrior]:
+    """Per-pitcher Marcel true-talent priors for ``season`` (Lever 4), by player_id."""
+    rows = conn.execute(
+        """
+        SELECT player_id, proj_k_rate, proj_bb_rate, proj_hr_per_pa,
+               proj_hits_per_pa, proj_bf
+        FROM pitcher_projection_prior
+        WHERE season = %s AND method = %s
+        """,
+        (season, method),
+    ).fetchall()
+    out: dict[int, PitcherPrior] = {}
+    for pid, k, bb, hr, hits, bf in rows:
+        if k is None or bb is None or hr is None or hits is None:
+            continue
+        out[int(pid)] = PitcherPrior(
+            k_rate=float(k), bb_rate=float(bb), hr_per_pa=float(hr),
+            hits_per_pa=float(hits), proj_bf=int(bf or 0),
+        )
     return out
 
 
@@ -293,12 +364,19 @@ def compute_pitcher_skill_rows(
     season: int,
     all_pa: list[pd.DataFrame],
     cutoff_date: date | None = None,
+    priors: dict[int, PitcherPrior] | None = None,
 ) -> list[dict]:
     """
     Compute pitcher_skill rows from pre-loaded Statcast PA DataFrames.
 
     When cutoff_date is given, only PAs with game_date < cutoff_date are used
     (point-in-time semantics).  When None, all provided data is used.
+
+    ``priors`` (Lever 4): per-pitcher Marcel true-talent prior. When supplied AND
+    DIAMOND_PITCHER_PRIOR_ENABLED is set, each in-season allowed rate regresses
+    toward the pitcher's prior instead of the flat league mean (HR's prior ≈ league
+    by design). Omitting it, or the flag being off, reproduces the league-mean
+    behaviour exactly. xwOBA/wOBA-against have no prior modeled → always league.
 
     Returns a list of dicts (one per pitcher×hand) ready for upsert, each
     containing a 'season' key.
@@ -315,17 +393,25 @@ def compute_pitcher_skill_rows(
     else:
         filtered = [pa for pa in all_pa if not pa.empty]
 
+    use_prior = PITCHER_PRIOR_ENABLED and priors is not None
     ph_rows = agg_pitcher_vs_handedness(filtered)
     ph_rows = [r for r in ph_rows if r["batters_faced"] >= MIN_BF_PITCHER]
     for r in ph_rows:
-        # Regress each pitcher×hand rate toward the league mean by batters faced.
+        # Regress each pitcher×hand rate toward the prior (Lever 4) or league mean by BF.
         weight = r["batters_faced"] / (r["batters_faced"] + REGRESSION_K_BF)
+        prior = priors.get(r["player_id"]) if use_prior else None
+        tgt_k = prior.k_rate if prior else LEAGUE_K_PER_PA
+        tgt_bb = prior.bb_rate if prior else LEAGUE_BB_PER_PA
+        tgt_hr = prior.hr_per_pa if prior else LEAGUE_HR_PER_PA
+        tgt_hits = prior.hits_per_pa if prior else LEAGUE_HIT_PER_PA
         r["xwoba_against"] = _regress(r["xwoba_against"], LEAGUE_XWOBA, weight)
         r["woba_against"] = _regress(r["woba_against"], LEAGUE_WOBA, weight)
-        r["k_rate"] = _regress(r["k_rate"], LEAGUE_K_PER_PA, weight)
-        r["bb_rate"] = _regress(r["bb_rate"], LEAGUE_BB_PER_PA, weight)
-        r["hr_per_pa"] = _regress(r["hr_per_pa"], LEAGUE_HR_PER_PA, weight)
-        r["hits_per_pa"] = _regress(r["hits_per_pa"], LEAGUE_HIT_PER_PA, weight)
+        r["k_rate"] = _regress(r["k_rate"], tgt_k, weight)
+        r["bb_rate"] = _regress(r["bb_rate"], tgt_bb, weight)
+        r["hr_per_pa"] = _regress(r["hr_per_pa"], tgt_hr, weight)
+        # Lever 5: de-luck raw hits toward xBA-against, then the league/prior regression.
+        deluck_hits = _deluck_hits(r["hits_per_pa"], r.get("xba_against"))
+        r["hits_per_pa"] = _regress(deluck_hits, tgt_hits, weight)
         r["season"] = season
     return ph_rows
 
@@ -434,9 +520,16 @@ def _aggregate_pitcher_skill(
     conn: psycopg.Connection, season: int, all_pa: list[pd.DataFrame]
 ) -> int:
     """Re-aggregate pitcher_skill from pre-loaded Statcast PA frames."""
-    ph_rows = compute_pitcher_skill_rows(season, all_pa)
+    priors = _load_pitcher_priors(conn, season) if PITCHER_PRIOR_ENABLED else None
+    ph_rows = compute_pitcher_skill_rows(season, all_pa, priors=priors)
     if not ph_rows:
         return 0
+
+    # Attach prior-season barrel-allowed (Lever 1 true-talent HR signal). Leak-free:
+    # strictly the prior season. NULL when the pitcher×hand has no prior batted-ball.
+    barrel_allowed = _load_pitcher_barrel_allowed(conn, season - 1)
+    for r in ph_rows:
+        r["barrel_allowed"] = barrel_allowed.get((r["player_id"], r["vs_handedness"]))
 
     CHUNK = 500
     with conn.cursor() as cur:
@@ -446,12 +539,13 @@ def _aggregate_pitcher_skill(
                 INSERT INTO pitcher_skill (
                     player_id, season, vs_handedness,
                     batters_faced, woba_against, xwoba_against,
-                    k_rate, bb_rate, hr_per_pa, hits_per_pa, updated_at
+                    k_rate, bb_rate, hr_per_pa, hits_per_pa, barrel_allowed, updated_at
                 )
                 VALUES (
                     %(player_id)s, %(season)s, %(vs_handedness)s,
                     %(batters_faced)s, %(woba_against)s, %(xwoba_against)s,
-                    %(k_rate)s, %(bb_rate)s, %(hr_per_pa)s, %(hits_per_pa)s, NOW()
+                    %(k_rate)s, %(bb_rate)s, %(hr_per_pa)s, %(hits_per_pa)s,
+                    %(barrel_allowed)s, NOW()
                 )
                 ON CONFLICT (player_id, season, vs_handedness) DO UPDATE
                     SET batters_faced  = EXCLUDED.batters_faced,
@@ -461,6 +555,7 @@ def _aggregate_pitcher_skill(
                         bb_rate        = EXCLUDED.bb_rate,
                         hr_per_pa      = EXCLUDED.hr_per_pa,
                         hits_per_pa    = EXCLUDED.hits_per_pa,
+                        barrel_allowed = EXCLUDED.barrel_allowed,
                         updated_at     = NOW()
                 """,
                 ph_rows[i : i + CHUNK],

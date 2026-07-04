@@ -1,0 +1,9 @@
+{
+  "id": "model-accuracy-30d",
+  "question": "How has the model's hit-rate market been calibrated over the last 30 days?",
+  "user_context": {"bankroll_units": 100, "kelly_fraction": 0.25},
+  "expected_tools": {"required": ["get_model_accuracy"], "optional": []},
+  "grounding": {"must_cite_from": ["get_model_accuracy"], "forbid_invention": true},
+  "expects_recommendation": false,
+  "tags": ["accuracy", "calibration"]
+}

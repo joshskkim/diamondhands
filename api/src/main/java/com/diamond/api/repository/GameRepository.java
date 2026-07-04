@@ -27,6 +27,12 @@ public class GameRepository {
             g.away_score,
             g.home_score_1st,
             g.away_score_1st,
+            g.live_home_score,
+            g.live_away_score,
+            g.live_current_inning,
+            g.live_inning_state,
+            g.live_is_top,
+            g.live_updated_at,
             ht.id                           AS home_team_id,
             ht.abbreviation                 AS home_abbr,
             ht.name                         AS home_name,
@@ -129,6 +135,46 @@ public class GameRepository {
             nullableInt(rs, "home_score"),
             nullableInt(rs, "away_score"),
             nullableInt(rs, "home_score_1st"),
+            nullableInt(rs, "away_score_1st"),
+            nullableInt(rs, "live_home_score"),
+            nullableInt(rs, "live_away_score"),
+            nullableInt(rs, "live_current_inning"),
+            rs.getString("live_inning_state"),
+            nullableBool(rs, "live_is_top"),
+            timestampIso(rs, "live_updated_at"));
+    }
+
+    private static final String LIVE_GAMES_SQL = """
+        SELECT
+            g.id                  AS game_id,
+            g.status,
+            g.live_home_score,
+            g.live_away_score,
+            g.live_current_inning,
+            g.live_inning_state,
+            g.live_is_top,
+            g.home_score_1st,
+            g.away_score_1st
+        FROM games g
+        WHERE g.game_date = ?
+        ORDER BY g.start_time_utc
+        """;
+
+    /** Lean live-state read for the SSE broadcaster — no joins, no cache. */
+    public List<LiveGameDto> findLiveByDate(LocalDate date) {
+        return jdbc.query(LIVE_GAMES_SQL, GameRepository::mapLiveGame, date);
+    }
+
+    private static LiveGameDto mapLiveGame(ResultSet rs, int rowNum) throws SQLException {
+        return new LiveGameDto(
+            rs.getLong("game_id"),
+            rs.getString("status"),
+            nullableInt(rs, "live_home_score"),
+            nullableInt(rs, "live_away_score"),
+            nullableInt(rs, "live_current_inning"),
+            rs.getString("live_inning_state"),
+            nullableBool(rs, "live_is_top"),
+            nullableInt(rs, "home_score_1st"),
             nullableInt(rs, "away_score_1st"));
     }
 
@@ -151,5 +197,16 @@ public class GameRepository {
     private static Integer nullableInt(ResultSet rs, String col) throws SQLException {
         int val = rs.getInt(col);
         return rs.wasNull() ? null : val;
+    }
+
+    private static Boolean nullableBool(ResultSet rs, String col) throws SQLException {
+        boolean val = rs.getBoolean(col);
+        return rs.wasNull() ? null : val;
+    }
+
+    /** A TIMESTAMPTZ column as an ISO-8601 instant string, or null. */
+    private static String timestampIso(ResultSet rs, String col) throws SQLException {
+        java.sql.Timestamp ts = rs.getTimestamp(col);
+        return ts == null ? null : ts.toInstant().toString();
     }
 }

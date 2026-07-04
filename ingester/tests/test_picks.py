@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timedelta, timezone
 
-from ingester.commands.picks import MAX_PICKS, _grade, build_picks
+from ingester.commands.picks import (
+    MAX_PICKS, _devig_two_way, _grade, _pick_key, build_candidates, build_picks,
+    gate_candidates, plan_reconcile,
+)
 from ingester.projection.runner import DEGENERACY_MIN_ROWS, is_degenerate_slate
 
 
@@ -70,6 +74,60 @@ class TestBuildPicks(unittest.TestCase):
         self.assertEqual(len(build_picks([total], sim_with)), 1)
 
 
+class TestPlanReconcile(unittest.TestCase):
+    NOW = datetime(2026, 6, 23, 18, 0, tzinfo=timezone.utc)
+
+    def existing(self, picks, active=True, start=None):
+        """Build an existing-rows map keyed like the DB read (id starts at 100)."""
+        return {
+            _pick_key(p): (100 + i, active, start)
+            for i, p in enumerate(picks)
+        }
+
+    def test_first_run_all_insert(self):
+        picks = [play(game_id=1), play(game_id=2, player_id=20)]
+        ops = plan_reconcile(picks, {}, self.NOW, board_loaded=True)
+        self.assertEqual([o[0] for o in ops], ["insert", "insert"])
+        self.assertEqual([o[1] for o in ops], [1, 2])  # ranks
+
+    def test_kept_pick_relocked_not_reinserted(self):
+        p = play(game_id=1)
+        ops = plan_reconcile([p], self.existing([p]), self.NOW, board_loaded=True)
+        self.assertEqual(ops, [("keep", 100, 1, p)])
+
+    def test_better_late_pick_bumps_earlier(self):
+        early = play(game_id=1)
+        existing = self.existing([early])           # already on record, active
+        late = play(game_id=2, player_id=20)        # different game now tops the board
+        ops = plan_reconcile([late], existing, self.NOW, board_loaded=True)
+        kinds = {o[0] for o in ops}
+        self.assertEqual(kinds, {"insert", "bump"})
+        bump = next(o for o in ops if o[0] == "bump")
+        self.assertEqual(bump[1], 100)             # the earlier pick's id
+
+    def test_started_game_is_frozen_not_bumped(self):
+        early = play(game_id=1)
+        started = self.NOW - timedelta(hours=1)
+        existing = self.existing([early], start=started)
+        late = play(game_id=2, player_id=20)
+        ops = plan_reconcile([late], existing, self.NOW, board_loaded=True)
+        self.assertNotIn("bump", [o[0] for o in ops])  # locked once underway
+
+    def test_empty_board_never_bumps(self):
+        early = play(game_id=1)
+        existing = self.existing([early])
+        # No picks AND board didn't load (odds expired) → leave the record untouched.
+        ops = plan_reconcile([], existing, self.NOW, board_loaded=False)
+        self.assertEqual(ops, [])
+
+    def test_qualifying_board_with_no_picks_does_bump(self):
+        # Board loaded but nothing clears the bar now → the earlier pick is genuinely dropped.
+        early = play(game_id=1)
+        existing = self.existing([early])
+        ops = plan_reconcile([], existing, self.NOW, board_loaded=True)
+        self.assertEqual(ops, [("bump", 100)])
+
+
 class TestGrade(unittest.TestCase):
     def test_total(self):
         self.assertEqual(_grade("total", "under", 9.0, 6, 4, None), (10.0, False))
@@ -88,6 +146,82 @@ class TestGrade(unittest.TestCase):
         self.assertEqual(_grade("hit", "under", 1.5, 0, 0, 2), (2.0, False))
         self.assertEqual(_grade("hr", "over", 0.5, 0, 0, 1), (1.0, True))
         self.assertEqual(_grade("hit", "over", 0.5, 0, 0, None), (None, None))
+
+
+class TestDevigForClv(unittest.TestCase):
+    def test_balanced_book_is_half(self):
+        # Both sides -110 (decimal 1.909): a fair coin after stripping vig.
+        fair = _devig_two_way(1.909, 1.909)
+        self.assertAlmostEqual(fair, 0.5, places=4)
+
+    def test_favorite_above_half(self):
+        # -200 (1.5) vs +170 (2.7): the favorite's fair prob exceeds 0.5.
+        fair = _devig_two_way(1.5, 2.7)
+        self.assertGreater(fair, 0.5)
+        # implied 0.6667 / (0.6667 + 0.3704) ≈ 0.643
+        self.assertAlmostEqual(fair, 0.6428, places=3)
+
+    def test_two_sides_sum_to_one(self):
+        side = _devig_two_way(1.8, 2.1)
+        opp = _devig_two_way(2.1, 1.8)
+        self.assertAlmostEqual(side + opp, 1.0, places=6)
+
+    def test_nonpositive_returns_none(self):
+        self.assertIsNone(_devig_two_way(0.0, 1.9))
+        self.assertIsNone(_devig_two_way(1.9, -1.0))
+
+
+class _Result:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+
+class _FakeConn:
+    """Stands in for a DB connection: serves cached verdicts, records no writes."""
+    def __init__(self, cached):
+        self.cached = cached  # {(game, market, side, player): verdict}
+
+    def execute(self, sql, params=None):
+        if sql.strip().startswith("SELECT verdict"):
+            _slate, game, market, side, player = params
+            v = self.cached.get((game, market, side, player))
+            return _Result([(v,)] if v is not None else [])
+        return _Result([])
+
+
+class TestAnalystGate(unittest.TestCase):
+    """gate_candidates promotes only bet/lean; pass demotes; None (gate off) promotes mechanically.
+    INTERNAL_KEY is unset in tests, so an uncached candidate never hits the network (returns None)."""
+
+    def test_pass_demotes_and_endorsed_promote(self):
+        cands = [play(game_id=1), play(game_id=2), play(game_id=3)]
+        conn = _FakeConn({
+            (1, "hr", "over", 10): "pass",
+            (2, "hr", "over", 10): "bet",
+            (3, "hr", "over", 10): "lean",
+        })
+        picks = gate_candidates(conn, "http://x", "2026-06-29", cands)
+        self.assertEqual([p["gameId"] for p in picks], [2, 3])
+
+    def test_gate_off_promotes_mechanically(self):
+        cands = [play(game_id=g) for g in (1, 2, 3, 4)]
+        picks = gate_candidates(_FakeConn({}), "http://x", "2026-06-29", cands)
+        # No cache, no key → all None → first MAX_PICKS promoted in order.
+        self.assertEqual([p["gameId"] for p in picks], [1, 2, 3])
+
+    def test_caps_at_max_picks(self):
+        cands = [play(game_id=g) for g in (1, 2, 3, 4, 5)]
+        conn = _FakeConn({(g, "hr", "over", 10): "bet" for g in (1, 2, 3, 4, 5)})
+        picks = gate_candidates(conn, "http://x", "2026-06-29", cands)
+        self.assertEqual(len(picks), MAX_PICKS)
+
+    def test_build_candidates_wider_than_picks(self):
+        plays = [play(game_id=g, model=0.60, fair=0.50, ev=0.10) for g in range(1, 7)]
+        self.assertEqual(len(build_picks(plays, sim=None)), MAX_PICKS)
+        self.assertEqual(len(build_candidates(plays, sim=None)), 6)
 
 
 class TestDegeneracyGuard(unittest.TestCase):

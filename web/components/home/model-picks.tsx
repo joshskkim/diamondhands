@@ -1,20 +1,28 @@
 'use client'
 
 import Link from 'next/link'
-import { useQuery } from '@tanstack/react-query'
-import { Flame } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Flame, Ticket } from 'lucide-react'
 import {
   bestPlaysQueryOptions,
   hitRatesQueryOptions,
+  modelPicksQueryOptions,
   mostLikelyQueryOptions,
   playerResultsQueryOptions,
+  queryKeys,
+  reconcileModelPicks,
+  tailPick,
   todayGamesQueryOptions,
+  type PickKey,
 } from '@/lib/api'
-import type { BestPlay, HitRate, MostLikely, TodayGame } from '@/lib/types'
+import type { BestPlay, HitRate, ModelPickResult, MostLikely, TodayGame } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
-import { modelPlayOutcome, pickTitle, type PickOutcome } from '@/lib/picks'
+import { modelPlayOutcome, pickOutcome, pickTitle, type PickOutcome } from '@/lib/picks'
+import { useAuth } from '@/components/auth-provider'
 import { OutcomeBadge } from './outcome-badge'
+import { LivePickTracker } from './live-tracker'
 import { WhyDisclosure } from './why-disclosure'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -50,6 +58,11 @@ const LONGSHOT_EDGE = 0.08
 const STRONG_EDGE = 0.06
 const STRONG_OVERLAY = 1.15
 const MAX_PICKS = 3
+// The "Lotto of the Day" — one deliberate longshot, model 5–30% with big value (see
+// docs/model-explained.md). It's surfaced as its own card, not in the value grid, so its very
+// different hit rate doesn't read like a Lean. Same gates as the board, minus the prob floor.
+const LOTTO_MIN_PROB = 0.05
+const LOTTO_MAX_PROB = 0.3
 const EXCLUDED_MARKETS = new Set(['pitcher_k', 'pitcher_outs', 'hit'])
 const HIT_RATE_VETO_MIN_N = 15
 // Per-market veto bands: [no OVER below, no UNDER above]. Market-specific because
@@ -119,6 +132,82 @@ function hitRateVeto(p: BestPlay, hitRates: Map<string, HitRate> | undefined): b
   return false
 }
 
+// The "Why" lines for a pick — shared by the value grid and the lotto card so wording stays
+// identical. fairProb is asserted non-null because every caller guards it before calling.
+function buildReasons(p: BestPlay, edge: number, corroboration: string | null): string[] {
+  const reasons = [
+    `Model probability ${pct(p.modelProb)} against a de-vigged market ${pct(p.fairProb!)} — a ${(edge * 100).toFixed(1)}-point edge after stripping the book's margin from both sides.`,
+    `${signedPct(p.evPct)} expected value per unit at the best available price, ${formatAmerican(p.priceAmerican)} (${bookLabel(p.bestBook)}).`,
+  ]
+  if (p.modelProb < 0.5) {
+    reasons.push(
+      'A longshot by design — it makes the board because the price overpays the model probability, not because it should usually hit.',
+    )
+  }
+  if (corroboration) reasons.push(corroboration)
+  if (p.debateVerdict === 'bet' || p.debateVerdict === 'lean') {
+    const conf = p.debateConfidence != null ? ` (${Math.round(p.debateConfidence * 100)}% confidence)` : ''
+    reasons.push(
+      `The Analyst's bull-vs-skeptic debate endorsed this${conf}${p.debateRationale ? `: ${p.debateRationale}` : '.'}`,
+    )
+  }
+  return reasons
+}
+
+/** The judge's endorsement chip — shown on a pick the Analyst gate promoted (bet/lean). */
+function AnalystChip({ verdict, confidence }: { verdict?: string | null; confidence?: number | null }) {
+  if (verdict !== 'bet' && verdict !== 'lean') return null
+  return (
+    <span
+      title="The Analyst's bull/skeptic/judge debate endorsed this pick"
+      className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-violet-300 border-violet-400/40 bg-violet-500/10"
+    >
+      Analyst {confidence != null ? `${Math.round(confidence * 100)}%` : verdict}
+    </span>
+  )
+}
+
+/** Tail a pick into your personal Tracker (server computes the Kelly stake). Signed-in only. */
+function TailButton({ p }: { p: BestPlay }) {
+  const { user } = useAuth()
+  const [state, setState] = useState<'idle' | 'saving' | 'done' | 'error'>('idle')
+  const [msg, setMsg] = useState<string | null>(null)
+  if (!user || p.fairProb == null) return null
+
+  async function onTail() {
+    setState('saving')
+    try {
+      const res = await tailPick({
+        gameId: p.gameId, market: p.market, side: p.side, line: p.line,
+        playerId: p.playerId, playerName: p.playerName, priceAmerican: p.priceAmerican,
+        book: p.bestBook, modelProb: p.modelProb, fairProb: p.fairProb!,
+        confidence: p.debateConfidence ?? null,
+      })
+      setMsg(res.message)
+      setState('done')
+    } catch {
+      setMsg('Could not tail that.')
+      setState('error')
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={onTail}
+        disabled={state === 'saving' || state === 'done'}
+        className="rounded-md border border-cyan-400/40 bg-cyan-500/10 px-2.5 py-1 text-xs font-medium text-cyan-300 transition-colors hover:bg-cyan-500/20 disabled:opacity-60"
+      >
+        {state === 'done' ? 'Tailed ✓' : state === 'saving' ? 'Tailing…' : 'Tail'}
+      </button>
+      {msg && (
+        <span className={cn('text-[11px]', state === 'error' ? 'text-rose-400' : 'text-zinc-400')}>{msg}</span>
+      )}
+    </div>
+  )
+}
+
 function buildPicks(
   plays: BestPlay[],
   sim: MostLikely | undefined,
@@ -134,21 +223,14 @@ function buildPicks(
     if (p.evPct < MIN_EV) continue
     if (p.modelProb < MIN_MODEL_PROB && edge < LONGSHOT_EDGE) continue
     if (hitRateVeto(p, hitRates)) continue
+    // The Analyst gate: a pick it passed on drops off Today's Board (it shows on Best Lines
+    // with the reason). A null verdict means "not vetted" → show mechanically. Mirrors the
+    // server gate in picks.py::gate_candidates.
+    if (p.debateVerdict === 'pass') continue
 
     const totals = simTotalsCheck(p, sim)
     if (totals.veto) continue
     const corroboration = totals.note ?? simPropNote(p, sim)
-
-    const reasons = [
-      `Model probability ${pct(p.modelProb)} against a de-vigged market ${pct(p.fairProb)} — a ${(edge * 100).toFixed(1)}-point edge after stripping the book's margin from both sides.`,
-      `${signedPct(p.evPct)} expected value per unit at the best available price, ${formatAmerican(p.priceAmerican)} (${bookLabel(p.bestBook)}).`,
-    ]
-    if (p.modelProb < 0.5) {
-      reasons.push(
-        'A longshot by design — it makes the board because the price overpays the model probability, not because it should usually hit.',
-      )
-    }
-    if (corroboration) reasons.push(corroboration)
 
     candidates.push({
       play: p,
@@ -158,7 +240,7 @@ function buildPicks(
       // Edge is the primary signal; EV breaks ties toward better prices, and
       // independent sim agreement nudges a pick up the board.
       score: edge + 0.5 * p.evPct + (corroboration ? 0.02 : 0),
-      reasons,
+      reasons: buildReasons(p, edge, corroboration),
     })
   }
 
@@ -173,6 +255,37 @@ function buildPicks(
     if (picks.length === MAX_PICKS) break
   }
   return picks
+}
+
+// The single best longshot for the "Lotto of the Day" card. Same gates as the board (value,
+// price, sim & traffic-light vetoes) but the model probability must sit in the lotto band — these
+// are the plays the grid's MIN_MODEL_PROB floor would otherwise reserve for a quiet "Lean".
+function pickLotto(
+  plays: BestPlay[],
+  sim: MostLikely | undefined,
+  hitRates: Map<string, HitRate> | undefined,
+): ModelPick | null {
+  let best: ModelPick | null = null
+
+  for (const p of plays) {
+    if (EXCLUDED_MARKETS.has(p.market)) continue
+    if (p.fairProb == null) continue
+    if (p.modelProb < LOTTO_MIN_PROB || p.modelProb > LOTTO_MAX_PROB) continue
+    const edge = p.modelProb - p.fairProb
+    if (edge < LONGSHOT_EDGE || edge > MAX_EDGE) continue // longshots need the bigger edge
+    if (p.evPct < MIN_EV) continue
+    if (hitRateVeto(p, hitRates)) continue
+
+    const totals = simTotalsCheck(p, sim)
+    if (totals.veto) continue
+    const corroboration = totals.note ?? simPropNote(p, sim)
+
+    const score = edge + 0.5 * p.evPct + (corroboration ? 0.02 : 0)
+    if (best == null || score > best.score) {
+      best = { play: p, edge, score, strong: false, reasons: buildReasons(p, edge, corroboration) }
+    }
+  }
+  return best
 }
 
 // ── presentation ──────────────────────────────────────────────────────────────
@@ -198,10 +311,12 @@ function PickCard({
   pick,
   rank,
   outcome,
+  game,
 }: {
   pick: ModelPick
   rank: number
   outcome?: PickOutcome
+  game?: TodayGame
 }) {
   const p = pick.play
   return (
@@ -225,6 +340,7 @@ function PickCard({
         >
           {pick.strong ? 'Strong' : 'Lean'}
         </span>
+        <AnalystChip verdict={p.debateVerdict} confidence={p.debateConfidence} />
         {outcome && <OutcomeBadge outcome={outcome} />}
         <Link
           href={`/mlb/games/${p.gameId}`}
@@ -260,7 +376,61 @@ function PickCard({
         <Stat label="EV" value={signedPct(p.evPct)} className="text-emerald-300" />
       </div>
 
+      <LivePickTracker game={game} market={p.market} side={p.side} line={p.line} outcome={outcome} />
+
       <WhyDisclosure reasons={pick.reasons} />
+      <TailButton p={p} />
+    </div>
+  )
+}
+
+function LottoCard({ pick, outcome, game }: { pick: ModelPick; outcome?: PickOutcome; game?: TodayGame }) {
+  const p = pick.play
+  return (
+    <div className="rounded-xl border border-amber-400/30 bg-gradient-to-br from-amber-500/10 to-[#0e1015] px-5 py-4 flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <Ticket className="h-4 w-4 text-amber-300" aria-hidden="true" />
+        <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-200 border-amber-400/40 bg-amber-500/10">
+          Lotto
+        </span>
+        <AnalystChip verdict={p.debateVerdict} confidence={p.debateConfidence} />
+        {outcome && <OutcomeBadge outcome={outcome} />}
+        <Link
+          href={`/mlb/games/${p.gameId}`}
+          className="ml-auto font-mono text-xs text-zinc-500 hover:text-amber-300 transition-colors"
+        >
+          {p.matchup}
+        </Link>
+      </div>
+
+      <div className="flex items-baseline justify-between gap-3">
+        {p.playerId ? (
+          <Link
+            href={`/mlb/players/${p.playerId}`}
+            className="text-base font-bold tracking-tight text-zinc-100 hover:text-amber-200 transition-colors"
+          >
+            {pickTitle(p)}
+          </Link>
+        ) : (
+          <span className="text-base font-bold tracking-tight text-zinc-100">{pickTitle(p)}</span>
+        )}
+        <span className="shrink-0 font-mono tabular-nums text-sm text-amber-200">
+          {formatAmerican(p.priceAmerican)}{' '}
+          <span className="text-zinc-500 text-xs">{bookLabel(p.bestBook)}</span>
+        </span>
+      </div>
+
+      <div className="grid grid-cols-4 gap-2">
+        <Stat label="Model" value={pct(p.modelProb)} className="text-zinc-200" />
+        <Stat label="Fair" value={p.fairProb == null ? '—' : pct(p.fairProb)} className="text-zinc-400" />
+        <Stat label="Edge" value={signedPct(pick.edge)} className="text-emerald-400" />
+        <Stat label="EV" value={signedPct(p.evPct)} className="text-emerald-300" />
+      </div>
+
+      <LivePickTracker game={game} market={p.market} side={p.side} line={p.line} outcome={outcome} />
+
+      <WhyDisclosure reasons={pick.reasons} />
+      <TailButton p={p} />
     </div>
   )
 }
@@ -295,6 +465,93 @@ function Skeleton({ className = '' }: { className?: string }) {
   return <div className={cn('animate-pulse bg-white/5 rounded', className)} />
 }
 
+// ── earlier picks (honest history) ──────────────────────────────────────────────
+// The live board above always shows the current top picks. When a better play appears
+// later in the slate it can knock an earlier pick off that top set — but we don't hide
+// what we already showed. Those displaced picks are recorded server-side (locked at the
+// line they were shown at) and surfaced here, still graded, so the board never quietly
+// rewrites its own history.
+
+// Identity ignoring line/price — a line move shouldn't split one pick into two rows.
+function liveKey(p: { gameId: number; market: string; side: string; playerId: number | null }): string {
+  return `${p.gameId}|${p.market}|${p.side}|${p.playerId ?? ''}`
+}
+
+// ET clock time a pick first hit the board, e.g. "1:15 PM" (the slate's timezone).
+function shownClock(iso: string | null): string | null {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(d)
+}
+
+function EarlierPickRow({ pick, outcome }: { pick: ModelPickResult; outcome?: PickOutcome }) {
+  const shown = shownClock(pick.firstShownAt)
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-[#0e1015] px-4 py-2.5">
+      {outcome && <OutcomeBadge outcome={outcome} />}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm text-zinc-300">
+          {pick.playerId ? (
+            <Link
+              href={`/mlb/players/${pick.playerId}`}
+              className="transition-colors hover:text-cyan-300"
+            >
+              {pickTitle(pick)}
+            </Link>
+          ) : (
+            pickTitle(pick)
+          )}
+        </div>
+        <div className="text-xs text-zinc-500">
+          {formatAmerican(pick.priceAmerican)} {bookLabel(pick.book ?? undefined)}
+          {shown != null && <> · shown {shown}</>} · later replaced by a better pick
+        </div>
+      </div>
+      <Link
+        href={`/mlb/games/${pick.gameId}`}
+        className="shrink-0 font-mono text-xs text-zinc-500 transition-colors hover:text-cyan-400"
+      >
+        {pick.matchup}
+      </Link>
+    </div>
+  )
+}
+
+function EarlierPicks({
+  picks,
+  gamesById,
+  hrByKey,
+}: {
+  picks: ModelPickResult[]
+  gamesById: Map<number, TodayGame>
+  hrByKey: Map<string, number | null>
+}) {
+  if (picks.length === 0) return null
+  return (
+    <div className="mt-4">
+      <h3 className={cn(microLabel, 'mb-2 normal-case tracking-normal text-zinc-400')}>
+        Earlier today — picks a later, better play replaced (kept on the record, still graded)
+      </h3>
+      <div className="grid gap-2">
+        {picks.map((p) => (
+          <EarlierPickRow
+            key={`${p.gameId}-${p.market}-${p.side}-${p.playerId ?? ''}`}
+            pick={p}
+            outcome={
+              p.scored ? pickOutcome(p) : modelPlayOutcome(p, gamesById.get(p.gameId), hrByKey)
+            }
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function ModelPicks() {
   const { data: plays, isPending, isError } = useQuery(bestPlaysQueryOptions(undefined, 100))
   const { data: sim } = useQuery(mostLikelyQueryOptions())
@@ -303,6 +560,9 @@ export function ModelPicks() {
   // the same source the projected-favorites badge uses, so ✓/✗ lands same-day.
   const { data: games } = useQuery(todayGamesQueryOptions())
   const { data: results } = useQuery(playerResultsQueryOptions())
+  // The recorded snapshot of the active slate — used only to surface picks a better
+  // late play has since bumped off the live top set, so the board keeps its history.
+  const { data: recorded } = useQuery(modelPicksQueryOptions())
 
   const rows = plays ?? []
   const hitRates = new Map<string, HitRate>(
@@ -312,7 +572,102 @@ export function ModelPicks() {
   const hrByKey = new Map<string, number | null>(
     (results?.batters ?? []).map((b) => [`${b.playerId}:${b.gameId}`, b.homeRuns]),
   )
-  const picks = buildPicks(rows, sim, hitRates)
+  // Pull the lotto first so it shows only on its own card, then build the value grid from the rest
+  // (a promoted longshot never reads as both a "Lotto" and a quiet "Lean").
+  const lotto = pickLotto(rows, sim, hitRates)
+  const gridRows = lotto ? rows.filter((p) => p !== lotto.play) : rows
+  const picks = buildPicks(gridRows, sim, hitRates)
+
+  // The plays currently on the board: the value grid plus the Lotto (one shown set).
+  const livePlays = [...picks.map((c) => c.play), ...(lotto ? [lotto.play] : [])]
+
+  // "Earlier today" = any recorded pick we genuinely showed that the live board has since
+  // dropped from its top set. We derive this from the live divergence rather than waiting for
+  // the server's bumped_at (which the record-picks cron only sets on its sparse schedule, and
+  // never once a game has started) so a replaced pick surfaces here immediately. The reconcile
+  // POST below mirrors the same decision server-side so the track-record agrees.
+  const liveKeys = new Set(livePlays.map(liveKey))
+  const earlier = (recorded ?? []).filter(
+    (p) => p.firstShownAt != null && !liveKeys.has(liveKey(p)),
+  )
+
+  // Record that divergence server-side so the persisted snapshot (and the track-record that
+  // reads it) agrees with what the board shows — bumping picks a better play displaced and
+  // re-promoting any that returned. Only fires when the live set actually differs from what's
+  // recorded (steady state = no write); the cache eviction + query invalidation then refetch the
+  // reconciled snapshot. Firing on every pre-game view lands the bump before first pitch, so a
+  // displaced pick never has to wait for the sparse cron.
+  const boardLoaded = rows.length > 0
+  const liveSig = livePlays.map(liveKey).sort().join(',')
+  const queryClient = useQueryClient()
+  const reconcile = useMutation({
+    mutationFn: (vars: { activeKeys: PickKey[]; boardLoaded: boolean }) =>
+      reconcileModelPicks(vars.activeKeys, vars.boardLoaded),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.modelPicks() }),
+  })
+  const lastReconciledSig = useRef<string | null>(null)
+  useEffect(() => {
+    if (recorded === undefined || !boardLoaded) return
+    const live = new Set(livePlays.map(liveKey))
+    const needsBump = recorded.some((p) => p.active && !live.has(liveKey(p)))
+    const needsPromote = recorded.some((p) => !p.active && live.has(liveKey(p)))
+    if (!needsBump && !needsPromote) return
+    if (reconcile.isPending || lastReconciledSig.current === liveSig) return
+    lastReconciledSig.current = liveSig
+    reconcile.mutate({
+      activeKeys: livePlays.map((p) => ({
+        gameId: p.gameId,
+        market: p.market,
+        side: p.side,
+        playerId: p.playerId,
+      })),
+      boardLoaded: true,
+    })
+    // livePlays is recomputed each render but its identity is captured by liveSig.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recorded, boardLoaded, liveSig])
+
+  let picksContent
+  if (isPending) {
+    picksContent = (
+      <div className="grid gap-4 lg:grid-cols-3">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Skeleton key={i} className="h-44 w-full rounded-xl" />
+        ))}
+      </div>
+    )
+  } else if (isError) {
+    picksContent = (
+      <p className="text-sm text-zinc-500 bg-[#0e1015] border border-white/10 rounded-xl px-5 py-4">
+        Couldn&apos;t load priced lines, so picks are unavailable right now.
+      </p>
+    )
+  } else if (rows.length === 0) {
+    picksContent = <NoOddsCard />
+  } else if (picks.length === 0) {
+    picksContent = <PassCard surveyed={rows.length} />
+  } else {
+    picksContent = (
+      <div
+        className={cn(
+          'grid gap-4',
+          picks.length === 1 && 'lg:max-w-xl',
+          picks.length === 2 && 'lg:grid-cols-2',
+          picks.length >= 3 && 'lg:grid-cols-3',
+        )}
+      >
+        {picks.map((pick, i) => (
+          <PickCard
+            key={`${pick.play.gameId}-${pick.play.market}-${pick.play.selection}`}
+            pick={pick}
+            rank={i + 1}
+            outcome={modelPlayOutcome(pick.play, gamesById.get(pick.play.gameId), hrByKey)}
+            game={gamesById.get(pick.play.gameId)}
+          />
+        ))}
+      </div>
+    )
+  }
 
   return (
     <section className="mb-10">
@@ -327,39 +682,25 @@ export function ModelPicks() {
         </p>
       </div>
 
-      {isPending ? (
-        <div className="grid gap-4 lg:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-44 w-full rounded-xl" />
-          ))}
-        </div>
-      ) : isError ? (
-        <p className="text-sm text-zinc-500 bg-[#0e1015] border border-white/10 rounded-xl px-5 py-4">
-          Couldn&apos;t load priced lines, so picks are unavailable right now.
-        </p>
-      ) : rows.length === 0 ? (
-        <NoOddsCard />
-      ) : picks.length === 0 ? (
-        <PassCard surveyed={rows.length} />
-      ) : (
-        <div
-          className={cn(
-            'grid gap-4',
-            picks.length === 1 && 'lg:max-w-xl',
-            picks.length === 2 && 'lg:grid-cols-2',
-            picks.length >= 3 && 'lg:grid-cols-3',
-          )}
-        >
-          {picks.map((pick, i) => (
-            <PickCard
-              key={`${pick.play.gameId}-${pick.play.market}-${pick.play.selection}`}
-              pick={pick}
-              rank={i + 1}
-              outcome={modelPlayOutcome(pick.play, gamesById.get(pick.play.gameId), hrByKey)}
+      {picksContent}
+
+      {!isPending && !isError && lotto && (
+        <div className="mt-6">
+          <div className="mb-2 flex items-baseline gap-2">
+            <h3 className="text-sm font-semibold tracking-tight text-amber-200">Lotto of the Day</h3>
+            <span className="text-xs text-zinc-500">— one deliberate longshot, big payout</span>
+          </div>
+          <div className="lg:max-w-xl">
+            <LottoCard
+              pick={lotto}
+              outcome={modelPlayOutcome(lotto.play, gamesById.get(lotto.play.gameId), hrByKey)}
+              game={gamesById.get(lotto.play.gameId)}
             />
-          ))}
+          </div>
         </div>
       )}
+
+      <EarlierPicks picks={earlier} gamesById={gamesById} hrByKey={hrByKey} />
     </section>
   )
 }

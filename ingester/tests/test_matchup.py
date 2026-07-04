@@ -114,21 +114,24 @@ class TestComputeMatchup:
 
     def test_fallback_when_arsenal_too_thin(self):
         # 60 + 30 = 90 pitches < MATCHUP_MIN_ARSENAL_PITCHES (100).
-        arsenal = [("FF", 0.67, 60), ("SL", 0.33, 30)]
+        # arsenal tuple: pitch_type, usage_rate, pitches_thrown, whiff_rate
+        arsenal = [("FF", 0.67, 60, 0.22), ("SL", 0.33, 30, 0.30)]
         res = _matchup(_FakeConn(arsenal=arsenal, batter=[], baselines=[]))
         assert res.quality == QUALITY_FALLBACK
 
     def test_matchup_happy_path(self):
         # 120 FF + 80 SL = 200 pitches. Batter .400/.250 xwOBA; league == raw.
-        arsenal = [("FF", 0.60, 120), ("SL", 0.40, 80)]
+        # k_rate assertion holds because PITCHER_WHIFF_K_BETA defaults to 0 (no-op).
+        arsenal = [("FF", 0.60, 120, 0.22), ("SL", 0.40, 80, 0.30)]
         batter = [
-            # pitch_type, xwoba, k_rate, iso, pitches_seen
-            ("FF", 0.400, 0.200, 0.180, 1500),
-            ("SL", 0.250, 0.350, 0.090, 600),
+            # pitch_type, xwoba, k_rate, iso, pitches_seen, chase_rate, oz_pitches
+            ("FF", 0.400, 0.200, 0.180, 1500, 0.30, 400),
+            ("SL", 0.250, 0.350, 0.090, 600, 0.28, 200),
         ]
         baselines = [
-            ("FF", "R", 0.400, 0.200, 0.180),
-            ("SL", "R", 0.250, 0.350, 0.090),
+            # pitch_type, vs_hand, league_xwoba, league_k_rate, league_iso, league_whiff_rate
+            ("FF", "R", 0.400, 0.200, 0.180, 0.22),
+            ("SL", "R", 0.250, 0.350, 0.090, 0.30),
         ]
         res = _matchup(_FakeConn(arsenal, batter, baselines))
         assert res.quality == QUALITY_MATCHUP

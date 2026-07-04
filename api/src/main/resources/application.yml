@@ -100,6 +100,21 @@ app:
     # Caps so a public endpoint can't run away: answer length + tool-call rounds.
     max-tokens: ${AI_MAX_TOKENS:3000}
     max-tool-iterations: ${AI_MAX_TOOL_ITERATIONS:6}
+  agent:
+    # The Diamond Analyst (stateful, authenticated agent). Reuses the same Gemini client/key
+    # as ai.* above; only overrides the caps and the (stronger) judge model for the debate.
+    judge-model: ${AGENT_JUDGE_MODEL:gemini-2.5-pro}
+    max-tool-iterations: ${AGENT_MAX_TOOL_ITERATIONS:8}
+    debate-tool-iterations: ${AGENT_DEBATE_TOOL_ITERATIONS:3}
+    # Prior conversation turns (question+answer) replayed into the prompt for multi-turn context.
+    history-turns: ${AGENT_HISTORY_TURNS:6}
+    rate:
+      # Per-user throttle on the (paid) agent endpoint: a sliding 1-minute window + a hard daily cap.
+      per-minute: ${AGENT_RATE_PER_MINUTE:5}
+      per-day: ${AGENT_RATE_PER_DAY:100}
+    # Shared key guarding the server-to-server debate gate (POST /api/debate/pick), called by
+    # record-picks. Blank => the endpoint is closed (gate disabled; board stays mechanical).
+    internal-key: ${AGENT_INTERNAL_KEY:}
 
 # Sentry error tracking. Auto-disabled when SENTRY_DSN is empty (opt-in, like AI/Stripe),
 # so dev/CI never ship events. `release` tags issues with the deployed image so you can see

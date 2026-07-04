@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 
 from ingester.db import get_connection
+from ingester.projection import constants as C
 from ingester.projection.constants import (
     LEAGUE_ISO,
     LEAGUE_K_PER_PA,
@@ -121,11 +122,25 @@ def _load_k_anchors(conn, target_season: int) -> dict[int, float]:
         (target_season - 1, target_season - 1),
     ).fetchall()
     out: dict[int, float] = {}
+    # Lever 3 chase is NOT applied here anymore — it rides the matchup K driver instead
+    # (matchup.batter_chase_k_delta), because the prior's K is bypassed by the matchup
+    # for ~88% of projections. The whiff anchor stays (it's the shipped v2.8 prior).
     for pid, whiff, _pitches in rows:
         anchor = whiff_k_anchor(float(whiff) if whiff is not None else None, LEAGUE_K_PER_PA)
         if anchor is not None:
             out[int(pid)] = anchor
     return out
+
+
+def _load_ages(conn, target_season: int) -> dict[int, float]:
+    """Player age as of July 1 of the target season (the standard 'baseball age')."""
+    from datetime import date
+
+    ref = date(target_season, 7, 1)
+    rows = conn.execute(
+        "SELECT id, birth_date FROM players WHERE birth_date IS NOT NULL"
+    ).fetchall()
+    return {int(pid): (ref - bd).days / 365.25 for pid, bd in rows}
 
 
 def cmd_refresh_priors(args: argparse.Namespace) -> None:
@@ -135,6 +150,9 @@ def cmd_refresh_priors(args: argparse.Namespace) -> None:
     by_player = _load_prior_seasons(conn, target)
     iso_anchors = _load_iso_anchors(conn, target)
     k_anchors = _load_k_anchors(conn, target)
+    # Only load ages when the aging curve is on (compute_marcel_prior ignores age otherwise),
+    # to skip a full players-table scan on every nightly refresh in the default (OFF) config.
+    ages = _load_ages(conn, target) if C.AGING_ENABLED else {}
 
     rows: list[dict] = []
     for pid, seasons in by_player.items():
@@ -146,6 +164,7 @@ def cmd_refresh_priors(args: argparse.Namespace) -> None:
             league_iso=LEAGUE_ISO,
             iso_anchor=iso_anchors.get(pid),
             k_rate_anchor=k_anchors.get(pid),
+            age=ages.get(pid),
         )
         if prior is None:
             continue
@@ -170,7 +189,7 @@ def cmd_refresh_priors(args: argparse.Namespace) -> None:
                     %(player_id)s, %(season)s, %(proj_xwoba)s, %(proj_k_rate)s,
                     %(proj_iso)s, %(proj_pa)s, 'marcel', NOW()
                 )
-                ON CONFLICT (player_id, season) DO UPDATE
+                ON CONFLICT (player_id, season, method) DO UPDATE
                     SET proj_xwoba  = EXCLUDED.proj_xwoba,
                         proj_k_rate = EXCLUDED.proj_k_rate,
                         proj_iso    = EXCLUDED.proj_iso,

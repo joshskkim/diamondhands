@@ -3,12 +3,18 @@
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { Target } from 'lucide-react'
-import { playerResultsQueryOptions, propBoardQueryOptions } from '@/lib/api'
-import type { BatterResult, PitcherPropPick, PitcherResult, PropBoardPick } from '@/lib/types'
+import {
+  livePlayerResultsQueryOptions,
+  playerResultsQueryOptions,
+  propBoardQueryOptions,
+  todayGamesQueryOptions,
+} from '@/lib/api'
+import type { BatterResult, PitcherPropPick, PitcherResult, PropBoardPick, TodayGame } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
-import { overUnderOutcome, propOutcome, type PickOutcome } from '@/lib/picks'
+import { liveCountOutcome, overUnderOutcome, propOutcome, type PickOutcome } from '@/lib/picks'
 import { OutcomeBadge } from './outcome-badge'
+import { LivePropTracker, gameIsLive } from './live-tracker'
 import { WhyDisclosure } from './why-disclosure'
 
 const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
@@ -24,6 +30,21 @@ function pitchName(code: string) {
 
 // Park/weather multipliers within this band of 1.0 are noise, not narrative.
 const ADJ_NOTEWORTHY = 0.03
+// Projected HR carry (ft) at/above which we flag a HR pick as "long-ball upside" — a real shot
+// at the day's longest-HR bonus. Absolute (not slate-relative) on purpose: the bonus is about
+// actual distance in tonight's park/weather, so a masher in a dead park can drop below it.
+const LONG_BALL_UPSIDE_FT = 430
+
+// League-average pitcher rates (per PA) for framing the walk card's control narrative.
+// Mirror the model's constants in ingester/ingester/projection/constants.py.
+const LEAGUE_PITCHER_BB_RATE = 0.085
+const LEAGUE_PITCHER_K_RATE = 0.225
+// How far the pitcher's walk rate must sit from league (±) before we call it wildness or
+// strong control rather than league-average — below this it's noise, not narrative.
+const BB_CONTROL_BAND = 0.15
+// A starter whose K rate is this far below league is a pitch-to-contact arm — worth noting
+// on the walk card since contact pitchers tend not to give away free passes.
+const CONTACT_ARM_BAND = 0.15
 
 const MARKET_META: Record<string, { chip: string; verb: string }> = {
   hit: { chip: 'Hit', verb: 'to record a hit' },
@@ -31,6 +52,9 @@ const MARKET_META: Record<string, { chip: string; verb: string }> = {
   k: { chip: 'Strikeout', verb: 'to strike out at least once' },
   bb: { chip: 'Walk', verb: 'to draw a walk' },
 }
+
+// Stat unit shown in the live prop tracker, per batter market.
+const BATTER_UNIT: Record<string, string> = { hit: 'H', hr: 'HR', k: 'K', bb: 'BB' }
 
 const PITCHER_MARKET_META: Record<string, { chip: string; unit: string; noun: string }> = {
   pitcher_k: { chip: 'Pitcher Ks', unit: 'K', noun: 'strikeouts' },
@@ -67,6 +91,29 @@ function ordinal(n: number) {
   return n + (s[(v - 20) % 10] ?? s[v] ?? s[0])
 }
 
+// The walk card's reasoning: the opposing starter's control. Drawing a walk is mostly a
+// function of how freely the pitcher gives them away, so we frame his walk rate against the
+// league and characterize him — wild (tailwind for the over), strong control (headwind), or
+// league-average. A notably low K rate flags a pitch-to-contact arm, which usually means
+// even fewer free passes.
+function walkControlReason(pitcher: string, bbRate: number, kRate: number | null): string {
+  const delta = bbRate / LEAGUE_PITCHER_BB_RATE - 1
+  const rel = `${signedPctFromAdj(bbRate / LEAGUE_PITCHER_BB_RATE)} vs. the league average`
+  let read: string
+  if (delta >= BB_CONTROL_BAND) {
+    read = `${rel}, so he hands out free passes (a tailwind for this over)`
+  } else if (delta <= -BB_CONTROL_BAND) {
+    read = `${rel} — strong control, so he rarely walks anyone (a headwind here)`
+  } else {
+    read = `${rel}, roughly league-average control`
+  }
+  const contact =
+    kRate != null && kRate <= LEAGUE_PITCHER_K_RATE * (1 - CONTACT_ARM_BAND)
+      ? ` He's a pitch-to-contact arm (${pct(kRate)} K rate), which tends to mean even fewer walks.`
+      : ''
+  return `Faces ${pitcher}: he walks ${pct(bbRate)} of batters — ${read}.${contact}`
+}
+
 // The reasoning bullets, built from the projection's own factors — no odds required.
 function buildReasons(p: PropBoardPick): string[] {
   const reasons: string[] = []
@@ -80,9 +127,11 @@ function buildReasons(p: PropBoardPick): string[] {
   }
 
   if (p.opposingPitcher) {
-    // matchup xwOBA is a hit/power signal — irrelevant to drawing a walk, so the
-    // walk card just names the pitcher.
-    if (p.market !== 'bb' && p.matchupXwoba != null) {
+    // The walk card's driver is the pitcher's CONTROL, not matchup xwOBA (a hit/power
+    // signal, irrelevant to drawing a walk). The hit/HR/K cards keep the xwOBA line.
+    if (p.market === 'bb' && p.opposingPitcherBbRate != null) {
+      reasons.push(walkControlReason(p.opposingPitcher, p.opposingPitcherBbRate, p.opposingPitcherKRate))
+    } else if (p.market !== 'bb' && p.matchupXwoba != null) {
       const basis =
         p.matchupQuality === 'matchup'
           ? 'his swing profile against this exact pitch mix'
@@ -142,6 +191,18 @@ function buildReasons(p: PropBoardPick): string[] {
       `Park fit: pulls ${Math.round(p.pullPct * 100)}% of his balls in play toward the ${Math.round(
         p.pullFenceFt,
       )}-ft ${field} fence${wall}${ev}.`,
+    )
+  }
+
+  // Long-ball upside (HR card only): how far this HR would carry in tonight's park & weather —
+  // the distance axis behind Fanatics' longest-HR bonus, separate from how LIKELY the HR is.
+  // High variance, so it's framed as a tiebreaker, never a call on the day's longest.
+  if (p.market === 'hr' && p.hrDistanceFt != null) {
+    const tier = p.hrDistanceFt >= LONG_BALL_UPSIDE_FT ? ' — top-tier carry' : ''
+    reasons.push(
+      `Long-ball upside: this HR projects to carry ~${Math.round(
+        p.hrDistanceFt,
+      )} ft in tonight's park & weather${tier}. Fanatics pays extra if it's the day's longest HR — high variance, so weigh it as a tiebreaker.`,
     )
   }
 
@@ -206,7 +267,21 @@ function RunnersUpLine({
   )
 }
 
-function PropCard({ pick, outcome }: { pick: PropBoardPick; outcome?: PickOutcome }) {
+function PropCard({
+  pick,
+  outcome,
+  game,
+  liveCount,
+  liveOutcome,
+  liveBatterLine,
+}: {
+  pick: PropBoardPick
+  outcome?: PickOutcome
+  game?: TodayGame
+  liveCount?: number | null
+  liveOutcome?: PickOutcome
+  liveBatterLine?: { hits: number | null; atBats: number | null } | null
+}) {
   const meta = MARKET_META[pick.market] ?? { chip: pick.market, verb: pick.market }
   return (
     <div className="rounded-xl border border-white/10 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">
@@ -214,6 +289,16 @@ function PropCard({ pick, outcome }: { pick: PropBoardPick; outcome?: PickOutcom
         <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-cyan-300 border-cyan-400/40 bg-cyan-500/10">
           {meta.chip}
         </span>
+        {pick.market === 'hr' &&
+          pick.hrDistanceFt != null &&
+          pick.hrDistanceFt >= LONG_BALL_UPSIDE_FT && (
+            <span
+              title={`Projects to carry ~${Math.round(pick.hrDistanceFt)} ft tonight — a real shot at the day's longest-HR bonus`}
+              className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-300 border-amber-400/40 bg-amber-500/10"
+            >
+              🚀 Long-ball upside
+            </span>
+          )}
         {outcome && <OutcomeBadge outcome={outcome} iconOnly />}
         <Link
           href={`/mlb/games/${pick.gameId}`}
@@ -252,6 +337,15 @@ function PropCard({ pick, outcome }: { pick: PropBoardPick; outcome?: PickOutcom
           }
         />
       </div>
+
+      <LivePropTracker
+        game={game}
+        line={pick.line}
+        outcome={liveOutcome}
+        count={liveCount}
+        unit={BATTER_UNIT[pick.market] ?? 'H'}
+        batterLine={liveBatterLine}
+      />
 
       <WhyDisclosure reasons={buildReasons(pick)} />
 
@@ -399,7 +493,21 @@ function BestPick({ pick, unit }: { pick: PitcherPropPick; unit: string }) {
 // Pitcher cards are AMBER (batter cards are cyan) so "whose prop is this" is never
 // ambiguous — these are the starter's line, ranked by expected volume; the headline
 // number is the projection, the Best pick row is the model's lean (over or under).
-function PitcherCard({ pick, outcome }: { pick: PitcherPropPick; outcome?: PickOutcome }) {
+function PitcherCard({
+  pick,
+  outcome,
+  game,
+  liveCount,
+  liveOutcome,
+  liveOuts,
+}: {
+  pick: PitcherPropPick
+  outcome?: PickOutcome
+  game?: TodayGame
+  liveCount?: number | null
+  liveOutcome?: PickOutcome
+  liveOuts?: number | null
+}) {
   const meta =
     PITCHER_MARKET_META[pick.market] ?? { chip: pick.market, unit: '', noun: pick.market }
 
@@ -437,6 +545,15 @@ function PitcherCard({ pick, outcome }: { pick: PitcherPropPick; outcome?: PickO
 
       <BestPick pick={pick} unit={meta.unit} />
 
+      <LivePropTracker
+        game={game}
+        line={pick.bestLine}
+        outcome={liveOutcome}
+        count={liveCount}
+        unit={meta.unit}
+        outs={liveOuts}
+      />
+
       <WhyDisclosure reasons={reasons} />
 
       <RunnersUpLine
@@ -466,11 +583,27 @@ export function PropBoard() {
   const { data, isPending, isError } = useQuery(propBoardQueryOptions())
   // Actual results overlay a ✓/✗ on the headline pick once its game is final.
   const { data: results } = useQuery(playerResultsQueryOptions())
+  // Live game state (score/inning) for the in-progress tracker on each card.
+  const { data: games } = useQuery(todayGamesQueryOptions())
+  const gamesById = new Map<number, TodayGame>((games ?? []).map((g) => [g.gameId, g]))
+  // Live player counts — poll only while a game is actually in progress; idle otherwise.
+  const anyLive = (games ?? []).some(gameIsLive)
+  const { data: liveResults } = useQuery({
+    ...livePlayerResultsQueryOptions(),
+    enabled: anyLive,
+    refetchInterval: anyLive ? 30_000 : false,
+  })
   const batterByKey = new Map<string, BatterResult>(
     (results?.batters ?? []).map((b) => [`${b.playerId}:${b.gameId}`, b]),
   )
   const pitcherByKey = new Map<string, PitcherResult>(
     (results?.pitchers ?? []).map((p) => [`${p.playerId}:${p.gameId}`, p]),
+  )
+  const liveBatterByKey = new Map<string, BatterResult>(
+    (liveResults?.batters ?? []).map((b) => [`${b.playerId}:${b.gameId}`, b]),
+  )
+  const livePitcherByKey = new Map<string, PitcherResult>(
+    (liveResults?.pitchers ?? []).map((p) => [`${p.playerId}:${p.gameId}`, p]),
   )
 
   function batterOutcome(pick: PropBoardPick): PickOutcome | undefined {
@@ -487,6 +620,16 @@ export function PropBoard() {
       pick.bestLine,
       pitcherByKey.get(`${pick.pitcherId}:${pick.gameId}`)?.[field],
     )
+  }
+
+  // Live in-progress count + monotonic-safe live grade for the on-card tracker.
+  function batterLiveCount(pick: PropBoardPick): number | null | undefined {
+    const field = BATTER_RESULT_FIELD[pick.market]
+    return field ? liveBatterByKey.get(`${pick.playerId}:${pick.gameId}`)?.[field] : undefined
+  }
+  function pitcherLiveCount(pick: PitcherPropPick): number | null | undefined {
+    const field = PITCHER_RESULT_FIELD[pick.market]
+    return field ? livePitcherByKey.get(`${pick.pitcherId}:${pick.gameId}`)?.[field] : undefined
   }
 
   return (
@@ -528,9 +671,23 @@ export function PropBoard() {
             (data.picks.length === 3 || data.picks.length >= 5) && 'lg:grid-cols-3',
           )}
         >
-          {data.picks.map((pick) => (
-            <PropCard key={pick.market} pick={pick} outcome={batterOutcome(pick)} />
-          ))}
+          {data.picks.map((pick) => {
+            const liveCount = batterLiveCount(pick)
+            const liveBatter = liveBatterByKey.get(`${pick.playerId}:${pick.gameId}`)
+            return (
+              <PropCard
+                key={pick.market}
+                pick={pick}
+                outcome={batterOutcome(pick)}
+                game={gamesById.get(pick.gameId)}
+                liveCount={liveCount}
+                liveOutcome={liveCountOutcome('over', pick.line, liveCount)}
+                liveBatterLine={
+                  liveBatter ? { hits: liveBatter.hits, atBats: liveBatter.atBats } : null
+                }
+              />
+            )
+          })}
         </div>
       )}
 
@@ -546,9 +703,21 @@ export function PropBoard() {
               data.pitcherPicks.length >= 2 && 'lg:grid-cols-2',
             )}
           >
-            {data.pitcherPicks.map((pick) => (
-              <PitcherCard key={pick.market} pick={pick} outcome={pitcherOutcome(pick)} />
-            ))}
+            {data.pitcherPicks.map((pick) => {
+              const liveCount = pitcherLiveCount(pick)
+              const livePitcher = livePitcherByKey.get(`${pick.pitcherId}:${pick.gameId}`)
+              return (
+                <PitcherCard
+                  key={pick.market}
+                  pick={pick}
+                  outcome={pitcherOutcome(pick)}
+                  game={gamesById.get(pick.gameId)}
+                  liveCount={liveCount}
+                  liveOutcome={liveCountOutcome(pick.bestSide, pick.bestLine, liveCount)}
+                  liveOuts={livePitcher?.outs}
+                />
+              )
+            })}
           </div>
         </div>
       )}

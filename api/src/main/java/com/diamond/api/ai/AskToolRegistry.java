@@ -27,7 +27,7 @@ import java.util.Optional;
  * real data the app already serves, never from arbitrary SQL or its own guesses.
  */
 @Component
-public class AskToolRegistry {
+public class AskToolRegistry implements ToolRegistry {
 
     private static final int BEST_PLAYS_CAP = 15;
     private static final int PLAYER_SEARCH_CAP = 8;

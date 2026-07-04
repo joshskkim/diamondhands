@@ -147,7 +147,8 @@ def _process_date(
         # Refresh game status first, for every tracked game — a game postponed after the
         # morning slate build won't have a lineup, so this must run before the lineup
         # check below. Fresh detailed_status lets the next project tick skip the dead game
-        # and clear its rows (the quick loop never re-runs daily-slate).
+        # and clear its rows. (The quick loop also re-runs daily-slate now, which refreshes
+        # probable pitchers + inserts late-added games; this still only touches status/lineups.)
         update_game_status(conn, game_pk, g)
 
         by_side = parse_game_lineups(g)

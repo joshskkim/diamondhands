@@ -34,7 +34,9 @@ from ingester.projection.workload import (
 from ingester.projection.constants import (
     DEAD_GAME_STATUSES,
     EXPECTED_PA_PER_STARTER,
+    HR_DISTANCE_SHRINK_HR,
     LEAGUE_BB_PER_PA,
+    LEAGUE_HR_DISTANCE_P90_FT,
     LINEUP_SIZE_HITTERS,
     LINEUP_STARTERS,
     MIN_PLATOON_PA,
@@ -484,12 +486,37 @@ def _load_batted_ball_profile(
     )
 
 
+def _shrunk_hr_distance(p90: float, hr_n: float) -> float:
+    """Batter's p90 HR distance regressed toward the league p90 by sample size (thin samples
+    lean league-average, big samples keep their own tail). Pure — unit-tested."""
+    return (hr_n * p90 + HR_DISTANCE_SHRINK_HR * LEAGUE_HR_DISTANCE_P90_FT) / (
+        hr_n + HR_DISTANCE_SHRINK_HR
+    )
+
+
+def _projected_hr_carry_ft(
+    conn: psycopg.Connection, player_id: int, season: int, d_carry: float
+) -> float | None:
+    """Projected HR carry for this game: the batter's shrunk p90 HR distance plus today's
+    park/weather carry delta (feet). None when the batter has no measured HR-distance sample
+    — no power signal to surface."""
+    row = conn.execute(
+        "SELECT hr_n, p90_distance_ft FROM batter_hr_distance "
+        "WHERE player_id = %s AND season = %s",
+        (player_id, season),
+    ).fetchone()
+    if row is None or row[1] is None:
+        return None
+    return round(_shrunk_hr_distance(float(row[1]), float(row[0])) + d_carry, 1)
+
+
 def _load_pitcher_splits(
     conn: psycopg.Connection, pitcher_id: int, season: int
 ) -> list[PitcherHandSplit]:
     rows = conn.execute(
         """
-        SELECT vs_handedness, batters_faced, hits_per_pa, hr_per_pa, k_rate, bb_rate
+        SELECT vs_handedness, batters_faced, hits_per_pa, hr_per_pa, k_rate, bb_rate,
+               barrel_allowed
         FROM pitcher_skill
         WHERE player_id = %s AND season = %s
         """,
@@ -507,6 +534,7 @@ def _load_pitcher_splits(
                 hr_per_pa=float(r[3]),
                 k_rate=float(r[4]),
                 bb_rate=float(r[5]) if r[5] is not None else LEAGUE_BB_PER_PA,
+                barrel_allowed=float(r[6]) if r[6] is not None else None,
             )
         )
     return splits
@@ -678,6 +706,7 @@ def _upsert_batter_projection(
     lineup_confirmed: bool,
     matchup_xwoba: float | None,
     matchup_quality: str | None,
+    hr_distance_ft: float | None,
 ) -> None:
     conn.execute(
         """
@@ -690,6 +719,7 @@ def _upsert_batter_projection(
             pitcher_data_quality,
             lineup_position, lineup_confirmed,
             matchup_xwoba, matchup_quality,
+            hr_distance_ft,
             computed_at
         )
         VALUES (
@@ -701,6 +731,7 @@ def _upsert_batter_projection(
             %s,
             %s, %s,
             %s, %s,
+            %s,
             NOW()
         )
         ON CONFLICT (game_id, player_id) DO UPDATE SET
@@ -724,6 +755,7 @@ def _upsert_batter_projection(
             lineup_confirmed      = EXCLUDED.lineup_confirmed,
             matchup_xwoba         = EXCLUDED.matchup_xwoba,
             matchup_quality       = EXCLUDED.matchup_quality,
+            hr_distance_ft        = EXCLUDED.hr_distance_ft,
             computed_at           = NOW()
         """,
         (
@@ -749,6 +781,7 @@ def _upsert_batter_projection(
             lineup_confirmed,
             matchup_xwoba,
             matchup_quality,
+            hr_distance_ft,
         ),
     )
 
@@ -972,6 +1005,10 @@ def _project_team_side(
             _effective_bat_side(hitter.bats, pitcher_throws),
             d_carry,
         )
+        # Long-ball-upside tiebreaker: how far this batter's HR would carry in today's park
+        # & weather (his shrunk p90 + the carry delta). Orthogonal to p_hr — used only to
+        # rank HR picks by their shot at the day's longest HR.
+        hr_distance_ft = _projected_hr_carry_ft(conn, hitter.player_id, season, d_carry)
 
         # v2.1: the matchup drives the batter's hit/K/HR rates and is stored for audit/UI.
         matchup = _resolve_matchup(
@@ -1016,6 +1053,7 @@ def _project_team_side(
             hitter.lineup_confirmed,
             matchup.xwoba,
             matchup.quality,
+            hr_distance_ft,
         )
         summary.batter_rows += 1
 
@@ -1275,8 +1313,10 @@ def _project_game(
     _upsert_game_sim_projection(conn, game.game_id, sim)
     # Persist the simulator's per-batter prop distributions (aligned to each side's
     # lineup) so the prop board can blend them against the closed-form binomial.
-    _upsert_game_sim_batter_props(conn, game.game_id, sim.home_props, home.starter_player_ids)
-    _upsert_game_sim_batter_props(conn, game.game_id, sim.away_props, away.starter_player_ids)
+    _upsert_game_sim_batter_props(
+        conn, game.game_id, sim.n_sims, sim.home_props, home.starter_player_ids)
+    _upsert_game_sim_batter_props(
+        conn, game.game_id, sim.n_sims, sim.away_props, away.starter_player_ids)
     # Each starter's hits/ER distribution (faced by the opposing lineup in the sim).
     # Skip a starter flagged as a likely opener — the away lineup faces the home
     # probable, so that side's opener flag gates the home probable's props (and vice versa).
@@ -1307,9 +1347,9 @@ def _upsert_game_sim_projection(
             expected_home_runs, expected_away_runs, expected_total, p_home_win, total_hist,
             f5_expected_home, f5_expected_away, f5_expected_total,
             f5_p_home_lead, f5_p_away_lead, f5_p_tie, f5_total_hist,
-            p_yrfi, p_home_cover_1_5, p_away_cover_1_5, computed_at
+            p_yrfi, p_home_cover_1_5, p_away_cover_1_5, p_home_cover_plus15, computed_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
         ON CONFLICT (game_id) DO UPDATE SET
             n_sims             = EXCLUDED.n_sims,
             expected_home_runs = EXCLUDED.expected_home_runs,
@@ -1327,6 +1367,7 @@ def _upsert_game_sim_projection(
             p_yrfi             = EXCLUDED.p_yrfi,
             p_home_cover_1_5   = EXCLUDED.p_home_cover_1_5,
             p_away_cover_1_5   = EXCLUDED.p_away_cover_1_5,
+            p_home_cover_plus15 = EXCLUDED.p_home_cover_plus15,
             computed_at        = NOW()
         """,
         (
@@ -1347,6 +1388,7 @@ def _upsert_game_sim_projection(
             round(sim.p_yrfi, 3),
             round(sim.p_home_cover_1_5, 3),
             round(sim.p_away_cover_1_5, 3),
+            round(sim.p_home_cover_plus_1_5, 3),
         ),
     )
 
@@ -1354,6 +1396,7 @@ def _upsert_game_sim_projection(
 def _upsert_game_sim_batter_props(
     conn: psycopg.Connection,
     game_id: int,
+    n_sims: int,
     props: list,
     player_ids: list[int | None],
 ) -> None:
@@ -1366,29 +1409,38 @@ def _upsert_game_sim_batter_props(
         conn.execute(
             """
             INSERT INTO game_sim_batter_props (
-                game_id, player_id,
+                game_id, player_id, n_sims,
                 p_hit_1plus, p_hit_2plus, p_hr, p_k_1plus, expected_tb, expected_hits,
+                expected_hrr, tb_hist, hrr_hist,
                 computed_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             ON CONFLICT (game_id, player_id) DO UPDATE SET
+                n_sims        = EXCLUDED.n_sims,
                 p_hit_1plus   = EXCLUDED.p_hit_1plus,
                 p_hit_2plus   = EXCLUDED.p_hit_2plus,
                 p_hr          = EXCLUDED.p_hr,
                 p_k_1plus     = EXCLUDED.p_k_1plus,
                 expected_tb   = EXCLUDED.expected_tb,
                 expected_hits = EXCLUDED.expected_hits,
+                expected_hrr  = EXCLUDED.expected_hrr,
+                tb_hist       = EXCLUDED.tb_hist,
+                hrr_hist      = EXCLUDED.hrr_hist,
                 computed_at   = NOW()
             """,
             (
                 game_id,
                 player_id,
+                n_sims,
                 round(prop.p_hit_1plus, 3),
                 round(prop.p_hit_2plus, 3),
                 round(prop.p_hr, 3),
                 round(prop.p_k_1plus, 3),
                 round(prop.expected_tb, 2),
                 round(prop.expected_hits, 2),
+                round(prop.expected_hrr, 2),
+                prop.tb_hist,
+                prop.hrr_hist,
             ),
         )
 
@@ -1565,7 +1617,7 @@ def _load_pitcher_splits_snapshot(
     """Read pitcher splits from the most recent snapshot with as_of_date <= as_of_date."""
     rows = conn.execute(
         """
-        SELECT vs_handedness, batters_faced, hits_per_pa, hr_per_pa, k_rate
+        SELECT vs_handedness, batters_faced, hits_per_pa, hr_per_pa, k_rate, barrel_allowed
         FROM pitcher_skill_snapshots
         WHERE player_id = %s
           AND season = %s
@@ -1588,6 +1640,7 @@ def _load_pitcher_splits_snapshot(
                 hits_per_pa=float(r[2]),
                 hr_per_pa=float(r[3]),
                 k_rate=float(r[4]),
+                barrel_allowed=float(r[5]) if r[5] is not None else None,
             )
         )
     return splits

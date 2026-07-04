@@ -1,0 +1,9 @@
+{
+  "id": "best-ev-today",
+  "question": "What's the best EV bet on the board tonight? Give me the edge and EV.",
+  "user_context": {"bankroll_units": 100, "kelly_fraction": 0.25},
+  "expected_tools": {"required": ["get_best_plays"], "optional": ["get_most_likely", "get_model_accuracy", "get_prop_board"]},
+  "grounding": {"must_cite_from": ["get_best_plays"], "forbid_invention": true},
+  "expects_recommendation": false,
+  "tags": ["co-pilot", "ev"]
+}

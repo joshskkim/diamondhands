@@ -62,7 +62,8 @@ public class AccuracyService {
             List<AccuracyPointDto> series = new ArrayList<>();
             for (AccuracyRow r : marketRows) {
                 series.add(new AccuracyPointDto(
-                    r.slateDate().toString(), r.n(), r.brier(), r.baselineBrier(), r.ece()));
+                    r.slateDate().toString(), r.n(), r.brier(), r.baselineBrier(), r.ece(),
+                    r.logLoss(), r.sharpness()));
             }
             // Rows are ordered by date asc, so the last is the most recent.
             AccuracyRow latest = marketRows.get(marketRows.size() - 1);

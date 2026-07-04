@@ -115,6 +115,12 @@ def _prepare_pitches(df: pd.DataFrame, as_of_date: date, season: int) -> pd.Data
     out["is_whiff"] = desc.isin(_WHIFF_DESCRIPTIONS).astype(int)
     out["velo"] = _to_float64(out.get("release_speed"))
 
+    # Chase (Lever 3): Statcast zone 11-14 = out of the strike zone; a swing there is
+    # a chase. oz_pitches is the denominator; oz_swing the numerator.
+    zone = pd.to_numeric(out.get("zone", pd.Series(index=out.index, dtype="float64")), errors="coerce")
+    out["is_oz"] = (zone >= 11).fillna(False).astype(int)
+    out["is_oz_swing"] = ((out["is_oz"] == 1) & (out["is_swing"] == 1)).astype(int)
+
     is_terminal = out["events"].notna() if "events" in cols else pd.Series(False, index=out.index)
     out["is_terminal"] = is_terminal.astype(int)
 
@@ -175,6 +181,8 @@ def _batter_rows_for_hand(
         pa_ended=("is_terminal", "sum"),
         swings=("is_swing", "sum"),
         whiffs=("is_whiff", "sum"),
+        oz=("is_oz", "sum"),
+        oz_sw=("is_oz_swing", "sum"),
         xwoba_num=("xwoba_num", "sum"),
         woba_num=("woba_value", "sum"),
         hits=("is_hit", "sum"),
@@ -192,6 +200,7 @@ def _batter_rows_for_hand(
         pa_ended = int(r["pa_ended"])
         swings = int(r["swings"])
         ab = int(r["ab"])
+        oz = int(r["oz"])
         # Divide by the PA count, NOT sum(woba_denom): the Statcast woba_denom column
         # is populated on only ~1 of every ~9 PA-ending rows in the bulk feed, so
         # summing it collapses the denominator and inflates xwOBA (observed up to 6.45).
@@ -211,6 +220,10 @@ def _batter_rows_for_hand(
             "hr_rate": _safe_div(r["hr"], pa_ended),
             "swing_rate": _safe_div(swings, pitches_seen),
             "whiff_rate": _safe_div(r["whiffs"], swings),
+            # Lever 3: chase = out-of-zone swings / out-of-zone pitches; oz_pitches is
+            # the weight for aggregating to an overall batter chase in refresh-priors.
+            "chase_rate": _safe_div(r["oz_sw"], oz),
+            "oz_pitches": oz,
         })
     return rows
 
@@ -342,6 +355,8 @@ def _baseline_rows_for_hand(prepared: pd.DataFrame, vs_hand: str, season: int) -
         ab=("is_ab", "sum"),
         tb=("tb", "sum"),
         pa_ended=("is_terminal", "sum"),
+        swings=("is_swing", "sum"),
+        whiffs=("is_whiff", "sum"),
     ).reset_index()
 
     rows: list[dict] = []
@@ -355,6 +370,9 @@ def _baseline_rows_for_hand(prepared: pd.DataFrame, vs_hand: str, season: int) -
             "league_iso": _safe_div(r["tb"] - r["hits"], r["ab"]),
             "league_k_rate": _safe_div(r["k"], r["pa_ended"]),
             "league_usage_rate": _safe_div(r["pitches"], total_pitches),
+            # Lever 2: per-pitch league whiff (swinging strikes / swings) — the neutral
+            # point the pitcher's per-pitch whiff is measured against in the matchup.
+            "league_whiff_rate": _safe_div(r["whiffs"], int(r["swings"])),
         })
     return rows
 

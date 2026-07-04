@@ -120,6 +120,7 @@ public class OddsService {
         Map<Long, List<PropOddRow>> propsByGame = repo.findPropOddsByDate(date);
         Map<Long, RunProj> projByGame = repo.findRunProjByDate(date);
         Map<Long, GameMeta> metaByGame = repo.findGameMetaByDate(date);
+        Map<String, OddsRepository.VerdictRow> verdicts = repo.findPickVerdictsByDate(date);
 
         List<BestPlayDto> plays = new ArrayList<>();
         for (long gameId : repo.findGameIdsWithOdds(date)) {
@@ -133,14 +134,14 @@ public class OddsService {
 
             for (GameMarketDto market : odds.game()) {
                 for (LineQuoteDto q : market.quotes()) {
-                    addPlay(plays, gameId, matchup, market.market(), q.side(),
+                    addPlay(plays, verdicts, gameId, matchup, market.market(), q.side(),
                         gameSelection(market.market(), q.side(), q.line(), meta), q, null, null);
                 }
             }
             for (PropMarketDto prop : odds.props()) {
-                addPlay(plays, gameId, matchup, prop.market(), "over",
+                addPlay(plays, verdicts, gameId, matchup, prop.market(), "over",
                     propSelection(prop, "over"), prop.over(), prop.player().id(), prop.player().name());
-                addPlay(plays, gameId, matchup, prop.market(), "under",
+                addPlay(plays, verdicts, gameId, matchup, prop.market(), "under",
                     propSelection(prop, "under"), prop.under(), prop.player().id(), prop.player().name());
             }
         }
@@ -304,13 +305,17 @@ public class OddsService {
             default -> 1;
         });
 
-    private void addPlay(List<BestPlayDto> plays, long gameId, String matchup, String market,
+    private void addPlay(List<BestPlayDto> plays, Map<String, OddsRepository.VerdictRow> verdicts,
+                         long gameId, String matchup, String market,
                          String side, String selection, LineQuoteDto q, Integer playerId, String playerName) {
         if (q == null || q.evPct() == null || q.modelProb() == null) return;
+        OddsRepository.VerdictRow v = verdicts.get(OddsRepository.verdictKey(gameId, market, side, playerId));
         plays.add(new BestPlayDto(
             gameId, matchup, market, side, selection, q.line(), q.bestBook(),
             q.priceAmerican(), q.priceDecimal(), q.modelProb(), q.impliedProb(), q.fairProb(), q.evPct(),
-            playerId, playerName));
+            playerId, playerName,
+            v == null ? null : v.verdict(), v == null ? null : v.confidence(),
+            v == null ? null : v.rationale()));
     }
 
     private static String gameSelection(String market, String side, Double line, GameMeta meta) {
