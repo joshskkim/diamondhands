@@ -5,11 +5,19 @@ import { useQuery } from '@tanstack/react-query'
 import { Target } from 'lucide-react'
 import {
   livePlayerResultsQueryOptions,
+  lottoQueryOptions,
   playerResultsQueryOptions,
   propBoardQueryOptions,
   todayGamesQueryOptions,
 } from '@/lib/api'
-import type { BatterResult, PitcherPropPick, PitcherResult, PropBoardPick, TodayGame } from '@/lib/types'
+import type {
+  BatterResult,
+  BoomPick,
+  PitcherPropPick,
+  PitcherResult,
+  PropBoardPick,
+  TodayGame,
+} from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
 import { liveCountOutcome, overUnderOutcome, propOutcome, type PickOutcome } from '@/lib/picks'
@@ -382,6 +390,88 @@ function PropCard({
   )
 }
 
+// The HR slot's "Lotto" boom pick (GET /api/lotto): NOT the most-likely homer, but a cold
+// bottom-of-order bat with real raw power in a HR-friendly park/pitcher/weather spot — the case
+// the model's own last-30 blend underweights. Age-blind, model-first (price optional). Rendered
+// in the board's cyan batter style with the boom signals (order / barrel / slump / HR boost) and
+// the server-built reasons, so it reads as one of the batter cards rather than a separate thing.
+function BoomHrCard({
+  boom,
+  outcome,
+  game,
+  liveCount,
+  liveOutcome,
+}: {
+  boom: BoomPick
+  outcome?: PickOutcome
+  game?: TodayGame
+  liveCount?: number | null
+  liveOutcome?: PickOutcome
+}) {
+  const meta = MARKET_META.hr
+  return (
+    <div className="rounded-xl border border-white/10 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-cyan-300 border-cyan-400/40 bg-cyan-500/10">
+          {meta.chip}
+        </span>
+        <span
+          title="A cold bat with real power the market is sleeping on — high variance by design"
+          className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-300 border-amber-400/40 bg-amber-500/10"
+        >
+          🎟 Lotto
+        </span>
+        {boom.hrDistanceFt != null && boom.hrDistanceFt >= LONG_BALL_UPSIDE_FT && (
+          <span
+            title={`Projects to carry ~${Math.round(boom.hrDistanceFt)} ft tonight — a real shot at the day's longest-HR bonus`}
+            className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-300 border-amber-400/40 bg-amber-500/10"
+          >
+            🚀 Long-ball upside
+          </span>
+        )}
+        {outcome && <OutcomeBadge outcome={outcome} iconOnly />}
+        <Link
+          href={`/mlb/games/${boom.gameId}`}
+          className="ml-auto font-mono text-xs text-zinc-500 hover:text-cyan-400 transition-colors"
+        >
+          {boom.matchup}
+        </Link>
+      </div>
+
+      <div className="flex items-baseline justify-between gap-3">
+        <Link
+          href={`/mlb/players/${boom.playerId}`}
+          className="text-base font-bold tracking-tight text-zinc-100 hover:text-cyan-300 transition-colors"
+        >
+          {boom.playerName}{' '}
+          <span className="text-sm font-normal text-zinc-500">{meta.verb}</span>
+        </Link>
+        <span className="shrink-0 font-mono tabular-nums text-lg text-cyan-300">
+          {pct(boom.pHr)}
+        </span>
+      </div>
+
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        <Factor label="Order" value={ordinal(boom.lineupPosition)} />
+        <Factor label="Barrel" value={pct(boom.barrelRate)} />
+        <Factor label="Slump" value={`−${(boom.coldGap * 1000).toFixed(0)} xwOBA`} />
+        <Factor label="HR boost" value={`×${boom.condBoost.toFixed(2)}`} />
+      </div>
+
+      <LivePropTracker
+        game={game}
+        line={0.5}
+        outcome={liveOutcome}
+        count={liveCount}
+        unit="HR"
+        batterLine={null}
+      />
+
+      <WhyDisclosure reasons={boom.reasons} />
+    </div>
+  )
+}
+
 // One-line summary of the pitcher's mix: his most-thrown pitch (usage/whiff/velo) and,
 // when different, his best swing-and-miss offering — the real K driver.
 function arsenalNote(pick: PitcherPropPick): string | null {
@@ -616,6 +706,9 @@ function Skeleton({ className = '' }: { className?: string }) {
  */
 export function PropBoard() {
   const { data, isPending, isError } = useQuery(propBoardQueryOptions())
+  // The HR card is the "Lotto" boom pick when one qualifies (a cold slugger in a HR-friendly
+  // spot); otherwise we fall back to the market's most-likely batter below.
+  const { data: lotto } = useQuery(lottoQueryOptions())
   // Actual results overlay a ✓/✗ on the headline pick once its game is final.
   const { data: results } = useQuery(playerResultsQueryOptions())
   // Live game state (score/inning) for the in-progress tracker on each card.
@@ -706,6 +799,22 @@ export function PropBoard() {
           )}
         >
           {data.picks.map((pick) => {
+            // Swap the HR slot for the Lotto boom pick when one qualifies (same position/count,
+            // so the grid layout is unchanged); fall back to the most-likely HR card otherwise.
+            if (pick.market === 'hr' && lotto) {
+              const key = `${lotto.playerId}:${lotto.gameId}`
+              const boomLiveCount = liveBatterByKey.get(key)?.homeRuns
+              return (
+                <BoomHrCard
+                  key="hr"
+                  boom={lotto}
+                  outcome={propOutcome(batterByKey.get(key)?.homeRuns, 0.5)}
+                  game={gamesById.get(lotto.gameId)}
+                  liveCount={boomLiveCount}
+                  liveOutcome={liveCountOutcome('over', 0.5, boomLiveCount)}
+                />
+              )
+            }
             const liveCount = batterLiveCount(pick)
             const liveBatter = liveBatterByKey.get(`${pick.playerId}:${pick.gameId}`)
             return (
