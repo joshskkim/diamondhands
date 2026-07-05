@@ -68,7 +68,7 @@ const TABS: { name: string; href: string; blurb: string }[] = [
   },
   {
     name: 'Accuracy',
-    href: '/mlb/accuracy',
+    href: '/mlb/report-card',
     blurb: 'How the model’s past projections have actually scored, so you can judge how much to trust today’s numbers.',
   },
   {

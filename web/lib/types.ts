@@ -261,23 +261,6 @@ export interface GameProjections {
   pitchers: GamePitchers | null
 }
 
-/**
- * A single batter's projection flattened with its game context, for use in the
- * home "Today's Board" pick leaderboards. Additive helper type — derived
- * entirely from existing endpoints (no backend changes).
- */
-export interface FlatBatterPick {
-  batter: BatterProjection
-  gameId: number
-  teamAbbr: string
-  opponentAbbr: string
-  opposingPitcherName: string
-  opposingPitcherThrows: string
-  startTimeUtc: string
-  /** True when this batter's lineup slot came from a confirmed lineup. */
-  lineupConfirmed: boolean
-}
-
 // ── Sportsbook odds ───────────────────────────────────────────────────────
 
 /** One bookmaker's price for a single line. */
@@ -426,18 +409,6 @@ export interface BookQuote {
 export interface LineShop {
   key: string
   quotes: BookQuote[]
-}
-
-/** GET /api/odds/props — one batter prop over-price (BetRivers-first) for Best Bets. */
-export interface BatterPropOdds {
-  gameId: number
-  playerId: number
-  /** 'hit' | 'hr' */
-  market: string
-  line: number | null
-  book: string
-  priceAmerican: number | null
-  priceDecimal: number | null
 }
 
 /**
