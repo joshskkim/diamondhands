@@ -7,6 +7,7 @@ import com.diamond.api.repository.PropBoardRepository;
 import com.diamond.api.repository.PropBoardRepository.BestPrice;
 import com.diamond.api.repository.PropBoardRepository.ClearRates;
 import com.diamond.api.repository.PropBoardRepository.PitcherPrice;
+import com.diamond.api.repository.PropBoardRepository.PitcherQuotes;
 import com.diamond.api.repository.PropBoardRepository.PitcherRow;
 import com.diamond.api.repository.PropBoardRepository.SlateRow;
 import io.micrometer.observation.annotation.Observed;
@@ -21,22 +22,26 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
 /**
- * Builds the model-first prop board: for each batter prop market, the single most
- * likely player on the slate by the mechanistic model's own probability. Deliberately
- * independent of sportsbook odds — when a cached over-price exists it's attached as
- * context (with EV at that price), but the board renders the same without it.
+ * Builds the prop board. BATTER cards stay model-first: for each market (H+R+RBI,
+ * HR, total bases, walks) the single most likely player on the slate by the model's
+ * own probability, deliberately independent of sportsbook odds — a cached price is
+ * context (with EV), never the ranking. PITCHER cards are the opposite: ranked by
+ * model-vs-line EDGE against the de-vigged book (falling back to expected volume on
+ * odds-less days) — see the pitcher section below.
  */
 @Service
 public class PropBoardService {
 
-    /** A market definition: model probability + the weather adjustment that drives it.
-     *  {@code simProb} is the Monte-Carlo simulator's estimate of the same market, blended
-     *  into the closed-form model probability when sim-blending is enabled. */
-    private record Market(String key, String oddsMarket,
+    /** A market definition: the card's line, model probability of clearing it, and the
+     *  weather adjustment that drives it. {@code simProb} is the Monte-Carlo simulator's
+     *  estimate of the same market, blended into the closed-form model probability when
+     *  sim-blending is enabled (tb/hrr are sim-NATIVE — their prob already IS the sim). */
+    private record Market(String key, String oddsMarket, double line,
                           Function<SlateRow, Double> prob,
                           Function<SlateRow, Double> simProb,
                           Function<SlateRow, Double> weather,
@@ -63,32 +68,37 @@ public class PropBoardService {
     private static final int GUARD_MIN_N = 15;
     private static final int CANDIDATE_POOL = 10;
 
-    // Batter K has no odds-market counterpart in our data (books we ingest don't
-    // quote it), so its price fields are always null.
-    // League clear-rates per market (≈2025-26: share of starter games with 1+ hit /
-    // 1+ HR / 1+ K) — the prior a thin empirical sample regresses toward.
+    // League clear-rates per market — the prior a thin empirical sample regresses
+    // toward. tb/hrr measured over 2026 player_game_stats (share of starter games
+    // with 2+ total bases / 2+ hits+runs+RBI); hr/bb are the long-standing 1+ rates.
+    // tb/hrr replaced the old hit (1+ hit, ~62% league) and K (1+ K) cards — those
+    // were low-signal occurrence props; these are real line-based markets. Their
+    // model probability is the simulator's own distribution (P(over 1.5) off the
+    // tb/hrr histograms), so batters without a sim row simply can't carry the card,
+    // and there's no separate sim estimate to blend (simProb null, weight 0).
     private static final List<Market> MARKETS = List.of(
-        new Market("hit", "hit", SlateRow::pHit1, SlateRow::pSimHit, SlateRow::adjWeatherHits, 0.45, 0.62),
-        new Market("hr",  "hr",  SlateRow::pHr,   SlateRow::pSimHr,  SlateRow::adjWeatherHr,   0.08, 0.15),
-        new Market("k",   null,  SlateRow::pK1,   SlateRow::pSimK,   r -> null,                null, 0.66),
+        new Market("hrr", "hrr", 1.5, r -> histProb(r.hrrHist(), r.simNSims(), 1.5),
+            r -> null, SlateRow::adjWeatherHits, null, 0.44),
+        new Market("hr",  "hr",  0.5, SlateRow::pHr, SlateRow::pSimHr,
+            SlateRow::adjWeatherHr, 0.08, 0.15),
+        new Market("tb",  "tb",  1.5, r -> histProb(r.tbHist(), r.simNSims(), 1.5),
+            r -> null, SlateRow::adjWeatherHits, null, 0.31),
         // Walks (v2.11): no Monte-Carlo prop and no park/weather term. oddsMarket="bb" so a
         // best over-price attaches IF a book quotes batter walks (rare in our feed); the card
         // stands on the projection alone otherwise. leagueRate ≈ P(>=1 BB per game).
-        new Market("bb",  "bb",  SlateRow::pBb1,  r -> null,         r -> null,                null, 0.30));
+        new Market("bb",  "bb",  0.5, SlateRow::pBb1, r -> null, r -> null, null, 0.30));
 
     // Sim-blend (Jun 2026): blend the Monte-Carlo simulator's per-batter prop estimate
     // into the closed-form binomial BEFORE the empirical shrinkage. The sim captures
     // lineup turnover and PA-count variance the closed-form model can't. OFF by default
-    // and the per-market weights default to 0 — they are to be fit on the backtest harness
-    // before anything ships live (env: DIAMOND_SIM_PROP_BLEND_ENABLED / _WEIGHT_HIT/_HR/_K).
+    // and the per-market weight defaults to 0 — to be fit on the backtest harness before
+    // anything ships live (env: DIAMOND_SIM_PROP_BLEND_ENABLED / _WEIGHT_HR). Only HR
+    // still has both a closed form and a sim estimate; tb/hrr are sim-native and the
+    // hit/k cards (with their weights) were retired with the TB / H+R+RBI swap.
     @Value("${diamond.sim-prop-blend.enabled:false}")
     private boolean simBlendEnabled;
-    @Value("${diamond.sim-prop-blend.weight-hit:0.0}")
-    private double simWeightHit;
     @Value("${diamond.sim-prop-blend.weight-hr:0.0}")
     private double simWeightHr;
-    @Value("${diamond.sim-prop-blend.weight-k:0.0}")
-    private double simWeightK;
 
     private final PropBoardRepository repo;
 
@@ -99,9 +109,7 @@ public class PropBoardService {
     /** The configured sim-blend weight for a market (0 when unset → closed-form only). */
     private double simWeight(String key) {
         return switch (key) {
-            case "hit" -> simWeightHit;
-            case "hr"  -> simWeightHr;
-            case "k"   -> simWeightK;
+            case "hr" -> simWeightHr;
             default -> 0.0;
         };
     }
@@ -155,7 +163,7 @@ public class PropBoardService {
                     ClearRates rates = ratesByPlayer.get(r.playerId());
                     return new Scored(r, rates,
                         blend(effectiveModelProb(m, r), seasonRate(m.key(), rates),
-                              nSeasonOf(rates), m.leagueRate()));
+                              nSeasonFor(m.key(), rates), m.leagueRate()));
                 })
                 .filter(s -> !guardVetoed(m, s.rates()))
                 .sorted(Comparator.comparingDouble(Scored::blended).reversed())
@@ -177,16 +185,24 @@ public class PropBoardService {
     }
 
     // ── Pitcher props ───────────────────────────────────────────────────────────
-    // Ranked by EXPECTED VOLUME (expected Ks / outs), not P(clear): pitcher lines
-    // vary by arm, so "most likely to clear his line" would surface soft-tossers with
-    // low lines, not the aces. One card per market; the distribution is the reasoning.
+    // Ranked by MODEL-VS-LINE EDGE: for every priced starter, de-vig the book's
+    // over/under implied probabilities at his consensus line and rank by
+    // |model P(over) − no-vig P(over)|; the recommended side is wherever the edge
+    // points. When no starter has usable odds for a market (books not yet posted,
+    // model can't price the quoted line), fall back to the old EXPECTED-VOLUME
+    // ranking — the card never goes empty, and `rankedBy` tells the client which
+    // mode produced it.
 
     private record PitcherMarket(
         String key,                                  // odds market key
-        Function<PitcherRow, Double> volume,         // ranking metric
+        Function<PitcherRow, Double> volume,         // fallback ranking metric
         List<Double> lines,                          // distribution thresholds shown
         Function<PitcherRow, List<Double>> probs,    // P(over each line), aligned to lines
-        Predicate<PitcherRow> hasDist) {}            // true when the row carries a real distribution
+        Predicate<PitcherRow> hasDist,               // true when the row carries a real distribution
+        // Model P(over) at an ARBITRARY book line — null when the model can't price it.
+        // K/outs only exist at the workload model's fixed thresholds; hits/ER hold the
+        // full sim histogram and can price any half-line.
+        BiFunction<PitcherRow, Double, Double> probAtLine) {}
 
     private static final List<Double> HITS_LINES = List.of(4.5, 5.5, 6.5);
     private static final List<Double> ER_LINES = List.of(1.5, 2.5, 3.5);
@@ -197,91 +213,162 @@ public class PropBoardService {
         // those rows out so a missing projection isn't rendered as a confident 100% under.
         new PitcherMarket("pitcher_k", PitcherRow::expectedK, List.of(4.5, 5.5, 6.5),
             r -> List.of(nz(r.pk45()), nz(r.pk55()), nz(r.pk65())),
-            r -> r.pk45() != null && r.pk55() != null && r.pk65() != null),
+            r -> r.pk45() != null && r.pk55() != null && r.pk65() != null,
+            (r, line) -> ladderProb(List.of(4.5, 5.5, 6.5),
+                List.of(nz(r.pk45()), nz(r.pk55()), nz(r.pk65())), line)),
         new PitcherMarket("pitcher_outs", PitcherRow::expectedOuts, List.of(14.5, 17.5),
             r -> List.of(nz(r.po145()), nz(r.po175())),
-            r -> r.po145() != null && r.po175() != null),
+            r -> r.po145() != null && r.po175() != null,
+            (r, line) -> ladderProb(List.of(14.5, 17.5),
+                List.of(nz(r.po145()), nz(r.po175())), line)),
         // Hits allowed / earned runs come from the simulator's histograms, so P(over) is
-        // read off the distribution rather than a closed form. Like Ks/outs, ranked by
-        // expected volume — here that surfaces the starter most exposed to a big line
-        // (the over lean), not the stingiest arm. No histogram (no sim row) → no card.
+        // read off the distribution at any half-line. No histogram (no sim row) → no card.
         new PitcherMarket("pitcher_hits_allowed", PitcherRow::expectedHits, HITS_LINES,
-            r -> histPOver(r.hitsHist(), r.nSims(), HITS_LINES), r -> hasHist(r.hitsHist(), r.nSims())),
+            r -> histPOver(r.hitsHist(), r.nSims(), HITS_LINES),
+            r -> hasHist(r.hitsHist(), r.nSims()),
+            (r, line) -> histProb(r.hitsHist(), r.nSims(), line)),
         new PitcherMarket("pitcher_earned_runs", PitcherRow::expectedEr, ER_LINES,
-            r -> histPOver(r.erHist(), r.nSims(), ER_LINES), r -> hasHist(r.erHist(), r.nSims())));
+            r -> histPOver(r.erHist(), r.nSims(), ER_LINES),
+            r -> hasHist(r.erHist(), r.nSims()),
+            (r, line) -> histProb(r.erHist(), r.nSims(), line)));
+
+    /** A priced candidate: model vs de-vigged book at the consensus line. */
+    private record Edged(PitcherRow row, PitcherQuotes quotes,
+                         double modelPOver, double fairPOver) {
+        String side() { return modelPOver >= fairPOver ? "over" : "under"; }
+        double edge() { return Math.abs(modelPOver - fairPOver); }
+    }
 
     private List<PitcherPropPickDto> pitcherPicks(LocalDate date) {
         List<PitcherRow> rows = repo.findPitcherRows(date);
         List<PitcherPropPickDto> out = new ArrayList<>();
         for (PitcherMarket m : PITCHER_MARKETS) {
-            List<PitcherRow> ranked = rows.stream()
+            List<PitcherRow> eligible = rows.stream()
                 .filter(r -> m.volume().apply(r) != null && m.hasDist().test(r))
+                .toList();
+            if (eligible.isEmpty()) continue;
+
+            // Edge mode: every starter whose consensus line the model can price AND
+            // whose both sides are quoted (two-way de-vig), ranked by |edge|.
+            Map<PropBoardRepository.PitcherQuoteKey, PitcherQuotes> quotes =
+                repo.findPitcherMarketQuotes(date, m.key());
+            List<Edged> edged = eligible.stream()
+                .map(r -> toEdged(m, r, quotes.get(
+                    new PropBoardRepository.PitcherQuoteKey(r.gameId(), r.pitcherId()))))
+                .filter(e -> e != null)
+                .sorted(Comparator.comparingDouble(Edged::edge).reversed())
+                .toList();
+
+            if (!edged.isEmpty()) {
+                List<PitcherPropPickDto.RunnerUp> runnersUp = edged.stream()
+                    .skip(1).limit(2)
+                    .map(e -> new PitcherPropPickDto.RunnerUp(
+                        e.row().pitcherId(), e.row().pitcher(), e.row().team(),
+                        round(m.volume().apply(e.row()), 2)))
+                    .toList();
+                out.add(toPitcherPick(m, edged.get(0), runnersUp));
+                continue;
+            }
+
+            // Volume fallback (no odds anywhere for this market today): the old ranking.
+            // A starter can legitimately top both Ks and outs (the workhorse ace) —
+            // these are distinct stats, so we don't dedupe across cards in either mode.
+            List<PitcherRow> ranked = eligible.stream()
                 .sorted(Comparator.comparingDouble((PitcherRow r) -> m.volume().apply(r)).reversed())
                 .toList();
-            if (ranked.isEmpty()) continue;
-            // A starter can legitimately top both Ks and outs (the workhorse ace) —
-            // these are distinct stats, so we don't dedupe across the two cards.
-            out.add(toPitcherPick(m, ranked.get(0), ranked.stream().skip(1).limit(2).toList()));
+            List<PitcherPropPickDto.RunnerUp> runnersUp = ranked.stream()
+                .skip(1).limit(2)
+                .map(r -> new PitcherPropPickDto.RunnerUp(
+                    r.pitcherId(), r.pitcher(), r.team(), round(m.volume().apply(r), 2)))
+                .toList();
+            out.add(toVolumePick(m, ranked.get(0), runnersUp));
         }
         return out;
     }
 
-    private PitcherPropPickDto toPitcherPick(PitcherMarket m, PitcherRow top, List<PitcherRow> next) {
+    /** Model-vs-book comparison for one starter, or null when it can't be made: no quotes,
+     *  one-sided quotes (no de-vig), or a book line the model has no distribution at. */
+    private static Edged toEdged(PitcherMarket m, PitcherRow r, PitcherQuotes q) {
+        if (q == null || q.overImplied() == null || q.underImplied() == null) return null;
+        double sum = q.overImplied() + q.underImplied();
+        if (sum <= 0) return null;
+        Double modelPOver = m.probAtLine().apply(r, q.line());
+        if (modelPOver == null) return null;
+        return new Edged(r, q, modelPOver, q.overImplied() / sum);
+    }
+
+    /** Edge-mode card: anchored at the book's consensus line, side = where the edge
+     *  points, price/EV from the best quote on that side. */
+    private PitcherPropPickDto toPitcherPick(PitcherMarket m, Edged top,
+                                             List<PitcherPropPickDto.RunnerUp> runnersUp) {
+        PitcherRow row = top.row();
+        double anchorLine = top.quotes().line();
+        String bestSide = top.side();
+        double bestProb = "over".equals(bestSide) ? top.modelPOver() : 1.0 - top.modelPOver();
+        double fairProb = "over".equals(bestSide) ? top.fairPOver() : 1.0 - top.fairPOver();
+
+        PitcherPrice chosen = "over".equals(bestSide) ? top.quotes().bestOver()
+                                                      : top.quotes().bestUnder();
+        Double bookLine = null, evPct = null;
+        String bestBook = null;
+        Integer priceAmerican = null;
+        if (chosen != null) {
+            bookLine = chosen.line();
+            bestBook = chosen.bookmaker();
+            priceAmerican = chosen.priceAmerican();
+            evPct = round(bestProb * chosen.priceDecimal() - 1.0, 4);
+        }
+        return buildPitcherDto(m, row, anchorLine, bestSide, bestProb,
+            bookLine, bestBook, priceAmerican, evPct,
+            round(top.edge(), 4), round(fairProb, 4), "edge", runnersUp);
+    }
+
+    /** Volume-fallback card: the pre-edge behavior — anchor at the modeled line nearest
+     *  the expected value, side = the model's lean there, no edge fields. */
+    private PitcherPropPickDto toVolumePick(PitcherMarket m, PitcherRow top,
+                                            List<PitcherPropPickDto.RunnerUp> runnersUp) {
+        List<Double> lines = m.lines();
+        List<Double> probs = m.probs().apply(top);
+        int anchorIdx = nearestLineIdx(lines, m.volume().apply(top));
+        double anchorLine = lines.get(anchorIdx);
+        double pOver = probs.get(anchorIdx);
+        String bestSide = pOver >= 0.5 ? "over" : "under";
+        double bestProb = "over".equals(bestSide) ? pOver : 1.0 - pOver;
+        return buildPitcherDto(m, top, anchorLine, bestSide, bestProb,
+            null, null, null, null, null, null, "volume", runnersUp);
+    }
+
+    private PitcherPropPickDto buildPitcherDto(PitcherMarket m, PitcherRow top,
+            double anchorLine, String bestSide, double bestProb,
+            Double bookLine, String bestBook, Integer priceAmerican, Double evPct,
+            Double edge, Double fairProb, String rankedBy,
+            List<PitcherPropPickDto.RunnerUp> runnersUp) {
         List<Double> lines = m.lines();
         List<Double> probs = m.probs().apply(top);   // P(over) aligned to lines
         List<PitcherPropPickDto.Threshold> dist = new ArrayList<>();
         for (int i = 0; i < lines.size(); i++) {
             dist.add(new PitcherPropPickDto.Threshold(lines.get(i), round(probs.get(i), 4)));
         }
-        double expected = m.volume().apply(top);
-
-        // Best cached price each side (over/under share lines at a book).
-        PitcherPrice overPrice = repo.findPitcherPrice(top.gameId(), top.pitcherId(), m.key(), "over");
-        PitcherPrice underPrice = repo.findPitcherPrice(top.gameId(), top.pitcherId(), m.key(), "under");
-        Double bookConsensus = overPrice != null && overPrice.line() != null ? overPrice.line()
-            : (underPrice != null ? underPrice.line() : null);
-
-        // Anchor line = the book's consensus line when it matches a modeled threshold,
-        // else the modeled line closest to the expected value (the meaningful line —
-        // not the trivially-high lowest one). The recommended SIDE is the model's lean
-        // there: over when P(over) ≥ 0.5, else under. bestProb is that side's probability.
-        int anchorIdx = (bookConsensus != null && indexOfLine(lines, bookConsensus) >= 0)
-            ? indexOfLine(lines, bookConsensus)
-            : nearestLineIdx(lines, expected);
-        double anchorLine = lines.get(anchorIdx);
-        double pOver = probs.get(anchorIdx);
-        String bestSide = pOver >= 0.5 ? "over" : "under";
-        double bestProb = "over".equals(bestSide) ? pOver : 1.0 - pOver;
-
-        // Price + EV for the RECOMMENDED side at the anchor line (context only).
-        PitcherPrice chosen = "over".equals(bestSide) ? overPrice : underPrice;
-        Double bookLine = null, evPct = null;
-        String bestBook = null;
-        Integer priceAmerican = null;
-        if (chosen != null && chosen.line() != null && sameLine(chosen.line(), anchorLine)) {
-            bookLine = chosen.line();
-            bestBook = chosen.bookmaker();
-            priceAmerican = chosen.priceAmerican();
-            evPct = round(bestProb * chosen.priceDecimal() - 1.0, 4);
-        }
-
-        List<PitcherPropPickDto.RunnerUp> runnersUp = next.stream()
-            .map(r -> new PitcherPropPickDto.RunnerUp(
-                r.pitcherId(), r.pitcher(), r.team(), round(m.volume().apply(r), 2)))
-            .toList();
-
         return new PitcherPropPickDto(
             m.key(), top.gameId(), top.matchup(), top.pitcherId(), top.pitcher(),
             top.team(), top.opponent(),
-            round(expected, 2), round(top.expectedIp(), 2),
+            round(m.volume().apply(top), 2), round(top.expectedIp(), 2),
             dist,
             anchorLine, bestSide, round(bestProb, 4),
             bookLine, bestBook, priceAmerican, evPct,
+            edge, fairProb, rankedBy,
             round(top.pitcherKRate(), 4), round(top.pitcherBbRate(), 4),
             round(top.pitcherXwobaAgainst(), 4), round(top.pitcherHrPerPa(), 4),
             round(top.opponentKRate(), 4), round(top.opponentXwoba(), 4),
             top.arsenal(),
             runnersUp);
+    }
+
+    /** P(over) from a fixed threshold ladder when the book's line sits ON the ladder;
+     *  null otherwise (an off-ladder line can't be priced without a full distribution). */
+    private static Double ladderProb(List<Double> lines, List<Double> probs, double line) {
+        int idx = indexOfLine(lines, line);
+        return idx < 0 ? null : probs.get(idx);
     }
 
     private static boolean sameLine(double a, double b) {
@@ -319,6 +406,13 @@ public class PropBoardService {
      *  bogus 100% under) instead of being suppressed. */
     private static boolean hasHist(int[] hist, Integer nSims) {
         return hist != null && hist.length > 0 && nSims != null && nSims > 0;
+    }
+
+    /** P(over one line) from a simulator count histogram — null (not 0) when the batter
+     *  has no sim row, so the market filter drops him instead of ranking a bogus 0%. */
+    private static Double histProb(int[] hist, Integer nSims, double line) {
+        if (!hasHist(hist, nSims)) return null;
+        return histPOver(hist, nSims, List.of(line)).get(0);
     }
 
     /** P(over each line) from a simulator count histogram (bin i = sims with exactly i,
@@ -371,8 +465,12 @@ public class PropBoardService {
         return season != null && season < m.minSeasonRate();
     }
 
-    private static Integer nSeasonOf(ClearRates rates) {
-        return rates == null ? null : rates.nSeason();
+    /** Sample size behind a market's season clear-rate. H+R+RBI counts only games with
+     *  runs/rbi recorded (boxscore-only columns) so a pre-backfill history can't pose
+     *  as evidence — the blend then correctly regresses toward the league rate. */
+    private static Integer nSeasonFor(String market, ClearRates rates) {
+        if (rates == null) return null;
+        return "hrr".equals(market) ? rates.nHrrSeason() : rates.nSeason();
     }
 
     private PropBoardPickDto toPick(Market m, Scored top,
@@ -382,9 +480,30 @@ public class PropBoardService {
         ClearRates rates = top.rates();
         double rawProb = m.prob().apply(r);
         double prob = top.blended();
-        BestPrice price = m.oddsMarket() == null
-            ? null
-            : repo.findBestOverPrice(date, r.playerId(), m.oddsMarket());
+        // Price attach: 0.5 occurrence markets read the best cached over-price directly;
+        // line-based markets (tb/hrr) find the book's consensus line and attach only when
+        // it matches the modeled 1.5 anchor — prob/rates/EV all describe that line, so a
+        // 2.5-quoted star simply shows no price rather than a mispriced EV.
+        String bestBook = null;
+        Integer priceAmerican = null;
+        Double priceDecimal = null;
+        if (m.oddsMarket() != null) {
+            if (m.line() == 0.5) {
+                BestPrice price = repo.findBestOverPrice(date, r.playerId(), m.oddsMarket());
+                if (price != null) {
+                    bestBook = price.bookmaker();
+                    priceAmerican = price.priceAmerican();
+                    priceDecimal = price.priceDecimal();
+                }
+            } else {
+                PitcherPrice price = repo.findBatterLinePrice(date, r.playerId(), m.oddsMarket());
+                if (price != null && price.line() != null && sameLine(price.line(), m.line())) {
+                    bestBook = price.bookmaker();
+                    priceAmerican = price.priceAmerican();
+                    priceDecimal = price.priceDecimal();
+                }
+            }
+        }
 
         // The fence this batter pulls toward: RHB → LF corner, LHB → RF. Switch
         // hitters have no single pull side, so the park-fit fields stay null.
@@ -398,7 +517,7 @@ public class PropBoardService {
         }
 
         return new PropBoardPickDto(
-            m.key(), 0.5,
+            m.key(), m.line(),
             r.gameId(), r.matchup(),
             r.playerId(), r.player(), r.team(),
             r.lineupPosition(), r.lineupConfirmed(), r.expectedPa(),
@@ -415,12 +534,12 @@ public class PropBoardService {
             r.hrDistanceFt(),
             rateFor(m.key(), rates, true),
             rateFor(m.key(), rates, false),
-            rates == null ? null : rates.nSeason(),
-            price == null ? null : price.bookmaker(),
-            price == null ? null : price.priceAmerican(),
-            price == null ? null : price.priceDecimal(),
+            nSeasonFor(m.key(), rates),
+            bestBook,
+            priceAmerican,
+            priceDecimal,
             // EV at the cached price uses the blended (displayed) probability.
-            price == null ? null : round(prob * price.priceDecimal() - 1.0, 4),
+            priceDecimal == null ? null : round(prob * priceDecimal - 1.0, 4),
             runnersUp);
     }
 
@@ -431,10 +550,10 @@ public class PropBoardService {
     private static Double rateFor(String market, ClearRates rates, boolean l10) {
         if (rates == null) return null;
         return switch (market) {
-            case "hit" -> l10 ? rates.hitL10() : rates.hitSeason();
             case "hr"  -> l10 ? rates.hrL10()  : rates.hrSeason();
-            case "k"   -> l10 ? rates.kL10()   : rates.kSeason();
             case "bb"  -> l10 ? rates.bbL10()  : rates.bbSeason();
+            case "tb"  -> l10 ? rates.tbL10()  : rates.tbSeason();
+            case "hrr" -> l10 ? rates.hrrL10() : rates.hrrSeason();
             default -> null;
         };
     }

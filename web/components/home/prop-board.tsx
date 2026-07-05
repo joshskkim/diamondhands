@@ -5,11 +5,19 @@ import { useQuery } from '@tanstack/react-query'
 import { Target } from 'lucide-react'
 import {
   livePlayerResultsQueryOptions,
+  lottoQueryOptions,
   playerResultsQueryOptions,
   propBoardQueryOptions,
   todayGamesQueryOptions,
 } from '@/lib/api'
-import type { BatterResult, PitcherPropPick, PitcherResult, PropBoardPick, TodayGame } from '@/lib/types'
+import type {
+  BatterResult,
+  BoomPick,
+  PitcherPropPick,
+  PitcherResult,
+  PropBoardPick,
+  TodayGame,
+} from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { bookLabel, formatAmerican } from '@/lib/odds'
 import { liveCountOutcome, overUnderOutcome, propOutcome, type PickOutcome } from '@/lib/picks'
@@ -46,15 +54,16 @@ const BB_CONTROL_BAND = 0.15
 // on the walk card since contact pitchers tend not to give away free passes.
 const CONTACT_ARM_BAND = 0.15
 
+// verb bakes in the line: hrr/tb clear a 1.5 line (2+), hr/bb a 0.5 line (1+).
 const MARKET_META: Record<string, { chip: string; verb: string }> = {
-  hit: { chip: 'Hit', verb: 'to record a hit' },
+  hrr: { chip: 'H+R+RBI', verb: 'to total 2+ hits + runs + RBI' },
   hr: { chip: 'Home Run', verb: 'to homer' },
-  k: { chip: 'Strikeout', verb: 'to strike out at least once' },
+  tb: { chip: 'Total Bases', verb: 'to record 2+ total bases' },
   bb: { chip: 'Walk', verb: 'to draw a walk' },
 }
 
 // Stat unit shown in the live prop tracker, per batter market.
-const BATTER_UNIT: Record<string, string> = { hit: 'H', hr: 'HR', k: 'K', bb: 'BB' }
+const BATTER_UNIT: Record<string, string> = { hrr: 'H+R+RBI', hr: 'HR', tb: 'TB', bb: 'BB' }
 
 const PITCHER_MARKET_META: Record<string, { chip: string; unit: string; noun: string }> = {
   pitcher_k: { chip: 'Pitcher Ks', unit: 'K', noun: 'strikeouts' },
@@ -63,9 +72,26 @@ const PITCHER_MARKET_META: Record<string, { chip: string; unit: string; noun: st
   pitcher_earned_runs: { chip: 'Earned runs', unit: 'ER', noun: 'earned runs' },
 }
 
-// Which actual-result stat grades each market once a game is final.
-const BATTER_RESULT_FIELD: Record<string, keyof BatterResult> = {
-  hit: 'hits', hr: 'homeRuns', k: 'strikeouts', bb: 'walks',
+// The actual result that grades each batter market once a game is final (or the live
+// count while in progress). hrr is composite, so this is an accessor rather than a
+// single field: undefined = no result row yet (pending), null = row exists but the
+// stat isn't recorded (H+R+RBI needs boxscore runs/rbi), number = the count.
+function batterActual(market: string, r: BatterResult | undefined): number | null | undefined {
+  if (!r) return undefined
+  switch (market) {
+    case 'hr':
+      return r.homeRuns
+    case 'bb':
+      return r.walks
+    case 'tb':
+      return r.totalBases
+    case 'hrr':
+      return r.hits == null || r.runs == null || r.rbi == null
+        ? null
+        : r.hits + r.runs + r.rbi
+    default:
+      return undefined
+  }
 }
 const PITCHER_RESULT_FIELD: Record<string, keyof PitcherResult> = {
   pitcher_k: 'strikeouts', pitcher_outs: 'outs',
@@ -158,10 +184,11 @@ function buildReasons(p: PropBoardPick): string[] {
     reasons.push(env.join('; ') + '.')
   }
 
-  // Opposing-team defense (hit card only): the leak-free xBA hit-suppression factor.
+  // Opposing-team defense (hit-driven cards): the leak-free xBA hit-suppression factor.
   // < 1 means the defense takes hits away (headwind for the over); > 1 means it leaks them.
+  // Total bases and H+R+RBI both ride on balls in play becoming hits, so it applies to both.
   if (
-    p.market === 'hit' &&
+    (p.market === 'tb' || p.market === 'hrr') &&
     p.adjDefense != null &&
     Math.abs(p.adjDefense - 1) >= ADJ_NOTEWORTHY
   ) {
@@ -363,6 +390,88 @@ function PropCard({
   )
 }
 
+// The HR slot's "Lotto" boom pick (GET /api/lotto): NOT the most-likely homer, but a cold
+// bottom-of-order bat with real raw power in a HR-friendly park/pitcher/weather spot — the case
+// the model's own last-30 blend underweights. Age-blind, model-first (price optional). Rendered
+// in the board's cyan batter style with the boom signals (order / barrel / slump / HR boost) and
+// the server-built reasons, so it reads as one of the batter cards rather than a separate thing.
+function BoomHrCard({
+  boom,
+  outcome,
+  game,
+  liveCount,
+  liveOutcome,
+}: {
+  boom: BoomPick
+  outcome?: PickOutcome
+  game?: TodayGame
+  liveCount?: number | null
+  liveOutcome?: PickOutcome
+}) {
+  const meta = MARKET_META.hr
+  return (
+    <div className="rounded-xl border border-white/10 bg-[#0e1015] px-5 py-4 flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-cyan-300 border-cyan-400/40 bg-cyan-500/10">
+          {meta.chip}
+        </span>
+        <span
+          title="A cold bat with real power the market is sleeping on — high variance by design"
+          className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-300 border-amber-400/40 bg-amber-500/10"
+        >
+          🎟 Lotto
+        </span>
+        {boom.hrDistanceFt != null && boom.hrDistanceFt >= LONG_BALL_UPSIDE_FT && (
+          <span
+            title={`Projects to carry ~${Math.round(boom.hrDistanceFt)} ft tonight — a real shot at the day's longest-HR bonus`}
+            className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-300 border-amber-400/40 bg-amber-500/10"
+          >
+            🚀 Long-ball upside
+          </span>
+        )}
+        {outcome && <OutcomeBadge outcome={outcome} iconOnly />}
+        <Link
+          href={`/mlb/games/${boom.gameId}`}
+          className="ml-auto font-mono text-xs text-zinc-500 hover:text-cyan-400 transition-colors"
+        >
+          {boom.matchup}
+        </Link>
+      </div>
+
+      <div className="flex items-baseline justify-between gap-3">
+        <Link
+          href={`/mlb/players/${boom.playerId}`}
+          className="text-base font-bold tracking-tight text-zinc-100 hover:text-cyan-300 transition-colors"
+        >
+          {boom.playerName}{' '}
+          <span className="text-sm font-normal text-zinc-500">{meta.verb}</span>
+        </Link>
+        <span className="shrink-0 font-mono tabular-nums text-lg text-cyan-300">
+          {pct(boom.pHr)}
+        </span>
+      </div>
+
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        <Factor label="Order" value={ordinal(boom.lineupPosition)} />
+        <Factor label="Barrel" value={pct(boom.barrelRate)} />
+        <Factor label="Slump" value={`−${(boom.coldGap * 1000).toFixed(0)} xwOBA`} />
+        <Factor label="HR boost" value={`×${boom.condBoost.toFixed(2)}`} />
+      </div>
+
+      <LivePropTracker
+        game={game}
+        line={0.5}
+        outcome={liveOutcome}
+        count={liveCount}
+        unit="HR"
+        batterLine={null}
+      />
+
+      <WhyDisclosure reasons={boom.reasons} />
+    </div>
+  )
+}
+
 // One-line summary of the pitcher's mix: his most-thrown pitch (usage/whiff/velo) and,
 // when different, his best swing-and-miss offering — the real K driver.
 function arsenalNote(pick: PitcherPropPick): string | null {
@@ -491,8 +600,9 @@ function BestPick({ pick, unit }: { pick: PitcherPropPick; unit: string }) {
 }
 
 // Pitcher cards are AMBER (batter cards are cyan) so "whose prop is this" is never
-// ambiguous — these are the starter's line, ranked by expected volume; the headline
-// number is the projection, the Best pick row is the model's lean (over or under).
+// ambiguous. The headline number is the projection (expected Ks/outs/hits/ER); the
+// Best pick row is the recommended side. In edge mode a chip shows the model-vs-line
+// gap that earned the card; in volume-fallback mode a muted badge flags the mode.
 function PitcherCard({
   pick,
   outcome,
@@ -519,6 +629,21 @@ function PitcherCard({
         <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-300 border-amber-400/40 bg-amber-500/10">
           {meta.chip}
         </span>
+        {pick.rankedBy === 'edge' && pick.edge != null ? (
+          <span
+            title={`Model ${pct(pick.bestProb ?? 0)} vs. the de-vigged book ${pct(pick.fairProb ?? 0)} on this side`}
+            className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-emerald-300 border-emerald-400/40 bg-emerald-500/10"
+          >
+            +{(pick.edge * 100).toFixed(0)}% vs line
+          </span>
+        ) : (
+          <span
+            title="No odds for this market today — ranked by projected volume instead of edge"
+            className="text-[10px] uppercase tracking-[0.12em] text-zinc-600"
+          >
+            Volume-ranked
+          </span>
+        )}
         {outcome && <OutcomeBadge outcome={outcome} iconOnly />}
         <span className="text-[10px] uppercase tracking-[0.12em] text-zinc-600">Pitcher</span>
         <Link
@@ -581,6 +706,9 @@ function Skeleton({ className = '' }: { className?: string }) {
  */
 export function PropBoard() {
   const { data, isPending, isError } = useQuery(propBoardQueryOptions())
+  // The HR card is the "Lotto" boom pick when one qualifies (a cold slugger in a HR-friendly
+  // spot); otherwise we fall back to the market's most-likely batter below.
+  const { data: lotto } = useQuery(lottoQueryOptions())
   // Actual results overlay a ✓/✗ on the headline pick once its game is final.
   const { data: results } = useQuery(playerResultsQueryOptions())
   // Live game state (score/inning) for the in-progress tracker on each card.
@@ -607,9 +735,9 @@ export function PropBoard() {
   )
 
   function batterOutcome(pick: PropBoardPick): PickOutcome | undefined {
-    const field = BATTER_RESULT_FIELD[pick.market]
-    if (!field) return undefined
-    return propOutcome(batterByKey.get(`${pick.playerId}:${pick.gameId}`)?.[field], pick.line)
+    const actual = batterActual(pick.market, batterByKey.get(`${pick.playerId}:${pick.gameId}`))
+    if (actual === undefined) return undefined
+    return propOutcome(actual, pick.line)
   }
 
   function pitcherOutcome(pick: PitcherPropPick): PickOutcome | undefined {
@@ -624,8 +752,7 @@ export function PropBoard() {
 
   // Live in-progress count + monotonic-safe live grade for the on-card tracker.
   function batterLiveCount(pick: PropBoardPick): number | null | undefined {
-    const field = BATTER_RESULT_FIELD[pick.market]
-    return field ? liveBatterByKey.get(`${pick.playerId}:${pick.gameId}`)?.[field] : undefined
+    return batterActual(pick.market, liveBatterByKey.get(`${pick.playerId}:${pick.gameId}`))
   }
   function pitcherLiveCount(pick: PitcherPropPick): number | null | undefined {
     const field = PITCHER_RESULT_FIELD[pick.market]
@@ -672,6 +799,22 @@ export function PropBoard() {
           )}
         >
           {data.picks.map((pick) => {
+            // Swap the HR slot for the Lotto boom pick when one qualifies (same position/count,
+            // so the grid layout is unchanged); fall back to the most-likely HR card otherwise.
+            if (pick.market === 'hr' && lotto) {
+              const key = `${lotto.playerId}:${lotto.gameId}`
+              const boomLiveCount = liveBatterByKey.get(key)?.homeRuns
+              return (
+                <BoomHrCard
+                  key="hr"
+                  boom={lotto}
+                  outcome={propOutcome(batterByKey.get(key)?.homeRuns, 0.5)}
+                  game={gamesById.get(lotto.gameId)}
+                  liveCount={boomLiveCount}
+                  liveOutcome={liveCountOutcome('over', 0.5, boomLiveCount)}
+                />
+              )
+            }
             const liveCount = batterLiveCount(pick)
             const liveBatter = liveBatterByKey.get(`${pick.playerId}:${pick.gameId}`)
             return (
@@ -694,7 +837,9 @@ export function PropBoard() {
       {!isPending && !isError && data.pitcherPicks.length > 0 && (
         <div className="mt-6">
           <p className={cn(microLabel, 'mb-2')}>
-            Pitcher props — top starter by projected volume, with the model&apos;s best pick (over/under)
+            {data.pitcherPicks.some((p) => p.rankedBy === 'edge')
+              ? 'Pitcher props — biggest edge between the model and the book line'
+              : 'Pitcher props — top starter by projected volume (no odds today)'}
           </p>
           <div
             className={cn(

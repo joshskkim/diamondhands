@@ -106,15 +106,18 @@ export function totalLeanOutcome(
   return (lean === 'over') === (actual > bookLine) ? 'won' : 'lost'
 }
 
-/** A run-line lean (favorite covers -1.5): did the favorite win by 2+ (no push on a half-run). */
+/** A run-line lean graded against the final score. `pickHome` = the lean's team is the
+ *  home side; `line` = what it lays or takes (-1.5 favorite, +1.5 underdog). Covers when
+ *  the team's margin beats the spread (no push on a half-run). */
 export function runLineOutcome(
-  favHome: boolean,
+  pickHome: boolean,
+  line: number,
   finalHome: number | null,
   finalAway: number | null,
 ): PickOutcome | undefined {
   if (finalHome == null || finalAway == null) return undefined
-  const margin = favHome ? finalHome - finalAway : finalAway - finalHome
-  return margin >= 2 ? 'won' : 'lost'
+  const margin = pickHome ? finalHome - finalAway : finalAway - finalHome
+  return margin + line > 0 ? 'won' : 'lost'
 }
 
 /** An NRFI/YRFI lean graded against actual first-inning runs. */
