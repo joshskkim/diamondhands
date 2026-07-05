@@ -1,0 +1,35 @@
+name: Ingester CI
+
+# Path-filtered to keep CI cheap. NOTE: if this check is ever added to branch protection,
+# remove the path filters (api-ci.yml explains why: a required, path-filtered check leaves
+# non-ingester PRs stuck "waiting for status" forever).
+on:
+  push:
+    branches: [main]
+    paths: ["ingester/**", ".github/workflows/ingester-ci.yml"]
+  pull_request:
+    branches: [main]
+    paths: ["ingester/**", ".github/workflows/ingester-ci.yml"]
+
+jobs:
+  test-lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ingester
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: uv sync
+
+      # The full suite is DB-free (unittest + _FakeConn mocks) and runs in seconds.
+      - name: Tests
+        run: uv run pytest -q
+
+      - name: Lint
+        run: uv run ruff check .
