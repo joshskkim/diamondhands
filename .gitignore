@@ -8,5 +8,7 @@ __pycache__/
 .pybaseball_cache/
 *.iml
 .idea/
-.claude/
+# Ignore Claude Code local state but version the project skills (shared conventions).
+.claude/*
+!.claude/skills/
 *.sqlite3

@@ -8,5 +8,10 @@ public record BatterResultDto(
     Integer hits,
     Integer homeRuns,
     Integer strikeouts,
-    Integer walks
+    Integer walks,
+    // Total bases + runs/RBI grade the TB and H+R+RBI cards. runs/rbi are boxscore-only
+    // (V69) so they can be null on Statcast-sourced rows.
+    Integer totalBases,
+    Integer runs,
+    Integer rbi
 ) {}

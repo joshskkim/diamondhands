@@ -72,31 +72,67 @@ public class MostLikelyService {
     }
 
     // ── Run line (±1.5 spread) ─────────────────────────────────────────────────
+    // The four cover probs available per game (no push on a .5 line, so each -1.5 side
+    // and its opposite +1.5 are complements):
+    //   home -1.5 = pHomeCover15         away +1.5 = pAwayCover15 (= 1 - pHomeCover15)
+    //   away -1.5 = 1 - pHomeCoverPlus15  home +1.5 = pHomeCoverPlus15
     private List<RunLineDto> runLine(List<SimRow> sims) {
         List<RunLineDto> out = new ArrayList<>();
         for (SimRow s : sims) {
-            // Favorite = the side the sim makes likelier to win by 2+ (cover -1.5).
-            boolean homeFav = s.pHomeCover15() >= s.pAwayCover15();
-            double coverProb = homeFav ? s.pHomeCover15() : s.pAwayCover15();
-            // De-vig the book's -1.5 (favorite-covers) side against the +1.5 side; edge is
-            // the sim's cover prob minus that no-vig implied. Null when no run-line odds.
-            Double edge = null;
-            if (s.bookFavImplied() != null && s.bookDogImplied() != null) {
-                double sum = s.bookFavImplied() + s.bookDogImplied();
-                if (sum > 0) {
-                    edge = round(coverProb - s.bookFavImplied() / sum, 3);
-                }
+            boolean haveOdds = s.bookFavImplied() != null && s.bookDogImplied() != null
+                && s.bookFavSide() != null;
+            // Edge path needs the +1.5 column too (null on pre-V69 rows → fall back).
+            if (haveOdds && s.pHomeCoverPlus15() != null) {
+                out.add(edgeRunLine(s));
+            } else {
+                out.add(favoriteRunLine(s));
             }
-            Double bookLine = (s.bookFavImplied() != null && s.bookDogImplied() != null) ? -1.5 : null;
-            out.add(new RunLineDto(
-                s.gameId(), s.matchup(),
-                homeFav ? s.homeAbbr() : s.awayAbbr(),
-                round(coverProb, 3), bookLine, edge));
         }
         // Strongest cover edges first; games without run-line odds fall to the bottom.
         out.sort(Comparator.comparingDouble((RunLineDto g) ->
             g.edge() == null ? Double.NEGATIVE_INFINITY : g.edge()).reversed());
         return out;
+    }
+
+    /** With odds + the +1.5 column: emit whichever side (favorite -1.5 or underdog +1.5)
+     *  carries the better de-vigged edge, labeled explicitly. */
+    private RunLineDto edgeRunLine(SimRow s) {
+        boolean homeIsBookFav = "home".equals(s.bookFavSide());
+        // The book favorite lays -1.5; the model's cover prob for that exact team.
+        double favCover = homeIsBookFav ? s.pHomeCover15() : (1.0 - s.pHomeCoverPlus15());
+        double dogCover = 1.0 - favCover;   // the other team takes +1.5
+        double sum = s.bookFavImplied() + s.bookDogImplied();
+        double favFair = s.bookFavImplied() / sum;
+        double favEdge = favCover - favFair;
+        double dogEdge = dogCover - (s.bookDogImplied() / sum);   // = -favEdge
+
+        boolean favBetter = favEdge >= dogEdge;
+        String favAbbr = homeIsBookFav ? s.homeAbbr() : s.awayAbbr();
+        String dogAbbr = homeIsBookFav ? s.awayAbbr() : s.homeAbbr();
+        if (favBetter) {
+            return new RunLineDto(s.gameId(), s.matchup(), favAbbr,
+                homeIsBookFav ? "home" : "away", -1.5,
+                round(favCover, 3), -1.5, round(favEdge, 3));
+        }
+        return new RunLineDto(s.gameId(), s.matchup(), dogAbbr,
+            homeIsBookFav ? "away" : "home", 1.5,
+            round(dogCover, 3), 1.5, round(dogEdge, 3));
+    }
+
+    /** No odds (or a pre-V69 row missing the +1.5 column): the old framing — the sim's
+     *  favorite laying -1.5, no edge. When the +1.5 column is present, both teams' -1.5
+     *  cover probs are known so the favorite is picked correctly; otherwise the legacy
+     *  pHomeCover15 vs pAwayCover15 heuristic (which compared home -1.5 against away +1.5). */
+    private RunLineDto favoriteRunLine(SimRow s) {
+        double homeMinus15 = s.pHomeCover15();
+        double awayMinus15 = s.pHomeCoverPlus15() != null
+            ? 1.0 - s.pHomeCoverPlus15()   // away wins by 2+
+            : s.pAwayCover15();            // legacy fallback (not a true -1.5 cover)
+        boolean homeFav = homeMinus15 >= awayMinus15;
+        return new RunLineDto(s.gameId(), s.matchup(),
+            homeFav ? s.homeAbbr() : s.awayAbbr(),
+            homeFav ? "home" : "away", -1.5,
+            round(homeFav ? homeMinus15 : awayMinus15, 3), null, null);
     }
 
     // ── Player prop leaderboards ───────────────────────────────────────────────

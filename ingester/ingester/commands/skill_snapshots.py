@@ -17,7 +17,6 @@ import psycopg
 
 from ingester.db import get_connection
 from ingester.commands.refresh_skills import (
-    MIN_BF_PITCHER,
     _load_pitcher_barrel_allowed,
     _load_pitcher_priors,
     compute_batter_skill_rows,

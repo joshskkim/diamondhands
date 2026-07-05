@@ -35,10 +35,14 @@ def cmd_fit_calibration(args: argparse.Namespace) -> None:
     preds: dict[str, list[float]] = {m: [] for m in ("h1", "h2", "hr", "k")}
     acts: dict[str, list[int]] = {m: [] for m in ("h1", "h2", "hr", "k")}
     for p_h1, p_h2, p_hr, p_k, hits, hr, k in rows:
-        preds["h1"].append(float(p_h1)); acts["h1"].append(1 if hits >= 1 else 0)
-        preds["h2"].append(float(p_h2)); acts["h2"].append(1 if hits >= 2 else 0)
-        preds["hr"].append(float(p_hr)); acts["hr"].append(1 if hr >= 1 else 0)
-        preds["k"].append(float(p_k));   acts["k"].append(1 if k >= 1 else 0)
+        preds["h1"].append(float(p_h1))
+        acts["h1"].append(1 if hits >= 1 else 0)
+        preds["h2"].append(float(p_h2))
+        acts["h2"].append(1 if hits >= 2 else 0)
+        preds["hr"].append(float(p_hr))
+        acts["hr"].append(1 if hr >= 1 else 0)
+        preds["k"].append(float(p_k))
+        acts["k"].append(1 if k >= 1 else 0)
 
     maps = {m: fit_isotonic(preds[m], acts[m]) for m in preds}
     path = save_maps(maps, getattr(args, "models_dir", None) and f"{args.models_dir}/calibration.json")

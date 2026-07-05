@@ -1,0 +1,40 @@
+name: Web CI
+
+# Path-filtered to keep CI cheap. NOTE: if this check is ever added to branch protection,
+# remove the path filters (api-ci.yml explains why: a required, path-filtered check leaves
+# non-web PRs stuck "waiting for status" forever).
+on:
+  push:
+    branches: [main]
+    paths: ["web/**", ".github/workflows/web-ci.yml"]
+  pull_request:
+    branches: [main]
+    paths: ["web/**", ".github/workflows/web-ci.yml"]
+
+jobs:
+  typecheck-lint-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      # node:20 matches web/Dockerfile's build stage.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build

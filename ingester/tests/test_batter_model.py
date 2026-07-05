@@ -36,7 +36,6 @@ from ingester.projection.constants import (
     LEAGUE_XWOBA,
     PA_L30_BLEND_CAP,
     PA_L30_FULL_WEIGHT,
-    PITCHER_MULT_HIT_CLAMP,
     SHRINKAGE_ALPHA,
 )
 from ingester.projection.park_adj import ParkAdjustments

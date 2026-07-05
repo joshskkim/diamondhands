@@ -16,10 +16,20 @@ from __future__ import annotations
 
 import argparse
 import logging
-from datetime import date, timedelta
+from datetime import date
 
 import pandas as pd
 import psycopg
+
+from ingester.commands.skill_snapshots import _iter_mondays
+from ingester.db import eastern_today, get_connection
+from ingester.statcast import require_valid_season
+from ingester.statcast_pitch import (
+    aggregate_batter_pitch_stats,
+    aggregate_pitcher_arsenal,
+    compute_league_baselines,
+    fetch_pitch_level,
+)
 
 log = logging.getLogger(__name__)
 
@@ -42,16 +52,6 @@ def _clamp_xwoba_field(rows: list[dict], field: str, as_of_date: date) -> None:
             "clamped %d %s value(s) above %.1f at write for as_of=%s — upstream anomaly",
             n, field, _WRITE_XWOBA_CEILING, as_of_date,
         )
-
-from ingester.commands.skill_snapshots import _iter_mondays
-from ingester.db import eastern_today, get_connection
-from ingester.statcast import require_valid_season
-from ingester.statcast_pitch import (
-    aggregate_batter_pitch_stats,
-    aggregate_pitcher_arsenal,
-    compute_league_baselines,
-    fetch_pitch_level,
-)
 
 # ---------------------------------------------------------------------------
 # Upsert SQL

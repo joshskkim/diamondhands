@@ -116,7 +116,8 @@ class TestComputeStarterWorkload(unittest.TestCase):
         self.assertTrue(WORKLOAD_SIM_MIN_INNINGS <= wl["innings"] <= WORKLOAD_SIM_MAX_INNINGS)
         # All probabilities in [0,1].
         for p in list(wl["p_outs"].values()) + list(wl["p_k"].values()):
-            self.assertGreaterEqual(p, 0.0); self.assertLessEqual(p, 1.0)
+            self.assertGreaterEqual(p, 0.0)
+            self.assertLessEqual(p, 1.0)
 
     def test_deeper_pitcher_more_outs_prob(self):
         from ingester.projection.workload import compute_starter_workload

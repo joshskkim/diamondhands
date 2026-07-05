@@ -39,13 +39,13 @@ def _record(conn, table: str, slate) -> tuple[int, int, int, float | None]:
 
 
 def _templated(yest, picks_rec, agent_rec) -> str:
-    w, l, p, clv = picks_rec
+    w, losses, p, clv = picks_rec
     aw, al, _ap, aclv = agent_rec
     clv_str = f", avg CLV {clv:+.3f}" if clv is not None else ""
     aclv_str = f", avg CLV {aclv:+.3f}" if aclv is not None else ""
     lines = [
         f"**Diamond briefing — {eastern_today()}**",
-        f"Yesterday ({yest}): Model's Picks {w}-{l}" + (f" ({p} push)" if p else "") + clv_str + ".",
+        f"Yesterday ({yest}): Model's Picks {w}-{losses}" + (f" ({p} push)" if p else "") + clv_str + ".",
     ]
     if aw + al > 0:
         lines.append(f"Diamond Analyst recommendations: {aw}-{al}{aclv_str}.")

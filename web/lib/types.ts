@@ -418,7 +418,7 @@ export interface LineShop {
  * pick stands on the model alone.
  */
 export interface PropBoardPick {
-  /** 'hit' | 'hr' | 'k' */
+  /** 'hrr' (H+R+RBI) | 'hr' | 'tb' (total bases) | 'bb'. hrr/tb clear a 1.5 line; hr/bb a 0.5 line. */
   market: string
   line: number
   gameId: number
@@ -487,7 +487,7 @@ export interface PitcherThreshold {
   prob: number
 }
 
-/** An honorable-mention pitcher: same expected-volume ranking, no distribution. */
+/** An honorable-mention pitcher: same ranking metric, no distribution. */
 export interface PitcherRunnerUp {
   pitcherId: number
   pitcher: string
@@ -496,10 +496,10 @@ export interface PitcherRunnerUp {
 }
 
 /**
- * The model's headline starting pitcher for one pitcher-prop market, ranked by
- * EXPECTED VOLUME (expected Ks / outs) rather than P(clear) — pitcher lines vary by
- * arm, so ranking on clear-probability would surface soft-tossers, not aces. Odds
- * fields are the best cached over-price and are null when odds haven't been pulled.
+ * The headline starting pitcher for one pitcher-prop market, ranked by MODEL-VS-LINE
+ * EDGE (|model P(over) − de-vigged book P(over)| at the consensus line), with the
+ * recommended side wherever the edge points. On odds-less days it falls back to the
+ * workload model's expected-volume ranking (`rankedBy` = 'volume', edge fields null).
  */
 export interface PitcherPropPick {
   /** 'pitcher_k' | 'pitcher_outs' | 'pitcher_hits_allowed' | 'pitcher_earned_runs' */
@@ -514,7 +514,8 @@ export interface PitcherPropPick {
   expectedValue: number
   expectedIp: number | null
   distribution: PitcherThreshold[]
-  /** The single recommended pick: side the model leans at the most relevant line. */
+  /** The single recommended pick: in edge mode the side of the positive edge at the
+   *  book's consensus line; in volume mode the model's lean at the nearest modeled line. */
   bestLine: number | null
   bestSide: 'over' | 'under' | null
   bestProb: number | null
@@ -523,6 +524,12 @@ export interface PitcherPropPick {
   bestBook: string | null
   priceAmerican: number | null
   evPct: number | null
+  /** Edge mode only: |model − no-vig| probability gap, and the de-vigged book probability
+   *  for the recommended side. Null in volume-fallback mode. */
+  edge: number | null
+  fairProb: number | null
+  /** Which ranking produced this card: 'edge' (model vs line) or 'volume' (fallback). */
+  rankedBy: 'edge' | 'volume'
   /** Reasoning drivers (null when skill rows are absent): the pitcher's own BF-weighted
    *  profile and the opposing lineup's PA-weighted K rate / xwOBA. */
   pitcherKRate: number | null
@@ -700,15 +707,20 @@ export interface MostLikelyNrfi {
   leanProb: number
 }
 
-/** Full-game run-line (±1.5 spread) lean from the simulator's joint run distribution. */
+/** Full-game run-line (±1.5 spread) lean from the simulator's joint run distribution.
+ *  Names whichever side carries the better de-vigged edge (not just the favorite). */
 export interface MostLikelyRunLine {
   gameId: number
   matchup: string
-  /** Team abbr laying the -1.5. */
-  favorite: string
-  /** That side's simulated probability of covering -1.5. */
+  /** Abbr of the team this lean is on. */
+  team: string
+  /** 'home' | 'away' — which side of the matchup `team` is. */
+  side: 'home' | 'away'
+  /** What `team` lays or takes: -1.5 (favorite) or +1.5 (underdog). */
+  line: number
+  /** That exact side's simulated probability of covering `line`. */
   coverProb: number
-  /** -1.5 when run-line odds exist, else null. */
+  /** The line when run-line odds exist (mirrors `line`), else null. */
   bookLine: number | null
   /** coverProb minus the no-vig book implied for the same side; null without odds. */
   edge: number | null
@@ -748,6 +760,10 @@ export interface BatterResult {
   homeRuns: number | null
   strikeouts: number | null
   walks: number | null
+  /** For the total-bases and H+R+RBI cards (V69: runs/rbi are boxscore-only, may be null). */
+  totalBases: number | null
+  runs: number | null
+  rbi: number | null
 }
 
 /** A starter's actual line for one finished game (grades pitcher prop picks). */
