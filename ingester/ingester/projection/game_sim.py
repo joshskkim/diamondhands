@@ -22,10 +22,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-# Inning counts at which we snapshot cumulative runs (first-N-innings markets).
-# 1 = NRFI/YRFI (F1), 5 = first five (F5), 9 = full game.
-PERIODS: tuple[int, ...] = (1, 3, 5, 7, 9)
-
 from ingester.projection import constants as C
 from ingester.projection.batter_model import BatterProjection
 from ingester.projection.constants import (
@@ -34,6 +30,10 @@ from ingester.projection.constants import (
     LEAGUE_3B_SHARE,
     LEAGUE_BB_PER_PA,
 )
+
+# Inning counts at which we snapshot cumulative runs (first-N-innings markets).
+# 1 = NRFI/YRFI (F1), 5 = first five (F5), 9 = full game.
+PERIODS: tuple[int, ...] = (1, 3, 5, 7, 9)
 
 _TB_BY_CAT = {3: 1, 4: 2, 5: 3, 6: 4}
 
@@ -173,7 +173,9 @@ def _sim_team(
         facing_bullpen = cum_bullpen is not None and inning >= starter_innings
         cum = cum_bullpen if facing_bullpen else cum_starter
         outs = np.zeros(n_sims, dtype=np.int32)
-        b1 = np.zeros(n_sims, bool); b2 = np.zeros(n_sims, bool); b3 = np.zeros(n_sims, bool)
+        b1 = np.zeros(n_sims, bool)
+        b2 = np.zeros(n_sims, bool)
+        b3 = np.zeros(n_sims, bool)
         # Occupant lineup slot per base (meaningful only where the matching bN is True).
         # Every occupant move below mirrors its bN update exactly; runs are credited to
         # the occupant who crosses the plate, RBIs to the batter at the plate.
@@ -235,7 +237,9 @@ def _sim_team(
                     runs[ss] += loaded
                     np.add.at(slot_runs, (ss[loaded], o3c[loaded]), 1)
                     np.add.at(slot_rbi, (ss, bs), loaded)
-                    b3[ss] = r3 | (r1 & r2); b2[ss] = r2 | r1; b1[ss] = True
+                    b3[ss] = r3 | (r1 & r2)
+                    b2[ss] = r2 | r1
+                    b1[ss] = True
                     forced2 = r1 & r2                      # runner on 2nd forced to 3rd
                     o3[ss[forced2]] = o2c[forced2]
                     o2[ss[r1]] = o1c[r1]                   # runner on 1st forced to 2nd
@@ -286,7 +290,9 @@ def _sim_team(
                     np.add.at(slot_runs, (ss[lead2], o2c[lead2]), 1)
                     np.add.at(slot_runs, (ss[lead1], o1c[lead1]), 1)
                     np.add.at(slot_rbi, (ss, bs), r1 + r2 + r3)
-                    b3[ss] = True; b2[ss] = False; b1[ss] = False
+                    b3[ss] = True
+                    b2[ss] = False
+                    b1[ss] = False
                     o3[ss] = bs
                 else:           # HR: `1 +` upcasts to int, so ALL runners genuinely score
                     runs[ss] += 1 + r1 + r2 + r3
@@ -295,7 +301,9 @@ def _sim_team(
                     np.add.at(slot_runs, (ss[r1], o1c[r1]), 1)
                     np.add.at(slot_runs, (ss, bs), 1)      # the batter rounds the bases too
                     np.add.at(slot_rbi, (ss, bs), 1 + r1 + r2 + r3)
-                    b1[ss] = False; b2[ss] = False; b3[ss] = False
+                    b1[ss] = False
+                    b2[ss] = False
+                    b3[ss] = False
 
             # Extra advancement (SB/WP/PB/ROE) into open bases, lead runner first.
             # Only for innings still in progress (a WP after the 3rd out scores nobody).

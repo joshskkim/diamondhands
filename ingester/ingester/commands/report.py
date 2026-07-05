@@ -37,8 +37,6 @@ def _base_rate(buckets: list[dict]) -> float | None:
 
 def cmd_compare_runs(args: argparse.Namespace) -> None:
     run_ids = [int(x) for x in args.runs.split(",")]
-    brier_cols = {"hit1plus": "brier_hit1plus", "hit2plus": "brier_hit2plus",
-                  "hr": "brier_hr", "k1plus": "brier_k1plus"}
 
     conn = get_connection()
     try:

@@ -13,7 +13,6 @@ from ingester.projection.constants import (
 )
 from ingester.projection import constants as C
 from ingester.projection.prior import (
-    ProjectionPrior,
     SeasonLine,
     aging_factor,
     compute_marcel_prior,

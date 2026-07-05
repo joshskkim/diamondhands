@@ -103,7 +103,8 @@ def cmd_simulate_eval(args: argparse.Namespace) -> None:
     conn.close()
     if not preds:
         raise SystemExit("[simulate-eval] no eligible games")
-    preds = np.array(preds); actuals = np.array(actuals)
+    preds = np.array(preds)
+    actuals = np.array(actuals)
     league_mean = actuals.mean()
     sim_mae = np.abs(preds - actuals).mean()
     naive_mae = np.abs(league_mean - actuals).mean()

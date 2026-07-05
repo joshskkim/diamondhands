@@ -50,7 +50,6 @@ from ingester.projection.matchup import MatchupResult, compute_matchup
 from ingester.projection.park_adj import (
     BattedBallProfile,
     LEAGUE_AVERAGE_PROFILE,
-    ParkAdjustments,
     ParkFactors,
     ParkGeometry,
     compute_park_adjustments,

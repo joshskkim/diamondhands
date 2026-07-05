@@ -60,7 +60,8 @@ def _markets_from_pa(probs: np.ndarray, expected_pa: np.ndarray) -> dict[str, np
     p_hr = probs[:, 4]
     p_hit = probs[:, 3] + probs[:, 4]  # any hit (non-HR + HR)
     N = np.clip(np.round(expected_pa), 1, None)
-    one_minus = lambda p: np.clip(1.0 - p, 0.0, 1.0)
+    def one_minus(p: np.ndarray) -> np.ndarray:
+        return np.clip(1.0 - p, 0.0, 1.0)
     p_h1 = 1.0 - one_minus(p_hit) ** N
     p_h2 = 1.0 - one_minus(p_hit) ** N - N * p_hit * one_minus(p_hit) ** (N - 1)
     return {
