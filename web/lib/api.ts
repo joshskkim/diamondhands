@@ -4,7 +4,6 @@ import type {
   TrackRecord,
   BestPlay,
   BoomPick,
-  FlatBatterPick,
   GameOdds,
   GameProjections,
   HitRate,
@@ -366,13 +365,6 @@ export async function fetchLotto(date?: string): Promise<BoomPick | null> {
   return res.json() as Promise<BoomPick>
 }
 
-export function fetchBatterPropOdds(date?: string): Promise<BatterPropOdds[]> {
-  const params = new URLSearchParams()
-  if (date) params.set('date', date)
-  const qs = params.toString()
-  return apiGet<BatterPropOdds[]>(`/api/odds/props${qs ? `?${qs}` : ''}`)
-}
-
 export function fetchHitRates(date?: string): Promise<HitRate[]> {
   const params = new URLSearchParams()
   if (date) params.set('date', date)
@@ -640,13 +632,6 @@ export function lottoQueryOptions(date?: string) {
   return queryOptions({
     queryKey: queryKeys.lotto(date),
     queryFn: () => fetchLotto(date),
-  })
-}
-
-export function batterPropOddsQueryOptions(date?: string) {
-  return queryOptions({
-    queryKey: queryKeys.odds.props(date),
-    queryFn: () => fetchBatterPropOdds(date),
   })
 }
 
