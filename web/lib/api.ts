@@ -4,6 +4,7 @@ import type {
   TrackRecord,
   BatterPropOdds,
   BestPlay,
+  BoomPick,
   FlatBatterPick,
   GameOdds,
   GameProjections,
@@ -354,6 +355,19 @@ export function fetchBestPlays(date?: string, limit = 50): Promise<BestPlay[]> {
   return apiGet<BestPlay[]>(`/api/odds/best?${params}`)
 }
 
+/** The Lotto of the Day HR boom pick, or null when none qualifies (API returns 204). */
+export async function fetchLotto(date?: string): Promise<BoomPick | null> {
+  const params = new URLSearchParams()
+  if (date) params.set('date', date)
+  const qs = params.toString()
+  const res = await fetch(`${API_BASE}/api/lotto${qs ? `?${qs}` : ''}`, {
+    credentials: 'include',
+  })
+  if (res.status === 204) return null
+  if (!res.ok) throw new ApiError(res.status, '/api/lotto')
+  return res.json() as Promise<BoomPick>
+}
+
 export function fetchBatterPropOdds(date?: string): Promise<BatterPropOdds[]> {
   const params = new URLSearchParams()
   if (date) params.set('date', date)
@@ -583,6 +597,7 @@ export const queryKeys = {
     hitRates: (date?: string) => ['odds', 'hit-rates', date ?? 'today'] as const,
     lineShop: (date?: string) => ['odds', 'line-shop', date ?? 'today'] as const,
   },
+  lotto: (date?: string) => ['lotto', date ?? 'today'] as const,
   mostLikely: (date?: string) => ['most-likely', date ?? 'today'] as const,
   modelPicks: (date?: string) => ['model-picks', date ?? 'today'] as const,
   tracker: () => ['tracker'] as const,
@@ -650,6 +665,13 @@ export function bestPlaysQueryOptions(date?: string, limit = 50) {
   return queryOptions({
     queryKey: queryKeys.odds.best(date),
     queryFn: () => fetchBestPlays(date, limit),
+  })
+}
+
+export function lottoQueryOptions(date?: string) {
+  return queryOptions({
+    queryKey: queryKeys.lotto(date),
+    queryFn: () => fetchLotto(date),
   })
 }
 

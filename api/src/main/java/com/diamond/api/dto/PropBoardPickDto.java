@@ -3,8 +3,9 @@ package com.diamond.api.dto;
 import java.util.List;
 
 /**
- * The model's single most-likely batter for one prop market (hit / hr / k, all 0.5
- * lines), with every factor the client needs to explain the number: opposing pitcher
+ * The model's single most-likely batter for one prop market (H+R+RBI and total bases
+ * at 1.5 lines; HR and walks at 0.5), with every factor the client needs to explain
+ * the number: opposing pitcher
  * and matchup quality, park/pitcher/weather multipliers, lineup slot, recent and
  * season clear-rates. Price fields are the best cached sportsbook over-price and are
  * null whenever odds haven't been pulled — the pick stands on the model alone.

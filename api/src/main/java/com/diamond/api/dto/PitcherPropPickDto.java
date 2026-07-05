@@ -3,18 +3,20 @@ package com.diamond.api.dto;
 import java.util.List;
 
 /**
- * The model's headline starting pitcher for one pitcher-prop market (strikeouts or
- * outs recorded), ranked by the workload model's EXPECTED VOLUME — not by P(clears
- * his line), since pitcher lines vary by arm (a soft-tosser's 3.5 K line clears more
- * easily than an ace's 6.5) and ranking on that would surface the wrong pitchers.
+ * The headline starting pitcher for one pitcher-prop market (strikeouts, outs,
+ * hits allowed, earned runs), ranked by MODEL-VS-LINE EDGE: |model P(over) −
+ * de-vigged book P(over)| at the pitcher's consensus line, with the recommended
+ * side wherever the edge points ({@code rankedBy} = "edge"). On days with no
+ * usable odds for the market, falls back to the workload model's expected-volume
+ * ranking with the model's lean at the nearest modeled line ({@code rankedBy} =
+ * "volume", edge fields null).
  *
- * {@code expectedValue} is the headline projection (expected Ks or outs). {@code
- * distribution} is the over-probability at each book-standard threshold from the
- * workload model. Odds fields are the best cached over-price and are null when odds
- * haven't been pulled — the card stands on the projection alone.
+ * {@code expectedValue} is the headline projection (expected Ks / outs / hits /
+ * ER). {@code distribution} is the over-probability at each modeled threshold.
+ * Odds fields are the best cached price for the recommended side.
  */
 public record PitcherPropPickDto(
-    String market,           // "pitcher_k" | "pitcher_outs"
+    String market,           // "pitcher_k" | "pitcher_outs" | "pitcher_hits_allowed" | "pitcher_earned_runs"
     long gameId,
     String matchup,
     int pitcherId,
@@ -24,8 +26,8 @@ public record PitcherPropPickDto(
     double expectedValue,
     Double expectedIp,
     List<Threshold> distribution,
-    // The single recommended pick: the side (over/under) the model leans at the most
-    // relevant line — the book's consensus line when quoted, else the modeled line
+    // The single recommended pick: in edge mode, the side of the positive edge at the
+    // book's consensus line; in volume mode, the model's lean at the modeled line
     // closest to expectedValue. bestProb is that side's model probability.
     Double bestLine,
     String bestSide,         // "over" | "under"
@@ -35,6 +37,11 @@ public record PitcherPropPickDto(
     String bestBook,
     Integer priceAmerican,
     Double evPct,
+    // Edge mode only: |model − no-vig| probability gap and the de-vigged book
+    // probability for the recommended side; which ranking produced this card.
+    Double edge,
+    Double fairProb,
+    String rankedBy,         // "edge" | "volume"
     // Reasoning drivers (null when skill rows are absent): the pitcher's own BF-weighted
     // profile, the opposing lineup's PA-weighted K rate / xwOBA, and the pitcher's top
     // pitches by usage (empty list when no arsenal snapshot exists).
