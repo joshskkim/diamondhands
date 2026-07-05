@@ -29,7 +29,9 @@ def _sim_team(probs: np.ndarray, n_sims: int, rng: np.random.Generator) -> np.nd
     bptr = np.zeros(n_sims, dtype=np.int32)
     for _ in range(9):  # innings
         outs = np.zeros(n_sims, dtype=np.int32)
-        b1 = np.zeros(n_sims, bool); b2 = np.zeros(n_sims, bool); b3 = np.zeros(n_sims, bool)
+        b1 = np.zeros(n_sims, bool)
+        b2 = np.zeros(n_sims, bool)
+        b3 = np.zeros(n_sims, bool)
         while (outs < 3).any():
             s = np.where(outs < 3)[0]
             u = rng.random(len(s))
@@ -47,19 +49,29 @@ def _sim_team(probs: np.ndarray, n_sims: int, rng: np.random.Generator) -> np.nd
                 r1, r2, r3 = b1[ss].copy(), b2[ss].copy(), b3[ss].copy()
                 if cat == 2:   # BB (force; run only if loaded)
                     runs[ss] += (r1 & r2 & r3)
-                    b3[ss] = r3 | (r1 & r2); b2[ss] = r2 | r1; b1[ss] = True
+                    b3[ss] = r3 | (r1 & r2)
+                    b2[ss] = r2 | r1
+                    b1[ss] = True
                 elif cat == 3:  # 1B: 3rd scores, others advance one
                     runs[ss] += r3
-                    b3[ss] = r2; b2[ss] = r1; b1[ss] = True
+                    b3[ss] = r2
+                    b2[ss] = r1
+                    b1[ss] = True
                 elif cat == 4:  # 2B: 2nd & 3rd score, 1st->3rd
                     runs[ss] += r2 + r3
-                    b3[ss] = r1; b2[ss] = True; b1[ss] = False
+                    b3[ss] = r1
+                    b2[ss] = True
+                    b1[ss] = False
                 elif cat == 5:  # 3B: all runners score
                     runs[ss] += r1 + r2 + r3
-                    b3[ss] = True; b2[ss] = False; b1[ss] = False
+                    b3[ss] = True
+                    b2[ss] = False
+                    b1[ss] = False
                 else:           # HR
                     runs[ss] += 1 + r1 + r2 + r3
-                    b1[ss] = False; b2[ss] = False; b3[ss] = False
+                    b1[ss] = False
+                    b2[ss] = False
+                    b3[ss] = False
     return runs
 
 

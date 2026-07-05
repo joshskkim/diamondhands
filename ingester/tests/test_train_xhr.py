@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import math
 
-import pandas as pd
 
 from ingester.commands.train_xhr import build_xy, FEATURES
 

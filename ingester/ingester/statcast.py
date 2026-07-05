@@ -590,7 +590,9 @@ def agg_team_defense_daily(chunks, abbrev_to_id: dict[str, int]) -> list[dict]:
             bip=("act", "size"), act=("act", "sum"), exp=("exp", "sum"))
         for (tid, gd), r in grouped.iterrows():
             a = acc.setdefault((int(tid), gd), {"bip": 0, "act": 0, "exp": 0.0})
-            a["bip"] += int(r["bip"]); a["act"] += int(r["act"]); a["exp"] += float(r["exp"])
+            a["bip"] += int(r["bip"])
+            a["act"] += int(r["act"])
+            a["exp"] += float(r["exp"])
 
     return [
         {"team_id": tid, "game_date": gd,

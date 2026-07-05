@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
-from ingester.db import build_team_abbrev_map, eastern_today, get_connection
+from ingester.db import eastern_today, get_connection
 from ingester import odds_api
 
 

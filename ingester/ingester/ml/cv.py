@@ -25,7 +25,6 @@ def walk_forward_folds(game_dates, n_folds: int = 4) -> list[tuple[np.ndarray, n
     # [bound_i, bound_{i+1}) and trains on everything before bound_i.
     quantiles = [(i + 1) / (n_folds + 1) for i in range(n_folds)]
     bounds = [s.quantile(q) for q in quantiles]
-    max_date = s.max()
 
     folds: list[tuple[np.ndarray, np.ndarray]] = []
     for i, lower in enumerate(bounds):

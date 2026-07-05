@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from ingester.projection.constants import EXPECTED_PA_PER_STARTER, PA_BY_ORDER
+from ingester.projection.constants import PA_BY_ORDER
 from ingester.projection.playing_time import (
     PlayingTime,
     compute_playing_time,

@@ -219,7 +219,7 @@ def cmd_backfill_stats(args: argparse.Namespace) -> None:
             f"{len(pitcher_rows)} pitcher rows"
         )
 
-    print(f"\n[backfill-stats] Statcast done.")
+    print("\n[backfill-stats] Statcast done.")
     print(f"  Total batter game rows : {total_batter_rows}")
     print(f"  Total pitcher game rows: {total_pitcher_rows}")
 

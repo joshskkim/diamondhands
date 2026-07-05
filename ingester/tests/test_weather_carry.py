@@ -4,7 +4,6 @@ from __future__ import annotations
 import unittest
 
 from ingester.projection.constants import (
-    LEAGUE_EV_MPH,
     WEATHER_CARRY_HR_CLAMP,
     WEATHER_TEMP_BASELINE_F,
 )
