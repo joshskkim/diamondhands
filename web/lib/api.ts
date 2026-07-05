@@ -2,9 +2,7 @@ import { queryOptions } from '@tanstack/react-query'
 import type {
   AccuracyResponse,
   TrackRecord,
-  BatterPropOdds,
   BestPlay,
-  FlatBatterPick,
   GameOdds,
   GameProjections,
   HitRate,
@@ -18,7 +16,6 @@ import type {
   PlayerResults,
   PlayerSpray,
   PropBoard,
-  TeamBatters,
   RecentStat,
   TodayGame,
 } from './types'
@@ -354,13 +351,6 @@ export function fetchBestPlays(date?: string, limit = 50): Promise<BestPlay[]> {
   return apiGet<BestPlay[]>(`/api/odds/best?${params}`)
 }
 
-export function fetchBatterPropOdds(date?: string): Promise<BatterPropOdds[]> {
-  const params = new URLSearchParams()
-  if (date) params.set('date', date)
-  const qs = params.toString()
-  return apiGet<BatterPropOdds[]>(`/api/odds/props${qs ? `?${qs}` : ''}`)
-}
-
 export function fetchHitRates(date?: string): Promise<HitRate[]> {
   const params = new URLSearchParams()
   if (date) params.set('date', date)
@@ -462,35 +452,6 @@ export function fetchPitchTypeLeaderboard(
   return apiGet<PitchTypeLeaderboardEntry[]>(`/api/leaderboards/pitch-type?${params}`)
 }
 
-// ── Home "Today's Board" helpers (additive, client-side aggregation) ──────────
-
-/**
- * Flatten one game's batter projections into {@link FlatBatterPick} rows,
- * attaching game/opponent context so the home pick boards can rank across all
- * games. Each side's batters take the opposing side's team abbr as opponent.
- */
-export function flattenGameBatters(
-  game: TodayGame,
-  projections: GameProjections,
-): FlatBatterPick[] {
-  const sides: Array<{ side: TeamBatters; oppAbbr: string }> = [
-    { side: projections.home, oppAbbr: game.away.abbr },
-    { side: projections.away, oppAbbr: game.home.abbr },
-  ]
-  return sides.flatMap(({ side, oppAbbr }) =>
-    side.batters.map((batter) => ({
-      batter,
-      gameId: game.gameId,
-      teamAbbr: side.teamAbbr,
-      opponentAbbr: oppAbbr,
-      opposingPitcherName: batter.opposingPitcher.name,
-      opposingPitcherThrows: batter.opposingPitcher.throws,
-      startTimeUtc: game.startTimeUtc,
-      lineupConfirmed: batter.lineupConfirmed ?? side.lineupConfirmed,
-    })),
-  )
-}
-
 // ── Personal Tracker ──────────────────────────────────────────────────────────
 
 export interface TrackerEntry {
@@ -579,7 +540,6 @@ export const queryKeys = {
   },
   odds: {
     best: (date?: string) => ['odds', 'best', date ?? 'today'] as const,
-    props: (date?: string) => ['odds', 'props', date ?? 'today'] as const,
     hitRates: (date?: string) => ['odds', 'hit-rates', date ?? 'today'] as const,
     lineShop: (date?: string) => ['odds', 'line-shop', date ?? 'today'] as const,
   },
@@ -650,13 +610,6 @@ export function bestPlaysQueryOptions(date?: string, limit = 50) {
   return queryOptions({
     queryKey: queryKeys.odds.best(date),
     queryFn: () => fetchBestPlays(date, limit),
-  })
-}
-
-export function batterPropOddsQueryOptions(date?: string) {
-  return queryOptions({
-    queryKey: queryKeys.odds.props(date),
-    queryFn: () => fetchBatterPropOdds(date),
   })
 }
 

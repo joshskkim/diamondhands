@@ -13,7 +13,6 @@ import {
   totalLeanOutcome,
   type PickOutcome,
 } from '@/lib/picks'
-import { BoardCard, Rank } from './pick-boards'
 import { OutcomeBadge } from './outcome-badge'
 
 // Final scores + first-inning runs (and live state) per game, for live ✓/✗ grading.
@@ -46,6 +45,35 @@ function pct(v: number | null | undefined) {
 function signed(v: number | null | undefined, digits = 1) {
   if (v == null) return '—'
   return (v > 0 ? '+' : '') + v.toFixed(digits)
+}
+
+// Shared card shell for the sim boards (moved from the retired pick-boards).
+function BoardCard({
+  title,
+  blurb,
+  children,
+}: {
+  title: string
+  blurb: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className="bg-[#0e1015] border border-white/10 rounded-xl overflow-hidden flex flex-col">
+      <div className="px-4 pt-4 pb-3 border-b border-white/10">
+        <h2 className="font-semibold tracking-tight text-zinc-100 text-sm">{title}</h2>
+        <p className="text-xs text-zinc-500 mt-0.5">{blurb}</p>
+      </div>
+      <div className="divide-y divide-white/5">{children}</div>
+    </div>
+  )
+}
+
+function Rank({ n }: { n: number }) {
+  return (
+    <span className="w-5 shrink-0 text-right font-mono tabular-nums text-xs text-zinc-600">
+      {n}
+    </span>
+  )
 }
 
 function Matchup({ gameId, label }: { gameId: number; label: string }) {
