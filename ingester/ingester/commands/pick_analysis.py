@@ -484,9 +484,8 @@ def _clv_outcome_link(picks, md: bool) -> None:
     for p, q in zip(clvd, labels):
         accs[q].add(p["outcome"], p["units"], p["clv"])
     for q, a in enumerate(accs):
-        lo_v, hi_v = min(p["clv"] for p, l in zip(clvd, labels) if l == q), \
-            max(p["clv"] for p, l in zip(clvd, labels) if l == q)
-        a.label = f"Q{q + 1} [{lo_v:+.3f},{hi_v:+.3f}]"
+        in_q = [p["clv"] for p, lab in zip(clvd, labels) if lab == q]
+        a.label = f"Q{q + 1} [{min(in_q):+.3f},{max(in_q):+.3f}]"
     emit_table(SLICE_HEADERS, [a.row() for a in accs], md)
 
 
