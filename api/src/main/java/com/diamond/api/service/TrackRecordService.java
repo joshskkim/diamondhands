@@ -41,6 +41,7 @@ public class TrackRecordService {
 
         Acc overall = new Acc("Overall");
         Map<String, Acc> byMarket = new LinkedHashMap<>();
+        Map<String, Acc> byBook = new LinkedHashMap<>();
         // Conviction tiers. A Lotto pick (longshot moonshot) is its own bucket so its different
         // risk profile doesn't muddy the Standard record; absent the lotto column it's never set,
         // so the tier simply doesn't appear.
@@ -54,10 +55,6 @@ public class TrackRecordService {
         // Brier over decided (win/loss) picks only.
         double brierSum = 0.0;
         int brierN = 0;
-        // CLV over picks that had a closing quote (independent of win/loss).
-        double clvSum = 0.0;
-        int clvN = 0;
-        int clvPositive = 0;
         // Per-day equity, accumulated in time order (picks arrive oldest-first).
         List<EquityPointDto> equity = new ArrayList<>();
         LocalDate curDay = null;
@@ -75,21 +72,17 @@ public class TrackRecordService {
             if (p.modelVersion() != null) versions.add(p.modelVersion());
             double units = unitsFor(o, p.priceAmerican());
 
-            overall.add(o, units);
-            byMarket.computeIfAbsent(p.market(), Acc::new).add(o, units);
-            (p.lotto() ? lotto : p.strong() ? strong : standard).add(o, units);
+            overall.add(o, units, p.clv());
+            byMarket.computeIfAbsent(p.market(), Acc::new).add(o, units, p.clv());
+            byBook.computeIfAbsent(p.book() == null ? "?" : p.book(), Acc::new)
+                .add(o, units, p.clv());
+            (p.lotto() ? lotto : p.strong() ? strong : standard).add(o, units, p.clv());
 
             if (o != Outcome.PUSH) {
                 double outcome = o == Outcome.WIN ? 1.0 : 0.0;
                 double d = p.modelProb() - outcome;
                 brierSum += d * d;
                 brierN++;
-            }
-
-            if (p.clv() != null) {
-                clvSum += p.clv();
-                clvN++;
-                if (p.clv() > 0) clvPositive++;
             }
 
             // Roll up the equity curve a day at a time.
@@ -115,13 +108,21 @@ public class TrackRecordService {
         if (standard.n() > 0) tiers.add(standard.toDto());
         if (lotto.n() > 0) tiers.add(lotto.toDto());
 
+        // Books in descending slice size — the biggest books first, "?" (no book) wherever it lands.
+        List<RecordSummaryDto> books = byBook.values().stream()
+            .sorted((a, b) -> Integer.compare(b.n(), a.n()))
+            .map(Acc::toDto)
+            .toList();
+
         Double pickBrier = brierN > 0 ? round4(brierSum / brierN) : null;
-        Double clvRate = clvN > 0 ? round4((double) clvPositive / clvN) : null;
-        Double avgClv = clvN > 0 ? round4(clvSum / clvN) : null;
+        int clvN = overall.clvN;
         return new TrackRecordResponse(
             days, asOf == null ? null : asOf.toString(), new ArrayList<>(versions),
-            overall.toDto(), markets, tiers, equity, pickBrier,
-            clvN > 0 ? clvN : null, clvRate, avgClv);
+            overall.toDto(), markets, tiers, books, equity, pickBrier,
+            clvN > 0 ? clvN : null,
+            clvN > 0 ? round4((double) overall.clvPositive / clvN) : null,
+            clvN > 0 ? round4(overall.clvSum / clvN) : null,
+            clvN > 0 ? overall.clvZero : null);
     }
 
     private enum Outcome { WIN, LOSS, PUSH, VOID }
@@ -155,23 +156,32 @@ public class TrackRecordService {
         return Math.round(v * 10000.0) / 10000.0;
     }
 
-    /** Mutable record accumulator for one slice (overall / a market / a tier). */
+    /** Mutable record accumulator for one slice (overall / a market / a tier / a book). */
     private static final class Acc {
         private final String label;
         private int wins, losses, pushes;
         private double units;
+        // CLV over the slice's picks that had a closing quote (independent of win/loss).
+        private double clvSum;
+        private int clvN, clvPositive, clvZero;
 
         Acc(String label) {
             this.label = label;
         }
 
-        void add(Outcome o, double u) {
+        void add(Outcome o, double u, Double clv) {
             units += u;
             switch (o) {
                 case WIN -> wins++;
                 case LOSS -> losses++;
                 case PUSH -> pushes++;
                 default -> { /* VOID never reaches here */ }
+            }
+            if (clv != null) {
+                clvSum += clv;
+                clvN++;
+                if (clv > 0) clvPositive++;
+                else if (clv == 0) clvZero++;
             }
         }
 
@@ -186,7 +196,10 @@ public class TrackRecordService {
             double roiPct = n > 0 ? units / n * 100.0 : 0.0;
             return new RecordSummaryDto(
                 label, n, wins, losses, pushes,
-                round4(winPct), round(units), round(roiPct));
+                round4(winPct), round(units), round(roiPct),
+                clvN > 0 ? clvN : null,
+                clvN > 0 ? round4((double) clvPositive / clvN) : null,
+                clvN > 0 ? round4(clvSum / clvN) : null);
         }
     }
 }

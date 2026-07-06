@@ -27,16 +27,20 @@ class TrackRecordServiceTest {
 
     private static SettledPick pick(LocalDate day, String market, boolean strong, Boolean won,
                                     double modelProb, int price, Double resultValue, String version) {
-        return new SettledPick(day, market, strong, won, modelProb, price, resultValue, version, null, false, false);
+        return new SettledPick(day, market, "FanDuel", strong, won, modelProb, price, resultValue, version, null, false, false);
     }
 
     private static SettledPick lottoPick(LocalDate day, String market, Boolean won,
                                          double modelProb, int price, Double resultValue) {
-        return new SettledPick(day, market, false, won, modelProb, price, resultValue, "v2.12.0", null, false, true);
+        return new SettledPick(day, market, "FanDuel", false, won, modelProb, price, resultValue, "v2.12.0", null, false, true);
     }
 
     private static SettledPick clvPick(LocalDate day, Boolean won, Double clv) {
-        return new SettledPick(day, "total", false, won, 0.55, -110, 8.0, "v2.12.0", clv, false, false);
+        return clvPick(day, "total", "FanDuel", won, clv);
+    }
+
+    private static SettledPick clvPick(LocalDate day, String market, String book, Boolean won, Double clv) {
+        return new SettledPick(day, market, book, false, won, 0.55, -110, 8.0, "v2.12.0", clv, false, false);
     }
 
     private TrackRecordResponse serve(List<SettledPick> picks) {
@@ -91,6 +95,8 @@ class TrackRecordServiceTest {
         assertThat(r.clvN()).isNull();
         assertThat(r.clvRate()).isNull();
         assertThat(r.avgClv()).isNull();
+        assertThat(r.clvZeroN()).isNull();
+        assertThat(r.byBook()).isEmpty();
     }
 
     @Test
@@ -104,6 +110,60 @@ class TrackRecordServiceTest {
         assertThat(r.clvN()).isEqualTo(3);                 // the null-CLV pick is excluded
         assertThat(r.clvRate()).isEqualTo(0.6667);         // 2 of 3 positive
         assertThat(r.avgClv()).isEqualTo(0.01);            // (0.04 + 0.02 - 0.03) / 3
+        assertThat(r.clvZeroN()).isZero();                 // no exact ties with the close
+    }
+
+    @Test
+    void clvTiesCountInDenominatorAndAreReportedSeparately() {
+        TrackRecordResponse r = serve(List.of(
+            clvPick(D1, true, 0.02),
+            clvPick(D1, false, 0.0),    // exact tie: in clvN, not in clvRate's numerator
+            clvPick(D2, true, 0.0)
+        ));
+        assertThat(r.clvN()).isEqualTo(3);
+        assertThat(r.clvRate()).isEqualTo(0.3333);         // strictly positive only
+        assertThat(r.clvZeroN()).isEqualTo(2);
+    }
+
+    @Test
+    void perSliceClvAndBookBreakdown() {
+        TrackRecordResponse r = serve(List.of(
+            clvPick(D1, "total", "FanDuel", true, 0.04),
+            clvPick(D1, "total", "FanDuel", false, -0.02),
+            clvPick(D1, "hr", "BetRivers", true, null),     // hr pick, no closing quote
+            clvPick(D2, "hr", "BetRivers", false, 0.01)
+        ));
+
+        // byMarket: total has both its CLVs, hr has one of two.
+        RecordSummaryDto total = r.byMarket().stream()
+            .filter(m -> m.label().equals("total")).findFirst().orElseThrow();
+        assertThat(total.clvN()).isEqualTo(2);
+        assertThat(total.avgClv()).isEqualTo(0.01);        // (0.04 - 0.02) / 2
+        assertThat(total.clvRate()).isEqualTo(0.5);
+        RecordSummaryDto hr = r.byMarket().stream()
+            .filter(m -> m.label().equals("hr")).findFirst().orElseThrow();
+        assertThat(hr.n()).isEqualTo(2);
+        assertThat(hr.clvN()).isEqualTo(1);                // the null-CLV pick is excluded
+
+        // byBook: largest slice first; CLV coverage per book.
+        assertThat(r.byBook()).extracting(RecordSummaryDto::label)
+            .containsExactly("FanDuel", "BetRivers");
+        assertThat(r.byBook().get(0).clvN()).isEqualTo(2);
+        assertThat(r.byBook().get(1).n()).isEqualTo(2);
+        assertThat(r.byBook().get(1).clvN()).isEqualTo(1);
+    }
+
+    @Test
+    void sliceWithNoClosingQuotesHasNullClvFields() {
+        TrackRecordResponse r = serve(List.of(
+            pick(D1, "total", true, true, 0.60, 150, 9.0)  // clv null
+        ));
+        RecordSummaryDto total = r.byMarket().get(0);
+        assertThat(total.clvN()).isNull();
+        assertThat(total.clvRate()).isNull();
+        assertThat(total.avgClv()).isNull();
+        assertThat(r.clvN()).isNull();
+        assertThat(r.clvZeroN()).isNull();
     }
 
     @Test
