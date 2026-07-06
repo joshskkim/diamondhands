@@ -18,8 +18,7 @@ import { fetchPlayer, fetchPlayerRecentStats, queryKeys } from '@/lib/api'
 import type { PlayerDetail, RecentStat } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { PlayerSearch } from '@/components/player-search'
-
-const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
+import { microLabel } from '@/components/ui/primitives'
 
 // Up to three keeps columns readable and the trend lines visually distinct.
 const MAX_PLAYERS = 3

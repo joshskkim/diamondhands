@@ -2,11 +2,9 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { Target } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { microLabel } from '@/components/ui/primitives'
 
 export const metadata: Metadata = { title: 'Leaderboard' }
-
-const microLabel =
-  'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
 const cardBase = 'bg-[#0e1015] border border-white/10 rounded-xl p-5'
 

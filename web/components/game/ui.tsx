@@ -1,9 +1,5 @@
 import { cn } from '@/lib/utils'
 
-/** Tiny uppercase caption used throughout the game views. */
-export const microLabel =
-  'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
-
 const chipBase =
   'inline-flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5 border'
 

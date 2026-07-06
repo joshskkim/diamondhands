@@ -9,8 +9,7 @@ import {
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { QueryError } from '@/components/ui/query-states'
-
-const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
+import { microLabel } from '@/components/ui/primitives'
 
 function edgeClass(edge: number) {
   if (edge > 0.02) return 'text-emerald-400'

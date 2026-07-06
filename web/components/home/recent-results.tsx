@@ -10,8 +10,7 @@ import type { ModelPickResult } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { easternDateStr, pickOutcome, pickTitle } from '@/lib/picks'
 import { OutcomeBadge } from './outcome-badge'
-
-const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
+import { microLabel } from '@/components/ui/primitives'
 
 // The actual result phrased per market — what the pick was graded against.
 function resultLabel(p: ModelPickResult): string | null {

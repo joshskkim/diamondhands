@@ -19,8 +19,8 @@ import { cn } from '@/lib/utils'
 import { getStadiumByAbbr } from '@/lib/stadiums'
 import { StadiumDiagram } from '@/components/game/stadium-diagram'
 import { QueryError } from '@/components/ui/query-states'
+import { microLabel } from '@/components/ui/primitives'
 
-const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 const chip =
   'inline-flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5 bg-white/5 border border-white/10 text-zinc-300'
 

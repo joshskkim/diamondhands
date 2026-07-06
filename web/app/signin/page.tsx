@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { SignInForm } from './signin-form'
+import { microLabel } from '@/components/ui/primitives'
 
 export const metadata: Metadata = {
   title: 'Sign in',
@@ -11,7 +12,7 @@ export default function SignInPage() {
       <div className="mx-auto max-w-md">
         <div className="bg-[#0e1015] border border-white/10 rounded-xl p-8">
           <div className="text-center">
-            <div className="text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium">
+            <div className={microLabel}>
               Accounts
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-zinc-100 mt-2">

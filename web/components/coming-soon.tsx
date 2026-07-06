@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
+import { microLabel } from '@/components/ui/primitives'
 
 type ComingSoonProps = {
   title: string
@@ -25,7 +26,7 @@ export function ComingSoon({ title, description, icon }: ComingSoonProps) {
           {title}
         </h1>
         <p className="mt-2 max-w-md text-sm text-zinc-400">{description}</p>
-        <span className="mt-6 text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium">
+        <span className={cn('mt-6', microLabel)}>
           Coming soon
         </span>
       </div>

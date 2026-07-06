@@ -10,11 +10,12 @@ import {
   hrClass,
   kClass,
   matchupNote,
-  pct,
   STAT_INFO,
 } from './batter-stats'
 import { HotZoneGrid } from './hot-zone-grid'
-import { microLabel, PITCH_NAMES } from './ui'
+import { PITCH_NAMES } from './ui'
+import { microLabel } from '@/components/ui/primitives'
+import { pct } from '@/lib/format'
 
 type Insight = { tone: 'good' | 'bad'; text: string }
 

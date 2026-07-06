@@ -4,8 +4,10 @@ import { useState } from 'react'
 import type { BatterProjection, TeamBatters } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { BatterDetail } from './batter-detail'
-import { pct, STAT_INFO } from './batter-stats'
-import { Chip, microLabel } from './ui'
+import { STAT_INFO } from './batter-stats'
+import { pct } from '@/lib/format'
+import { Chip } from './ui'
+import { microLabel } from '@/components/ui/primitives'
 
 // Confirmed lineups have a real batting order; projected ones do not (every
 // batter shares a flat expected PA), so we never imply an order — we surface the
