@@ -172,11 +172,11 @@ public class OddsService {
             for (List<GameOddRow> books : sides.values()) {
                 GameOddRow best = books.get(0); // highest decimal
                 Double modelProb = gameModelProb(model, market, best.side(), best.line());
-                Double fairProb = fairShare(best.impliedProb(), impliedSum);
+                Double fairProb = OddsMath.fairShare(best.impliedProb(), impliedSum);
                 quotes.add(new LineQuoteDto(
                     best.side(), best.line(), best.bookmaker(),
                     best.priceAmerican(), best.priceDecimal(), best.impliedProb(),
-                    fairProb, modelProb, ev(modelProb, best.priceDecimal()), gameBooks(books)));
+                    fairProb, modelProb, OddsMath.ev(modelProb, best.priceDecimal()), gameBooks(books)));
             }
             quotes.sort(SIDE_ORDER);
             out.add(new GameMarketDto(market, quotes));
@@ -223,8 +223,8 @@ public class OddsService {
             Double fairOver = null, fairUnder = null;
             if (overBooks != null && !overBooks.isEmpty() && underBooks != null && !underBooks.isEmpty()) {
                 double sum = overBooks.get(0).impliedProb() + underBooks.get(0).impliedProb();
-                fairOver = fairShare(overBooks.get(0).impliedProb(), sum);
-                fairUnder = fairShare(underBooks.get(0).impliedProb(), sum);
+                fairOver = OddsMath.fairShare(overBooks.get(0).impliedProb(), sum);
+                fairUnder = OddsMath.fairShare(underBooks.get(0).impliedProb(), sum);
             }
             LineQuoteDto over = propQuote(overBooks, overProb, fairOver);
             LineQuoteDto under = propQuote(underBooks, underProb, fairUnder);
@@ -252,25 +252,15 @@ public class OddsService {
         return new LineQuoteDto(
             best.side(), best.line(), best.bookmaker(),
             best.priceAmerican(), best.priceDecimal(), best.impliedProb(),
-            fairProb, modelProb, ev(modelProb, best.priceDecimal()), all);
+            fairProb, modelProb, OddsMath.ev(modelProb, best.priceDecimal()), all);
     }
 
     // ── Shared helpers ─────────────────────────────────────────────────────────
-
-    private static Double ev(Double modelProb, double decimal) {
-        return modelProb == null ? null : modelProb * decimal - 1.0;
-    }
 
     /** A model probability is usable only if it's strictly inside (0, 1); 0/1 means the
      *  projection is degenerate (not really projected), not a confident edge. See PROB_EPS. */
     private static Double sane(Double p) {
         return (p == null || p <= PROB_EPS || p >= 1.0 - PROB_EPS) ? null : p;
-    }
-
-    /** No-vig fair probability for one side: its implied divided by the two-sided implied sum. */
-    private static Double fairShare(Double sideImplied, Double impliedSum) {
-        if (sideImplied == null || impliedSum == null || impliedSum <= 0) return null;
-        return sideImplied / impliedSum;
     }
 
     /**

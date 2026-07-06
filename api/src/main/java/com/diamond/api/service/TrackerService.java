@@ -47,9 +47,9 @@ public class TrackerService {
         if (repo.recommendationExists(userId, slate, gameId, market, side, playerId)) {
             return new TailResult(null, true, "Already in your tracker.");
         }
-        double decimal = KellyCalculator.americanToDecimal(priceAmerican);
+        double decimal = OddsMath.americanToDecimal(priceAmerican);
         double edge = modelProb - fairProb;
-        double evPct = modelProb * decimal - 1.0;
+        double evPct = OddsMath.ev(modelProb, decimal);
 
         UserPreferences prefs = prefsRepo.findOrDefault(userId);
         Double stakeUnits = null;
@@ -101,7 +101,7 @@ public class TrackerService {
             graded++;
             if (e.won()) {
                 wins++;
-                units += stake * (KellyCalculator.americanToDecimal(
+                units += stake * (OddsMath.americanToDecimal(
                     e.priceAmerican() == null ? -110 : e.priceAmerican()) - 1.0);
             } else {
                 losses++;
