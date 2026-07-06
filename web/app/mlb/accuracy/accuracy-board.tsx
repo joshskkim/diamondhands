@@ -131,9 +131,23 @@ function MarketCard({ market }: { market: MarketAccuracy }) {
             </div>
           </div>
         ) : (
-          <div className="text-right">
-            <div className={microLabel}>Skill ×10³</div>
-            <div className={cn('text-lg font-mono', skillClass(latestSkill))}>{skillText}</div>
+          <div className="flex gap-4 text-right">
+            <div title="Proper scoring rule; rewards confident-and-right on rare events. Lower is better.">
+              <div className={microLabel}>Log loss</div>
+              <div className="text-lg font-mono text-zinc-300">
+                {latest?.logLoss != null ? latest.logLoss.toFixed(3) : '—'}
+              </div>
+            </div>
+            <div title="Variance of the predicted probabilities — read with calibration (“sharpness subject to calibration”).">
+              <div className={microLabel}>Sharp ×10³</div>
+              <div className="text-lg font-mono text-zinc-300">
+                {latest?.sharpness != null ? (latest.sharpness * 1000).toFixed(1) : '—'}
+              </div>
+            </div>
+            <div>
+              <div className={microLabel}>Skill ×10³</div>
+              <div className={cn('text-lg font-mono', skillClass(latestSkill))}>{skillText}</div>
+            </div>
           </div>
         )}
       </div>

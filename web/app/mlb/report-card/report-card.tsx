@@ -24,6 +24,9 @@ const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-m
 // Below this many settled picks, units/ROI swing wildly on a single result — show the
 // caveat and let the steadier calibration section carry the "is the model good" story.
 const MIN_MEANINGFUL_N = 50
+// CLV needs a few hundred picks before it's trustworthy (see TrackRecordResponse docs);
+// flag anything under this so the north-star metric isn't over-read early.
+const MIN_MEANINGFUL_CLV_N = 100
 
 // All-time uses a large day count; the API clamps and the equity curve just spans everything.
 const ALL_DAYS = 36500
@@ -44,6 +47,12 @@ const MARKET_LABEL: Record<string, string> = {
 
 function signedUnits(u: number): string {
   return `${u >= 0 ? '+' : ''}${u.toFixed(2)}u`
+}
+
+// CLV is stored as a probability delta (close fair − bet fair); render in probability points.
+function signedClvPts(clv: number): string {
+  const pts = clv * 100
+  return `${pts >= 0 ? '+' : ''}${pts.toFixed(1)}pts`
 }
 
 function unitsClass(u: number): string {
@@ -121,6 +130,14 @@ export function ReportCard() {
         </div>
       )}
 
+      {data && data.clvN != null && data.clvN < MIN_MEANINGFUL_CLV_N && (
+        <div className="mb-4 rounded-lg border border-amber-400/20 bg-amber-400/[0.06] px-4 py-2.5 text-xs text-amber-200/90">
+          CLV sample is small — a closing quote was found for {data.clvN} of {data.overall.n} picks
+          (a moved line means no quote and no CLV). Treat the CLV read as provisional until a few
+          hundred picks have one.
+        </div>
+      )}
+
       {data && data.overall.n > 0 && (
         <>
           <SummaryRow tr={data} />
@@ -128,6 +145,7 @@ export function ReportCard() {
           <div className="grid gap-4 sm:grid-cols-2 mt-6">
             <BreakdownTable title="By market" rows={data.byMarket} labelOf={(l) => MARKET_LABEL[l] ?? l} />
             <BreakdownTable title="By conviction" rows={data.byTier} labelOf={(l) => l} />
+            <BreakdownTable title="By book" rows={data.byBook} labelOf={(l) => (l === '?' ? 'Unknown' : l)} />
           </div>
         </>
       )}
@@ -142,7 +160,7 @@ function SummaryRow({ tr }: { tr: TrackRecord }) {
   const o = tr.overall
   const record = `${o.wins}-${o.losses}${o.pushes ? `-${o.pushes}` : ''}`
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
       <StatCard label="Record" value={record} sub={`${o.n} settled`} />
       <StatCard label="Win %" value={`${(o.winPct * 100).toFixed(1)}%`} sub="of decided picks" />
       <StatCard
@@ -156,6 +174,16 @@ function SummaryRow({ tr }: { tr: TrackRecord }) {
         value={`${o.roiPct >= 0 ? '+' : ''}${o.roiPct.toFixed(1)}%`}
         valueClass={unitsClass(o.roiPct)}
         sub={tr.pickBrier != null ? `pick Brier ${tr.pickBrier.toFixed(3)}` : undefined}
+      />
+      <StatCard
+        label="CLV"
+        value={tr.avgClv != null ? signedClvPts(tr.avgClv) : '—'}
+        valueClass={tr.avgClv != null ? unitsClass(tr.avgClv) : undefined}
+        sub={
+          tr.clvN != null && tr.clvRate != null
+            ? `beat close ${(tr.clvRate * 100).toFixed(0)}% · n=${tr.clvN} of ${o.n}`
+            : 'no closing quotes captured yet'
+        }
       />
     </div>
   )
@@ -238,6 +266,9 @@ function BreakdownTable({
             <th className="text-right font-medium pb-1.5">Record</th>
             <th className="text-right font-medium pb-1.5">Units</th>
             <th className="text-right font-medium pb-1.5">ROI</th>
+            <th className="text-right font-medium pb-1.5" title="Mean closing-line value; (n) = picks with a closing quote">
+              CLV
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -254,6 +285,14 @@ function BreakdownTable({
               <td className={cn('py-1.5 text-right font-mono', unitsClass(r.roiPct))}>
                 {r.roiPct >= 0 ? '+' : ''}
                 {r.roiPct.toFixed(1)}%
+              </td>
+              <td
+                className={cn(
+                  'py-1.5 text-right font-mono',
+                  r.avgClv != null ? unitsClass(r.avgClv) : 'text-zinc-600',
+                )}
+              >
+                {r.avgClv != null ? `${signedClvPts(r.avgClv)} (${r.clvN})` : '—'}
               </td>
             </tr>
           ))}

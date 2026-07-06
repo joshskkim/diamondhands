@@ -642,7 +642,7 @@ export interface AccuracyResponse {
 
 // ── Track Record (GET /api/track-record) ─────────────────────────────────────
 
-/** Win/loss record + units/ROI for a slice of graded picks (overall, a market, or a tier). */
+/** Win/loss record + units/ROI for a slice of graded picks (overall, a market, a tier, or a book). */
 export interface RecordSummary {
   label: string
   n: number // settled non-void picks (wins + losses + pushes)
@@ -652,6 +652,12 @@ export interface RecordSummary {
   winPct: number // over decided picks only
   units: number // net units at flat 1u stakes
   roiPct: number
+  /** Picks in this slice with a captured closing quote; null when none. */
+  clvN: number | null
+  /** Share of clvN with strictly positive CLV. */
+  clvRate: number | null
+  /** Mean CLV (de-vigged probability points vs the close) over clvN. */
+  avgClv: number | null
 }
 
 /** One point on the cumulative-units equity curve. */
@@ -674,14 +680,18 @@ export interface TrackRecord {
   overall: RecordSummary
   byMarket: RecordSummary[]
   byTier: RecordSummary[]
+  /** Per-sportsbook breakdown, largest slice first. */
+  byBook: RecordSummary[]
   equity: EquityPoint[]
   pickBrier: number | null
   /** CLV sample size: settled picks for which a closing quote was found. Null until any CLV. */
   clvN: number | null
-  /** Share of clvN with positive closing-line value (we beat the close). */
+  /** Share of clvN with strictly positive closing-line value (we beat the close). */
   clvRate: number | null
   /** Mean CLV (de-vigged probability points beaten) over clvN. */
   avgClv: number | null
+  /** Exact ties with the close (inside clvN, excluded from clvRate's numerator). */
+  clvZeroN: number | null
 }
 
 // ── Most Likely board (GET /api/most-likely) ─────────────────────────────────

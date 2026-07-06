@@ -71,6 +71,7 @@ from ingester.commands.pitch_aggregations import (
 from ingester.commands.backtest import cmd_backtest
 from ingester.commands.accuracy import cmd_compute_accuracy
 from ingester.commands.picks import cmd_record_picks, cmd_score_picks
+from ingester.commands.pick_analysis import cmd_analyze_picks
 from ingester.commands.briefing import cmd_daily_briefing
 from agent_eval.score_recs import cmd_score_agent_recs
 from agent_eval.runner import cmd_agent_eval
@@ -551,6 +552,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Slate date to score (default: yesterday in US/Eastern)",
     )
 
+    p_analyze_picks = sub.add_parser(
+        "analyze-picks",
+        help="Read-only CLV/pick diagnostics: coverage taxonomy, de-vig-basis "
+             "verification, slices by market/book/tier/edge/timing",
+    )
+    p_analyze_picks.add_argument(
+        "--days", type=int, default=60, help="Trailing window in days (default 60)")
+    p_analyze_picks.add_argument(
+        "--verify", action="store_true", default=False,
+        help="Recompute CLV on a consistent single-book basis + sign-coherence checks")
+    p_analyze_picks.add_argument(
+        "--md", action="store_true", default=False,
+        help="Emit markdown tables (for pasting into the findings doc)")
+
     # ── Diamond Analyst (agent) ──────────────────────────────────────────────
     p_score_recs = sub.add_parser(
         "score-agent-recs",
@@ -690,6 +705,7 @@ COMMANDS = {
     "compute-accuracy":         cmd_compute_accuracy,
     "record-picks":             cmd_record_picks,
     "score-picks":              cmd_score_picks,
+    "analyze-picks":            cmd_analyze_picks,
     "score-agent-recs":         cmd_score_agent_recs,
     "agent-eval":               cmd_agent_eval,
     "compare-evals":            cmd_compare_evals,

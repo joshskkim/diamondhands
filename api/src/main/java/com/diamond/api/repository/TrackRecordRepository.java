@@ -29,7 +29,7 @@ public class TrackRecordRepository {
     // counted here (everything ever shown counts — no survivorship bias), just tagged
     // so the report card can label it.
     private static final String SETTLED_SQL = """
-        SELECT slate_date, market, strong, won, model_prob, price_american, result_value,
+        SELECT slate_date, market, book, strong, won, model_prob, price_american, result_value,
                model_version, clv, bumped_at IS NOT NULL AS bumped, %s AS lotto
         FROM model_picks
         WHERE scored_at IS NOT NULL AND slate_date >= ?
@@ -69,6 +69,7 @@ public class TrackRecordRepository {
         return new SettledPick(
             rs.getObject("slate_date", LocalDate.class),
             rs.getString("market"),
+            rs.getString("book"),
             rs.getBoolean("strong"),
             (Boolean) rs.getObject("won"),
             rs.getBigDecimal("model_prob").doubleValue(),
@@ -90,6 +91,7 @@ public class TrackRecordRepository {
     public record SettledPick(
         LocalDate slateDate,
         String market,
+        String book,
         boolean strong,
         Boolean won,
         double modelProb,
