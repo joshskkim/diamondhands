@@ -24,8 +24,8 @@ import { useAuth } from '@/components/auth-provider'
 import { OutcomeBadge } from './outcome-badge'
 import { LivePickTracker } from './live-tracker'
 import { WhyDisclosure } from './why-disclosure'
-
-const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
+import { microLabel, Skeleton } from '@/components/ui/primitives'
+import { pct, signedPct } from '@/lib/format'
 
 // ── the bar a line must clear (KEEP IN SYNC with ingester/commands/picks.py) ──
 // A line only makes the board when the model and the price BOTH say yes:
@@ -77,14 +77,6 @@ interface ModelPick {
   score: number
   strong: boolean
   reasons: string[]
-}
-
-function pct(v: number) {
-  return (v * 100).toFixed(1) + '%'
-}
-
-function signedPct(v: number) {
-  return (v > 0 ? '+' : '') + (v * 100).toFixed(1) + '%'
 }
 
 // Totals picks must agree with the game sim when it covers the game; when it
@@ -377,9 +369,6 @@ function NoOddsCard() {
   )
 }
 
-function Skeleton({ className = '' }: { className?: string }) {
-  return <div className={cn('animate-pulse bg-white/5 rounded', className)} />
-}
 
 // ── earlier picks (honest history) ──────────────────────────────────────────────
 // The live board above always shows the current top picks. When a better play appears

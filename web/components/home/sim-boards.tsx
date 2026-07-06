@@ -14,6 +14,8 @@ import {
   type PickOutcome,
 } from '@/lib/picks'
 import { OutcomeBadge } from './outcome-badge'
+import { microLabel } from '@/components/ui/primitives'
+import { pct, signed } from '@/lib/format'
 
 // Final scores + first-inning runs (and live state) per game, for live ✓/✗ grading.
 interface GameResult {
@@ -31,21 +33,9 @@ interface GameResult {
   isLive: boolean
 }
 
-const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
-
 // Concise by design: top N leans per market, strongest first. The full slate
 // lives on the game pages — this is the skim view.
 const N = 5
-
-function pct(v: number | null | undefined) {
-  if (v == null) return '—'
-  return (v * 100).toFixed(0) + '%'
-}
-
-function signed(v: number | null | undefined, digits = 1) {
-  if (v == null) return '—'
-  return (v > 0 ? '+' : '') + v.toFixed(digits)
-}
 
 // Shared card shell for the sim boards (moved from the retired pick-boards).
 function BoardCard({
@@ -150,7 +140,7 @@ function TotalsCard({ data, games }: { data: MostLikely['totals']; games: Map<nu
           </div>
           <div className="text-right shrink-0 w-12">
             <div className={microLabel}>Over</div>
-            <div className="text-[13px] font-mono tabular-nums text-zinc-300">{pct(t.pOver)}</div>
+            <div className="text-[13px] font-mono tabular-nums text-zinc-300">{pct(t.pOver, 0)}</div>
           </div>
         </div>
         )
@@ -181,12 +171,12 @@ function RunLineCard({ data, games }: { data: MostLikely['runLine']; games: Map<
             <RowMatchup gameId={r.gameId} label={r.matchup} outcome={outcome} />
             <div className="text-[11px] text-zinc-500 mt-0.5">
               cover <span className="text-zinc-300 font-semibold">{r.team}</span> {spread}{' '}
-              {pct(r.coverProb)}
+              {pct(r.coverProb, 0)}
             </div>
           </div>
           <div className="text-right shrink-0 w-12">
             <div className={microLabel}>Cover</div>
-            <div className="text-[13px] font-mono tabular-nums text-zinc-300">{pct(r.coverProb)}</div>
+            <div className="text-[13px] font-mono tabular-nums text-zinc-300">{pct(r.coverProb, 0)}</div>
           </div>
           <div className="text-right shrink-0 w-14">
             <div className={microLabel}>Edge</div>
@@ -222,7 +212,7 @@ function NrfiCard({ data, games }: { data: MostLikely['nrfi']; games: Map<number
           <div className="min-w-0 flex-1">
             <RowMatchup gameId={n.gameId} label={n.matchup} outcome={outcome} />
             <div className="text-[11px] text-zinc-500 mt-0.5">
-              YRFI {pct(n.pYrfi)} · NRFI {pct(n.pNrfi)}
+              YRFI {pct(n.pYrfi, 0)} · NRFI {pct(n.pNrfi, 0)}
             </div>
           </div>
           <div className="text-right shrink-0 w-16">
@@ -233,7 +223,7 @@ function NrfiCard({ data, games }: { data: MostLikely['nrfi']; games: Map<number
                 n.lean === 'NRFI' ? 'text-sky-400' : 'text-amber-400',
               )}
             >
-              {n.lean} {pct(n.leanProb)}
+              {n.lean} {pct(n.leanProb, 0)}
             </div>
           </div>
         </div>

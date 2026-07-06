@@ -2,7 +2,8 @@
 
 import type { PitchArsenal, PitcherSkillSplit } from '@/lib/types'
 import { STAT_INFO } from './batter-stats'
-import { microLabel, PITCH_NAMES } from './ui'
+import { PITCH_NAMES } from './ui'
+import { microLabel } from '@/components/ui/primitives'
 
 // Stable per-pitch colors for the usage bar + legend swatches.
 const PITCH_COLORS: Record<string, string> = {

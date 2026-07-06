@@ -8,8 +8,8 @@ import type { BestPlay, HitRate, LineShop } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { MARKET_LABEL, teamForSide } from '@/lib/odds'
 import { QueryError } from '@/components/ui/query-states'
-
-const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
+import { microLabel } from '@/components/ui/primitives'
+import { pct, signedPct } from '@/lib/format'
 
 // The default view only shows lines we'd actually consider: the model makes the
 // side at least this likely AND it carries a positive de-vigged edge — capped at
@@ -20,15 +20,6 @@ const LIKED_PER_MARKET = 5
 
 function amer(n: number) {
   return n > 0 ? `+${n}` : `${n}`
-}
-
-function pct(v: number | null) {
-  if (v == null) return '—'
-  return (v * 100).toFixed(1) + '%'
-}
-
-function signedPct(v: number) {
-  return (v > 0 ? '+' : '') + (v * 100).toFixed(1) + '%'
 }
 
 // Edge = model − fair (no-vig). This is the board's headline metric; positive means our

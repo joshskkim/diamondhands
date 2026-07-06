@@ -1,7 +1,8 @@
 import type { BatterProjection } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { dedupeArsenal, dedupeVsArsenal, STAT_INFO } from './batter-stats'
-import { microLabel, PITCH_NAMES } from './ui'
+import { PITCH_NAMES } from './ui'
+import { microLabel } from '@/components/ui/primitives'
 
 /**
  * How the batter fares against each pitch the opposing starter throws.

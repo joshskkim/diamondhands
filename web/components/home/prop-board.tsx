@@ -24,8 +24,8 @@ import { liveCountOutcome, overUnderOutcome, propOutcome, type PickOutcome } fro
 import { OutcomeBadge } from './outcome-badge'
 import { LivePropTracker, gameIsLive } from './live-tracker'
 import { WhyDisclosure } from './why-disclosure'
-
-const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
+import { microLabel, Skeleton } from '@/components/ui/primitives'
+import { pct, signed } from '@/lib/format'
 
 const PITCH_NAMES: Record<string, string> = {
   FF: '4-seam', SI: 'sinker', FC: 'cutter', SL: 'slider', CU: 'curve',
@@ -98,13 +98,8 @@ const PITCHER_RESULT_FIELD: Record<string, keyof PitcherResult> = {
   pitcher_hits_allowed: 'hitsAllowed', pitcher_earned_runs: 'earnedRuns',
 }
 
-function pct(v: number) {
-  return (v * 100).toFixed(1) + '%'
-}
-
 function signedPctFromAdj(adj: number) {
-  const delta = (adj - 1) * 100
-  return (delta > 0 ? '+' : '') + delta.toFixed(0) + '%'
+  return signed((adj - 1) * 100, 0) + '%'
 }
 
 function xwoba(v: number) {
@@ -695,9 +690,6 @@ function PitcherCard({
   )
 }
 
-function Skeleton({ className = '' }: { className?: string }) {
-  return <div className={cn('animate-pulse bg-white/5 rounded', className)} />
-}
 
 /**
  * Model-first prop board: one card per prop market with the model's most likely

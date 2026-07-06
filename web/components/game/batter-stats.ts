@@ -2,11 +2,6 @@ import type { BatterProjection, BatterVsArsenal, PitchArsenal, Adjustments } fro
 
 // ── formatting ────────────────────────────────────────────────────────────
 
-export function pct(v: number | null | undefined) {
-  if (v == null) return '—'
-  return (v * 100).toFixed(1) + '%'
-}
-
 export function fixed2(v: number | null | undefined) {
   if (v == null) return '—'
   return v.toFixed(2)

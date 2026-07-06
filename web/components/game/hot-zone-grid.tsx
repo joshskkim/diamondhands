@@ -1,4 +1,4 @@
-import { microLabel } from './ui'
+import { microLabel } from '@/components/ui/primitives'
 
 /**
  * Strike-zone hot-zone placeholder. A clean 3×3 grid inside a chase border,

@@ -4,8 +4,8 @@ import { useQuery } from '@tanstack/react-query'
 import { gameOddsQueryOptions } from '@/lib/api'
 import type { GameMarket, LineQuote, PropMarket } from '@/lib/types'
 import { cn } from '@/lib/utils'
-
-const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
+import { microLabel } from '@/components/ui/primitives'
+import { pct, signed } from '@/lib/format'
 
 const MARKET_LABEL: Record<string, string> = {
   moneyline: 'Moneyline',
@@ -20,16 +20,6 @@ const MARKET_LABEL: Record<string, string> = {
 function amer(n: number | null | undefined) {
   if (n == null) return '—'
   return n > 0 ? `+${n}` : `${n}`
-}
-
-function pct(v: number | null | undefined) {
-  if (v == null) return '—'
-  return (v * 100).toFixed(1) + '%'
-}
-
-function signed(line: number | null | undefined) {
-  if (line == null) return ''
-  return line > 0 ? `+${line}` : `${line}`
 }
 
 // EV is the headline edge number: warm green for positive, muted/rose for negative.
@@ -49,7 +39,7 @@ function evText(ev: number | null | undefined) {
 function gameSelection(market: string, q: LineQuote, homeAbbr: string, awayAbbr: string) {
   const team = q.side === 'home' ? homeAbbr : awayAbbr
   if (market === 'moneyline') return team
-  if (market === 'run_line') return `${team} ${signed(q.line)}`
+  if (market === 'run_line') return `${team} ${signed(q.line, 1)}`
   if (market === 'total') return `${q.side === 'over' ? 'Over' : 'Under'} ${q.line}`
   return q.side
 }
