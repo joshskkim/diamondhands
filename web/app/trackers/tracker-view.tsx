@@ -6,16 +6,11 @@ import { Check, X, Clock } from 'lucide-react'
 import { fetchTracker, queryKeys, type TrackerEntry, type TrackerSummary } from '@/lib/api'
 import { useAuth } from '@/components/auth-provider'
 import { cn } from '@/lib/utils'
+import { microLabel } from '@/components/ui/primitives'
+import { pct, signed } from '@/lib/format'
 
-const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 const card = 'bg-[#0e1015] border border-white/10 rounded-xl p-4'
 
-function pct(v: number | null) {
-  return v == null ? '—' : (v * 100).toFixed(1) + '%'
-}
-function signed(v: number | null, suffix = '') {
-  return v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(suffix === '%' ? 1 : 2) + suffix
-}
 function amer(v: number | null) {
   return v == null ? '—' : v > 0 ? `+${v}` : `${v}`
 }
@@ -36,9 +31,9 @@ function StatusBadge({ e }: { e: TrackerEntry }) {
 function SummaryHeader({ s }: { s: TrackerSummary }) {
   const tiles: { label: string; value: string; cls?: string }[] = [
     { label: 'Record', value: `${s.wins}–${s.losses}${s.pushes ? ` · ${s.pushes}P` : ''}` },
-    { label: 'Units', value: signed(s.units), cls: s.units >= 0 ? 'text-emerald-400' : 'text-rose-400' },
-    { label: 'ROI', value: signed(s.roiPct, '%'), cls: s.roiPct >= 0 ? 'text-emerald-400' : 'text-rose-400' },
-    { label: 'Avg CLV', value: s.avgClv == null ? '—' : signed(s.avgClv * 100, '%'), cls: (s.avgClv ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400' },
+    { label: 'Units', value: signed(s.units, 2), cls: s.units >= 0 ? 'text-emerald-400' : 'text-rose-400' },
+    { label: 'ROI', value: signed(s.roiPct, 1) + '%', cls: s.roiPct >= 0 ? 'text-emerald-400' : 'text-rose-400' },
+    { label: 'Avg CLV', value: s.avgClv == null ? '—' : signed(s.avgClv * 100, 1) + '%', cls: (s.avgClv ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400' },
   ]
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -127,7 +122,7 @@ export function TrackerView() {
                   <td className="px-3 py-2 text-right tabular-nums text-zinc-300">{e.stakeUnits == null ? '—' : `${e.stakeUnits}u`}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-violet-300">{e.confidence == null ? '—' : pct(e.confidence)}</td>
                   <td className={cn('px-3 py-2 text-right tabular-nums', (e.clv ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400')}>
-                    {e.clv == null ? '—' : signed(e.clv * 100, '%')}
+                    {e.clv == null ? '—' : signed(e.clv * 100, 1) + '%'}
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap"><StatusBadge e={e} /></td>
                 </tr>

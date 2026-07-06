@@ -13,12 +13,8 @@ import { ProjectedBadge } from '@/components/projected-badge'
 import { QueryError } from '@/components/ui/query-states'
 import { useLiveStream } from '@/components/home/use-live-stream'
 import { todayGamesQueryOptions } from '@/lib/api'
+import { microLabel, Skeleton } from '@/components/ui/primitives'
 
-const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
-
-function Skeleton({ className = '' }: { className?: string }) {
-  return <div className={`animate-pulse bg-white/5 rounded ${className}`} />
-}
 
 export default function SlatePage() {
   const today = format(new Date(), 'EEEE, MMMM d, yyyy')

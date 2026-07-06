@@ -1,10 +1,10 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
+import { microLabel } from '@/components/ui/primitives'
 
 export const metadata: Metadata = { title: 'FAQ' }
 
-const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 const card = 'bg-[#0e1015] border border-white/10 rounded-xl p-4'
 
 // The Fair / Model / Edge / EV glossary that used to live at the bottom of the

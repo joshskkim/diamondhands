@@ -11,13 +11,10 @@ import { cn, parseApiDate } from '@/lib/utils'
 import { QueryError } from '@/components/ui/query-states'
 import { OddsPanel } from './odds-panel'
 import { PitchersView } from './pitchers-view'
+import { microLabel } from '@/components/ui/primitives'
+import { pct } from '@/lib/format'
 
 // ── helpers ─────────────────────────────────────────────────────────────────
-
-function pct(v: number | null | undefined) {
-  if (v == null) return '—'
-  return (v * 100).toFixed(1) + '%'
-}
 
 function fixed2(v: number | null | undefined) {
   if (v == null) return '—'
@@ -125,8 +122,6 @@ function Chip({
   }
   return <span className={cn(chipBase, tones[tone], className)}>{children}</span>
 }
-
-const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
 
 // Sortable column header. Hoisted to module scope so it isn't recreated each render.
 function ColHeader({

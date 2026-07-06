@@ -1,8 +1,7 @@
 import Link from 'next/link'
 import type { BatterProjection, GameProjections, PitcherDetail } from '@/lib/types'
 import { PitcherArsenalCard } from '@/components/game/pitcher-arsenal-card'
-
-const microLabel = 'text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-medium'
+import { microLabel } from '@/components/ui/primitives'
 
 function xwoba(v: number) {
   return v.toFixed(3).replace(/^0/, '')

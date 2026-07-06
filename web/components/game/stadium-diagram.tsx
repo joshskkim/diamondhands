@@ -2,7 +2,8 @@
 
 import type { PlayerSpray, Weather } from '@/lib/types'
 import type { StadiumRef } from '@/lib/stadiums'
-import { Chip, microLabel } from './ui'
+import { Chip } from './ui'
+import { microLabel } from '@/components/ui/primitives'
 
 // ── Spray-wedge geometry ───────────────────────────────────────────────────────
 // The SVG field: home plate (160,250), foul lines at ±45° from the home→CF axis,
