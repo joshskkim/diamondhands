@@ -50,7 +50,7 @@ public class PlayerStatRepository {
           AND pgs.plate_appearances IS NOT NULL
           AND pgs.plate_appearances > 0
           AND pgs.hits IS NOT NULL
-        ORDER BY pgs.game_date DESC
+        ORDER BY pgs.game_date DESC, pgs.game_id DESC
         LIMIT ?
         """;
 

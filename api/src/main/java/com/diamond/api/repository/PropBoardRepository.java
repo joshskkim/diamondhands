@@ -87,10 +87,13 @@ public class PropBoardRepository {
     // current calendar year only. H+R+RBI aggregates additionally require runs/rbi
     // non-null: those columns are boxscore-only (V69) and older rows predate the
     // backfill — n_hrr_season keeps the blend's sample size honest for that market.
+    // rn tiebreaks on game_id: without it a doubleheader at the L10 boundary ranks
+    // nondeterministically, and the single/batch forms can disagree on which game
+    // falls inside the window (caught live by RepositoryBatchEquivalenceTest).
     private static final String RATES_SQL = """
         WITH logs AS (
             SELECT hits, home_runs, strikeouts, walks, total_bases, runs, rbi, game_date,
-                   ROW_NUMBER() OVER (ORDER BY game_date DESC) AS rn
+                   ROW_NUMBER() OVER (ORDER BY game_date DESC, game_id DESC) AS rn
             FROM player_game_stats
             WHERE player_id = ? AND game_date < ? AND plate_appearances > 0
         )
@@ -122,7 +125,7 @@ public class PropBoardRepository {
         WITH logs AS (
             SELECT player_id, hits, home_runs, strikeouts, walks, total_bases, runs, rbi,
                    game_date,
-                   ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY game_date DESC) AS rn
+                   ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY game_date DESC, game_id DESC) AS rn
             FROM player_game_stats
             WHERE player_id = ANY(?) AND game_date < ? AND plate_appearances > 0
         )
