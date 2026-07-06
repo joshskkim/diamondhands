@@ -1,5 +1,6 @@
 package com.diamond.api.ai;
 
+import com.diamond.api.service.OddsMath;
 import org.springframework.stereotype.Component;
 
 /**
@@ -54,9 +55,9 @@ public class KellyCalculator {
         return Math.min(f, MAX_KELLY_FRACTION);
     }
 
-    /** American odds -> decimal odds. */
+    /** American odds -> decimal odds. Delegates to {@link OddsMath} (the canonical home). */
     public static double americanToDecimal(int american) {
-        return american >= 0 ? 1.0 + american / 100.0 : 1.0 + 100.0 / -((double) american);
+        return OddsMath.americanToDecimal(american);
     }
 
     private static double round(double v) {

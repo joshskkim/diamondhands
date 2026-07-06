@@ -1,5 +1,6 @@
 package com.diamond.api.ai;
 
+import com.diamond.api.service.OddsMath;
 import com.diamond.api.repository.AgentRepository;
 import com.diamond.api.repository.UserPreferenceRepository;
 import com.google.genai.types.FunctionDeclaration;
@@ -146,9 +147,9 @@ public class AgentActionRegistry {
         if (modelProb <= 0 || modelProb >= 1 || fairProb <= 0 || fairProb >= 1) {
             throw new IllegalArgumentException("probabilities must be between 0 and 1");
         }
-        double decimal = KellyCalculator.americanToDecimal(price);
+        double decimal = OddsMath.americanToDecimal(price);
         double edge = modelProb - fairProb;
-        double evPct = modelProb * decimal - 1.0;
+        double evPct = OddsMath.ev(modelProb, decimal);
 
         Double stake = null;
         String sizeNote = "sizing disabled (set a bankroll first)";
