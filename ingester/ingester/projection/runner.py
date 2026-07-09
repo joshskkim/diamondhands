@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 import psycopg
 
@@ -47,6 +47,7 @@ from ingester.projection.constants import (
     PLATOON_WEIGHT_CAP,
 )
 from ingester.projection.matchup import MatchupResult, compute_matchup
+from ingester.projection.playing_time import build_predicted_lineup, project_playing_time
 from ingester.projection.park_adj import (
     BattedBallProfile,
     LEAGUE_AVERAGE_PROFILE,
@@ -81,7 +82,7 @@ class TeamSideProjection:
     starter_projs: list[BatterProjection]
     bullpen_projs: list[BatterProjection]
     # player_id for each slot in starter_projs, aligned 1:1. Padded league-average
-    # slots (see _pad_confirmed_projs) carry None — they have no real batter to attach
+    # slots (see _pad_starter_projs) carry None — they have no real batter to attach
     # the simulator's per-slot props to.
     starter_player_ids: list[int | None]
     # Workload-model innings for the OPPOSING starter this lineup faces (governs how
@@ -381,12 +382,14 @@ def _resolve_lineup(
     """
     Resolve the batting order to project for one team side.
 
-    Project ONLY a confirmed lineup (game_lineups holds all nine slots), in order, with
-    expected PA weighted by lineup position (``PA_BY_ORDER``). If the lineup is not yet
-    confirmed, return [] so the caller skips this side: the old L30 "likely hitters" proxy
-    guessed both the roster and the order and was unreliable (off-roster names, scrambled
-    order), and a wrong projection is worse than none. The afternoon ``daily --quick`` loop
-    re-projects as real lineups post.
+    A confirmed lineup (game_lineups holds all nine slots) is projected as posted, with
+    expected PA weighted by lineup position (``PA_BY_ORDER``). Before confirmation we
+    fall back to the playing-time model's PREDICTED lineup (recent-usage start
+    probabilities + typical slots, ``_predicted_lineup``) so the morning run can project
+    — and lock picks on — the whole slate. The quick loop re-projects each tick, so the
+    confirmed lineup takes over per side the moment it posts. (The old L30 "likely
+    hitters" proxy was retired for guessing roster AND order; the playing-time model
+    predicts both from actual recent lineups.)
     """
     rows = conn.execute(
         """
@@ -411,7 +414,45 @@ def _resolve_lineup(
             for order_pid_bats in rows
         ]
 
-    return []
+    return _predicted_lineup(conn, team_id=team_id, as_of=as_of)
+
+
+def _predicted_lineup(
+    conn: psycopg.Connection,
+    *,
+    team_id: int,
+    as_of: date,
+) -> list[LineupHitter]:
+    """
+    Predicted nine-man lineup for an unconfirmed side, from recent lineup usage.
+
+    ``project_playing_time`` scores every player seen in the team's recent lineups;
+    we keep only players currently on the team's roster (recent-lineup history spans
+    trades) and let ``build_predicted_lineup`` choose and order the nine likeliest
+    starters. Expected PA comes from the ASSIGNED slot (``PA_BY_ORDER``), not the
+    playing-time model's unconditional expectation — once we assert these nine start,
+    the team-runs math must match the confirmed-lineup path. Returns [] when recent
+    history can't support nine starters (caller skips the side, as before).
+    """
+    playing_times = project_playing_time(conn, team_id, as_of)
+    if not playing_times:
+        return []
+    rows = conn.execute(
+        "SELECT id, COALESCE(bats, 'R') FROM players WHERE team_id = %s AND id = ANY(%s)",
+        (team_id, list(playing_times)),
+    ).fetchall()
+    bats_by_id = {int(r[0]): str(r[1]) for r in rows}
+    rostered = {pid: pt for pid, pt in playing_times.items() if pid in bats_by_id}
+    return [
+        LineupHitter(
+            player_id=player_id,
+            bats=bats_by_id[player_id],
+            expected_pa=PA_BY_ORDER[order],
+            lineup_position=order,
+            lineup_confirmed=False,
+        )
+        for order, player_id in build_predicted_lineup(rostered)
+    ]
 
 
 def _load_batter_skill(
@@ -669,23 +710,15 @@ def _platoon_adjust(
 # in projection.constants) are dropped entirely. Transient "Delayed"/"Delayed Start" (e.g. a
 # short rain delay) is NOT among them: those games still play, so they stay projectable.
 
-# Lineups post ~2-3 h before first pitch, so don't even attempt a game until then —
-# before that there's nothing to project and a later cron tick will retry.
-_LINEUP_LEAD_HOURS = 2
-
-
 def _game_ready(game: SlateGame) -> str | None:
     if game.home_probable_pitcher_id is None or game.away_probable_pitcher_id is None:
         return "missing probable pitcher"
     # Drop games that won't be played as scheduled (postponed/suspended/cancelled).
     if game.detailed_status in DEAD_GAME_STATUSES:
         return f"{game.detailed_status.lower()}"
-    # Per-game defer: skip until ~2 h before first pitch (lineups aren't out earlier).
-    # A later cron tick re-attempts the game once it enters the window.
-    if game.start_time_utc is not None:
-        opens_at = game.start_time_utc - timedelta(hours=_LINEUP_LEAD_HOURS)
-        if datetime.now(timezone.utc) < opens_at:
-            return f"deferred: >{_LINEUP_LEAD_HOURS}h before first pitch"
+    # No lead-time defer: unconfirmed lineups project off the playing-time model's
+    # predicted lineup (_predicted_lineup), so the morning run covers the whole slate
+    # and Model's Picks can lock at morning prices.
     # Weather is an optional refinement, not a requirement: when temp/wind are absent the
     # projector neutralizes them (70°F, no wind). A flaky weather API must NOT zero out the
     # whole slate (this previously returned "missing weather" and skipped every open-air game).
@@ -785,22 +818,19 @@ def _upsert_batter_projection(
     )
 
 
-def _pad_confirmed_projs(
+def _pad_starter_projs(
     starter_projs: list[BatterProjection],
-    lineup_confirmed: bool,
     bullpen_projs: list[BatterProjection] | None = None,
 ) -> None:
     """
-    Backfill the team-run inputs to nine slots for a confirmed lineup (in place).
+    Backfill the team-run inputs to nine slots (in place).
 
-    A confirmed lineup is exactly nine batters; if one lacks batter_skill we still want
-    a run projection rather than dropping the whole game. Pad the missing slots with a
-    league-average projection so ``expected_team_runs`` sees nine batters. Individual
-    batter rows are unaffected — only batters we could actually project were written.
-    No-op for the projected fallback, which has bench-depth slack.
+    A resolved lineup — confirmed or predicted — is exactly nine batters; if one lacks
+    batter_skill we still want a run projection rather than dropping the whole game.
+    Pad the missing slots with a league-average projection so ``expected_team_runs``
+    sees nine batters. Individual batter rows are unaffected — only batters we could
+    actually project were written.
     """
-    if not lineup_confirmed:
-        return
     if not (0 < len(starter_projs) < LINEUP_STARTERS):
         return
     pad = LINEUP_STARTERS - len(starter_projs)
@@ -1080,7 +1110,7 @@ def _project_team_side(
                 )
             )
 
-    _pad_confirmed_projs(starter_projs, lineup_confirmed, bullpen_projs)
+    _pad_starter_projs(starter_projs, bullpen_projs)
     # Keep the player-id list aligned to the (possibly padded) starter lineup; padded
     # league-average slots have no real batter, so they map to None.
     starter_player_ids.extend([None] * (len(starter_projs) - len(starter_player_ids)))
@@ -1189,26 +1219,6 @@ def _upsert_pitcher_projection(
     )
 
 
-def _any_lineup_posted(conn: psycopg.Connection, game_id: int) -> bool:
-    """True if at least one side has a full nine-man order in game_lineups.
-
-    Mirrors the LINEUP_STARTERS=9 threshold _resolve_lineup uses per side; a transient
-    partial fetch (< 9) doesn't count as posted.
-    """
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM game_lineups
-        WHERE game_id = %s
-        GROUP BY is_home
-        HAVING COUNT(*) = %s
-        LIMIT 1
-        """,
-        (game_id, LINEUP_STARTERS),
-    ).fetchone()
-    return row is not None
-
-
 def _project_game(
     conn: psycopg.Connection,
     game: SlateGame,
@@ -1220,13 +1230,6 @@ def _project_game(
     reason = _game_ready(game)
     if reason:
         summary.skip_reasons.append(f"game {game.game_id}: {reason}")
-        return False
-
-    # Only project once a lineup is actually posted. _resolve_lineup needs the full
-    # nine-man order per side; if neither side has it yet, defer the game (a later cron
-    # tick re-projects as lineups drop) rather than fall through to a partial/empty run.
-    if not _any_lineup_posted(conn, game.game_id):
-        summary.skip_reasons.append(f"game {game.game_id}: lineups not posted (deferred)")
         return False
 
     park = ParkFactors(
@@ -1964,7 +1967,7 @@ def _project_team_side_backtest(
             starter_projs.append(proj)
             starter_player_ids.append(hitter.player_id)
 
-    _pad_confirmed_projs(starter_projs, lineup_confirmed)
+    _pad_starter_projs(starter_projs)
     starter_player_ids.extend([None] * (len(starter_projs) - len(starter_player_ids)))
 
     if len(starter_projs) < LINEUP_STARTERS:

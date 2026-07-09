@@ -1,133 +1,64 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useRef, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Flame } from 'lucide-react'
 import {
-  bestPlaysQueryOptions,
-  hitRatesQueryOptions,
   modelPicksQueryOptions,
   mostLikelyQueryOptions,
   playerResultsQueryOptions,
-  queryKeys,
-  reconcileModelPicks,
   tailPick,
   todayGamesQueryOptions,
-  type PickKey,
 } from '@/lib/api'
-import type { BestPlay, HitRate, ModelPickResult, MostLikely, TodayGame } from '@/lib/types'
+import type { ModelPickResult, MostLikely, TodayGame } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { pct, signedPct } from '@/lib/format'
 import { bookLabel, formatAmerican } from '@/lib/odds'
 import { modelPlayOutcome, pickOutcome, pickTitle, type PickOutcome } from '@/lib/picks'
 import { useAuth } from '@/components/auth-provider'
+import { microLabel, Skeleton } from '@/components/ui/primitives'
 import { OutcomeBadge } from './outcome-badge'
 import { LivePickTracker } from './live-tracker'
 import { WhyDisclosure } from './why-disclosure'
-import { microLabel, Skeleton } from '@/components/ui/primitives'
-import { pct, signedPct } from '@/lib/format'
 
-// ── the bar a line must clear (KEEP IN SYNC with ingester/commands/picks.py) ──
-// A line only makes the board when the model and the price BOTH say yes:
-//   · de-vigged edge (model − fair) of at least MIN_EDGE
-//   · expected value at the best price of at least MIN_EV
-//   · model probability ≥ MIN_MODEL_PROB — below that, a couple points of model
-//     error flips the math, so longshots must show an outsized LONGSHOT_EDGE
-//   · edge ≤ MAX_EDGE — when model and market disagree by more, the smart read
-//     is model error or a stale line, not free money (tightened 0.25 → 0.15
-//     after the 0/3 day, whose misses were all 18–21pt "edges")
-//   · a totals lean is vetoed if the Monte-Carlo game sim lands on the other side
-//   · pitcher props are excluded — backtests show no model edge there; the 'hit'
-//     market is excluded too (H≥1 has near-zero skill signal) pending the
-//     scoring loop's band calibration
-//   · an HR prop must not contradict the hit-rate traffic light (season clear
-//     rate, n ≥ 15): no overs on red, no unders on green
-// One pick per game, MAX_PICKS at most. When nothing qualifies, we say so.
-//
-// A pick reads "Strong" (vs "Lean") on conviction in the *value*, not on
-// absolute likelihood: a meaningful absolute edge AND a meaningful proportional
-// overlay (model ÷ fair). There is no absolute-probability floor — that floor
-// used to quietly reserve Strong for totals (whose model prob hugs the coinflip
-// line) and lock every longshot prop to Lean. The overlay rule is scale-free, so
-// a 53% total and a 12% HR-over are judged on the same footing.
-const MIN_EDGE = 0.04
-const MAX_EDGE = 0.15
-const MIN_EV = 0.05
-const MIN_MODEL_PROB = 0.4
-const LONGSHOT_EDGE = 0.08
-const STRONG_EDGE = 0.06
-const STRONG_OVERLAY = 1.15
-const MAX_PICKS = 3
-// The "Lotto of the Day" is no longer a price-edge longshot pulled from this board — it's a
-// separate HR boom pick (a cold bottom-of-order bat with real power in a HR-friendly spot),
-// served by GET /api/lotto and rendered in LottoCard below.
-const EXCLUDED_MARKETS = new Set(['pitcher_k', 'pitcher_outs', 'hit'])
-const HIT_RATE_VETO_MIN_N = 15
-// Per-market veto bands: [no OVER below, no UNDER above]. Market-specific because
-// clear-rate scales differ wildly — hit bands applied to HR would veto every
-// slugger alive. Markets absent here never veto.
-const HIT_RATE_VETO_BANDS: Record<string, [number, number]> = {
-  hit: [0.45, 0.65],
-  hr: [0.08, 0.5],
-}
+// ── the board IS the record ───────────────────────────────────────────────────
+// This component renders the picks the ingester's record-picks cron locked into
+// model_picks (GET /api/model-picks) — it no longer computes its own picks. The
+// bar (edge/EV floors, market exclusions, vetoes, the 3-per-slate budget) lives in
+// ONE place: ingester/ingester/commands/picks.py. Picks lock at morning prices;
+// the only thing that moves one afterwards is a lineup change that breaks its
+// case (bump_reason='lineup'), and those rows stay visible below, still graded.
 
-interface ModelPick {
-  play: BestPlay
-  edge: number
-  score: number
-  strong: boolean
-  reasons: string[]
-}
-
-// Totals picks must agree with the game sim when it covers the game; when it
-// does, that independent agreement becomes part of the explanation.
-function simTotalsCheck(
-  p: BestPlay,
-  sim: MostLikely | undefined,
-): { veto: boolean; note: string | null } {
-  if (p.market !== 'total' || p.line == null || !sim) return { veto: false, note: null }
-  const t = sim.totals.find((x) => x.gameId === p.gameId)
-  if (!t) return { veto: false, note: null }
-  const agrees = p.side === 'over' ? t.simTotal > p.line : t.simTotal < p.line
-  if (!agrees) return { veto: true, note: null }
-  return {
-    veto: false,
-    note: `The Monte-Carlo game sim independently lands at ${t.simTotal.toFixed(1)} runs against the ${p.line} line, agreeing with the ${p.side}.`,
+// The sim can't veto a locked pick (the bar already applied it at lock time);
+// when it independently agrees, that agreement is still worth explaining.
+function simNote(p: ModelPickResult, sim: MostLikely | undefined): string | null {
+  if (!sim) return null
+  if (p.market === 'total' && p.line != null) {
+    const t = sim.totals.find((x) => x.gameId === p.gameId)
+    if (!t) return null
+    const agrees = p.side === 'over' ? t.simTotal > p.line : t.simTotal < p.line
+    if (!agrees) return null
+    return `The Monte-Carlo game sim independently lands at ${t.simTotal.toFixed(1)} runs against the ${p.line} line, agreeing with the ${p.side}.`
   }
+  if (p.playerId != null && p.side === 'over') {
+    const list =
+      p.market === 'hit' ? sim.props.hits : p.market === 'hr' ? sim.props.homeRuns : null
+    if (!list) return null
+    const idx = list.findIndex((r) => r.playerId === p.playerId)
+    if (idx === -1) return null
+    return `${p.playerName} also ranks #${idx + 1} on the game sim's ${
+      p.market === 'hit' ? 'hit' : 'home-run'
+    } leaderboard today.`
+  }
+  return null
 }
 
-// Hit/HR overs get a corroboration note when the sim's own leaderboard agrees.
-function simPropNote(p: BestPlay, sim: MostLikely | undefined): string | null {
-  if (!sim || p.playerId == null || p.side !== 'over') return null
-  const list =
-    p.market === 'hit' ? sim.props.hits : p.market === 'hr' ? sim.props.homeRuns : null
-  if (!list) return null
-  const idx = list.findIndex((r) => r.playerId === p.playerId)
-  if (idx === -1) return null
-  return `${p.playerName} also ranks #${idx + 1} on the game sim's ${
-    p.market === 'hit' ? 'hit' : 'home-run'
-  } leaderboard today.`
-}
-
-// A prop that contradicts the player's season clear rate (the hit-rate traffic
-// light) needs more than a model-market gap. Bands are per market.
-function hitRateVeto(p: BestPlay, hitRates: Map<string, HitRate> | undefined): boolean {
-  if (!hitRates || p.playerId == null) return false
-  const band = HIT_RATE_VETO_BANDS[p.market]
-  if (!band) return false
-  const hr = hitRates.get(`${p.playerId}:${p.market}`)
-  if (!hr || hr.season == null || hr.nSeason < HIT_RATE_VETO_MIN_N) return false
-  if (p.side === 'over') return hr.season < band[0]
-  if (p.side === 'under') return hr.season > band[1]
-  return false
-}
-
-// The "Why" lines for a pick — shared by the value grid and the lotto card so wording stays
-// identical. fairProb is asserted non-null because every caller guards it before calling.
-function buildReasons(p: BestPlay, edge: number, corroboration: string | null): string[] {
+// The "Why" lines for a recorded pick, rebuilt from its locked numbers.
+function buildReasons(p: ModelPickResult, corroboration: string | null): string[] {
   const reasons = [
-    `Model probability ${pct(p.modelProb)} against a de-vigged market ${pct(p.fairProb!)} — a ${(edge * 100).toFixed(1)}-point edge after stripping the book's margin from both sides.`,
-    `${signedPct(p.evPct)} expected value per unit at the best available price, ${formatAmerican(p.priceAmerican)} (${bookLabel(p.bestBook)}).`,
+    `Model probability ${pct(p.modelProb)} against a de-vigged market ${pct(p.fairProb)} — a ${(p.edge * 100).toFixed(1)}-point edge after stripping the book's margin from both sides, locked at the price the pick was recorded at.`,
+    `${signedPct(p.evPct)} expected value per unit at ${formatAmerican(p.priceAmerican)} (${bookLabel(p.book ?? undefined)}).`,
   ]
   if (p.modelProb < 0.5) {
     reasons.push(
@@ -158,11 +89,11 @@ function AnalystChip({ verdict, confidence }: { verdict?: string | null; confide
 }
 
 /** Tail a pick into your personal Tracker (server computes the Kelly stake). Signed-in only. */
-function TailButton({ p }: { p: BestPlay }) {
+function TailButton({ p }: { p: ModelPickResult }) {
   const { user } = useAuth()
   const [state, setState] = useState<'idle' | 'saving' | 'done' | 'error'>('idle')
   const [msg, setMsg] = useState<string | null>(null)
-  if (!user || p.fairProb == null) return null
+  if (!user) return null
 
   async function onTail() {
     setState('saving')
@@ -170,7 +101,7 @@ function TailButton({ p }: { p: BestPlay }) {
       const res = await tailPick({
         gameId: p.gameId, market: p.market, side: p.side, line: p.line,
         playerId: p.playerId, playerName: p.playerName, priceAmerican: p.priceAmerican,
-        book: p.bestBook, modelProb: p.modelProb, fairProb: p.fairProb!,
+        book: p.book, modelProb: p.modelProb, fairProb: p.fairProb,
         confidence: p.debateConfidence ?? null,
       })
       setMsg(res.message)
@@ -198,55 +129,6 @@ function TailButton({ p }: { p: BestPlay }) {
   )
 }
 
-function buildPicks(
-  plays: BestPlay[],
-  sim: MostLikely | undefined,
-  hitRates: Map<string, HitRate> | undefined,
-): ModelPick[] {
-  const candidates: ModelPick[] = []
-
-  for (const p of plays) {
-    if (EXCLUDED_MARKETS.has(p.market)) continue
-    if (p.fairProb == null) continue // one-sided price — can't de-vig, can't trust
-    const edge = p.modelProb - p.fairProb
-    if (edge < MIN_EDGE || edge > MAX_EDGE) continue
-    if (p.evPct < MIN_EV) continue
-    if (p.modelProb < MIN_MODEL_PROB && edge < LONGSHOT_EDGE) continue
-    if (hitRateVeto(p, hitRates)) continue
-    // The Analyst gate: a pick it passed on drops off Today's Board (it shows on Best Lines
-    // with the reason). A null verdict means "not vetted" → show mechanically. Mirrors the
-    // server gate in picks.py::gate_candidates.
-    if (p.debateVerdict === 'pass') continue
-
-    const totals = simTotalsCheck(p, sim)
-    if (totals.veto) continue
-    const corroboration = totals.note ?? simPropNote(p, sim)
-
-    candidates.push({
-      play: p,
-      edge,
-      // fairProb is non-null here (guarded above), so the overlay is safe.
-      strong: edge >= STRONG_EDGE && p.modelProb / p.fairProb >= STRONG_OVERLAY,
-      // Edge is the primary signal; EV breaks ties toward better prices, and
-      // independent sim agreement nudges a pick up the board.
-      score: edge + 0.5 * p.evPct + (corroboration ? 0.02 : 0),
-      reasons: buildReasons(p, edge, corroboration),
-    })
-  }
-
-  candidates.sort((a, b) => b.score - a.score)
-
-  const picks: ModelPick[] = []
-  const usedGames = new Set<number>()
-  for (const c of candidates) {
-    if (usedGames.has(c.play.gameId)) continue // one pick per game
-    usedGames.add(c.play.gameId)
-    picks.push(c)
-    if (picks.length === MAX_PICKS) break
-  }
-  return picks
-}
-
 // ── presentation ──────────────────────────────────────────────────────────────
 
 function Stat({
@@ -269,15 +151,16 @@ function Stat({
 function PickCard({
   pick,
   rank,
+  reasons,
   outcome,
   game,
 }: {
-  pick: ModelPick
+  pick: ModelPickResult
   rank: number
+  reasons: string[]
   outcome?: PickOutcome
   game?: TodayGame
 }) {
-  const p = pick.play
   return (
     <div
       className={cn(
@@ -299,88 +182,70 @@ function PickCard({
         >
           {pick.strong ? 'Strong' : 'Lean'}
         </span>
-        <AnalystChip verdict={p.debateVerdict} confidence={p.debateConfidence} />
+        <AnalystChip verdict={pick.debateVerdict} confidence={pick.debateConfidence} />
         {outcome && <OutcomeBadge outcome={outcome} />}
         <Link
-          href={`/mlb/games/${p.gameId}`}
+          href={`/mlb/games/${pick.gameId}`}
           className="ml-auto font-mono text-xs text-zinc-500 hover:text-cyan-400 transition-colors"
         >
-          {p.matchup}
+          {pick.matchup}
         </Link>
       </div>
 
       <div className="flex items-baseline justify-between gap-3">
-        {p.playerId ? (
+        {pick.playerId ? (
           <Link
-            href={`/mlb/players/${p.playerId}`}
+            href={`/mlb/players/${pick.playerId}`}
             className="text-base font-bold tracking-tight text-zinc-100 hover:text-cyan-300 transition-colors"
           >
-            {pickTitle(p)}
+            {pickTitle(pick)}
           </Link>
         ) : (
           <span className="text-base font-bold tracking-tight text-zinc-100">
-            {pickTitle(p)}
+            {pickTitle(pick)}
           </span>
         )}
         <span className="shrink-0 font-mono tabular-nums text-sm text-cyan-300">
-          {formatAmerican(p.priceAmerican)}{' '}
-          <span className="text-zinc-500 text-xs">{bookLabel(p.bestBook)}</span>
+          {formatAmerican(pick.priceAmerican)}{' '}
+          <span className="text-zinc-500 text-xs">{bookLabel(pick.book ?? undefined)}</span>
         </span>
       </div>
 
       <div className="grid grid-cols-4 gap-2">
-        <Stat label="Model" value={pct(p.modelProb)} className="text-zinc-200" />
-        <Stat label="Fair" value={p.fairProb == null ? '—' : pct(p.fairProb)} className="text-zinc-400" />
+        <Stat label="Model" value={pct(pick.modelProb)} className="text-zinc-200" />
+        <Stat label="Fair" value={pct(pick.fairProb)} className="text-zinc-400" />
         <Stat label="Edge" value={signedPct(pick.edge)} className="text-emerald-400" />
-        <Stat label="EV" value={signedPct(p.evPct)} className="text-emerald-300" />
+        <Stat label="EV" value={signedPct(pick.evPct)} className="text-emerald-300" />
       </div>
 
-      <LivePickTracker game={game} market={p.market} side={p.side} line={p.line} outcome={outcome} />
+      <LivePickTracker game={game} market={pick.market} side={pick.side} line={pick.line} outcome={outcome} />
 
-      <WhyDisclosure reasons={pick.reasons} />
-      <TailButton p={p} />
+      <WhyDisclosure reasons={reasons} />
+      <TailButton p={pick} />
     </div>
   )
 }
 
-function PassCard({ surveyed }: { surveyed: number }) {
+function NoPicksCard() {
   return (
     <div className="bg-[#0e1015] border border-white/10 rounded-xl px-6 py-8 text-center">
-      <h3 className="text-base font-semibold text-zinc-100">No picks today</h3>
+      <h3 className="text-base font-semibold text-zinc-100">No picks today (yet)</h3>
       <p className="mt-2 text-sm text-zinc-400 max-w-lg mx-auto">
-        We scanned {surveyed} priced line{surveyed === 1 ? '' : 's'} and none cleared the bar:
-        at least a {(MIN_EDGE * 100).toFixed(0)}-point edge over the de-vigged market,{' '}
-        {signedPct(MIN_EV)} expected value at the best price, and no disagreement from the
-        game sim. We&apos;d rather pass than force a play — check back as lines and lineups move.
+        Picks lock at morning prices, at most 3 per slate, and only when a line clears the
+        bar: a 6-point edge over the de-vigged market, +5% expected value at the best
+        price, and no disagreement from the game sim. Nothing has cleared it so far —
+        we&apos;d rather pass than force a play. Remaining slots can still fill as lineups
+        post.
       </p>
     </div>
   )
 }
-
-function NoOddsCard() {
-  return (
-    <div className="bg-[#0e1015] border border-white/10 rounded-xl px-6 py-8 text-center">
-      <h3 className="text-base font-semibold text-zinc-100">No priced lines yet</h3>
-      <p className="mt-2 text-sm text-zinc-400 max-w-lg mx-auto">
-        Sportsbook odds haven&apos;t loaded for today&apos;s slate, so there&apos;s nothing to
-        evaluate against the model. Picks appear once odds are ingested.
-      </p>
-    </div>
-  )
-}
-
 
 // ── earlier picks (honest history) ──────────────────────────────────────────────
-// The live board above always shows the current top picks. When a better play appears
-// later in the slate it can knock an earlier pick off that top set — but we don't hide
-// what we already showed. Those displaced picks are recorded server-side (locked at the
-// line they were shown at) and surfaced here, still graded, so the board never quietly
-// rewrites its own history.
-
-// Identity ignoring line/price — a line move shouldn't split one pick into two rows.
-function liveKey(p: { gameId: number; market: string; side: string; playerId: number | null }): string {
-  return `${p.gameId}|${p.market}|${p.side}|${p.playerId ?? ''}`
-}
+// A pick that left the board stays on the record, locked at the line it was shown at,
+// still graded — the board never quietly rewrites its own history. bump_reason says
+// why it left: 'lineup' (the lineup changed and the pick no longer cleared the bar at
+// its locked terms) or legacy 'displaced' (pre-budget churn).
 
 // ET clock time a pick first hit the board, e.g. "1:15 PM" (the slate's timezone).
 function shownClock(iso: string | null): string | null {
@@ -392,6 +257,12 @@ function shownClock(iso: string | null): string | null {
     hour: 'numeric',
     minute: '2-digit',
   }).format(d)
+}
+
+function bumpCopy(reason: string | null): string {
+  return reason === 'lineup'
+    ? 're-evaluated after a lineup change'
+    : 'replaced by a later pick'
 }
 
 function EarlierPickRow({ pick, outcome }: { pick: ModelPickResult; outcome?: PickOutcome }) {
@@ -414,7 +285,7 @@ function EarlierPickRow({ pick, outcome }: { pick: ModelPickResult; outcome?: Pi
         </div>
         <div className="text-xs text-zinc-500">
           {formatAmerican(pick.priceAmerican)} {bookLabel(pick.book ?? undefined)}
-          {shown != null && <> · shown {shown}</>} · later replaced by a better pick
+          {shown != null && <> · shown {shown}</>} · {bumpCopy(pick.bumpReason)}
         </div>
       </div>
       <Link
@@ -440,7 +311,7 @@ function EarlierPicks({
   return (
     <div className="mt-4">
       <h3 className={cn(microLabel, 'mb-2 normal-case tracking-normal text-zinc-400')}>
-        Earlier today — picks a later, better play replaced (kept on the record, still graded)
+        Earlier today — picks taken off the board (kept on the record, still graded)
       </h3>
       <div className="grid gap-2">
         {picks.map((p) => (
@@ -458,75 +329,23 @@ function EarlierPicks({
 }
 
 export function ModelPicks() {
-  const { data: plays, isPending, isError } = useQuery(bestPlaysQueryOptions(undefined, 100))
+  // The recorded snapshot IS the board (see the header comment).
+  const { data: recorded, isPending, isError } = useQuery(modelPicksQueryOptions())
   const { data: sim } = useQuery(mostLikelyQueryOptions())
-  const { data: hitRateData } = useQuery(hitRatesQueryOptions())
   // Grade live as games finish — final scores from today-games, HR from player results —
   // the same source the projected-favorites badge uses, so ✓/✗ lands same-day.
   const { data: games } = useQuery(todayGamesQueryOptions())
   const { data: results } = useQuery(playerResultsQueryOptions())
-  // The recorded snapshot of the active slate — used only to surface picks a better
-  // late play has since bumped off the live top set, so the board keeps its history.
-  const { data: recorded } = useQuery(modelPicksQueryOptions())
 
-  const rows = plays ?? []
-  const hitRates = new Map<string, HitRate>(
-    (hitRateData ?? []).map((h) => [`${h.playerId}:${h.market}`, h]),
-  )
   const gamesById = new Map<number, TodayGame>((games ?? []).map((g) => [g.gameId, g]))
   const hrByKey = new Map<string, number | null>(
     (results?.batters ?? []).map((b) => [`${b.playerId}:${b.gameId}`, b.homeRuns]),
   )
-  const picks = buildPicks(rows, sim, hitRates)
 
-  // The plays the value grid is currently showing.
-  const livePlays = picks.map((c) => c.play)
-
-  // "Earlier today" = any recorded pick we genuinely showed that the live board has since
-  // dropped from its top set. We derive this from the live divergence rather than waiting for
-  // the server's bumped_at (which the record-picks cron only sets on its sparse schedule, and
-  // never once a game has started) so a replaced pick surfaces here immediately. The reconcile
-  // POST below mirrors the same decision server-side so the track-record agrees.
-  const liveKeys = new Set(livePlays.map(liveKey))
-  const earlier = (recorded ?? []).filter(
-    (p) => p.firstShownAt != null && !liveKeys.has(liveKey(p)),
-  )
-
-  // Record that divergence server-side so the persisted snapshot (and the track-record that
-  // reads it) agrees with what the board shows — bumping picks a better play displaced and
-  // re-promoting any that returned. Only fires when the live set actually differs from what's
-  // recorded (steady state = no write); the cache eviction + query invalidation then refetch the
-  // reconciled snapshot. Firing on every pre-game view lands the bump before first pitch, so a
-  // displaced pick never has to wait for the sparse cron.
-  const boardLoaded = rows.length > 0
-  const liveSig = livePlays.map(liveKey).sort().join(',')
-  const queryClient = useQueryClient()
-  const reconcile = useMutation({
-    mutationFn: (vars: { activeKeys: PickKey[]; boardLoaded: boolean }) =>
-      reconcileModelPicks(vars.activeKeys, vars.boardLoaded),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.modelPicks() }),
-  })
-  const lastReconciledSig = useRef<string | null>(null)
-  useEffect(() => {
-    if (recorded === undefined || !boardLoaded) return
-    const live = new Set(livePlays.map(liveKey))
-    const needsBump = recorded.some((p) => p.active && !live.has(liveKey(p)))
-    const needsPromote = recorded.some((p) => !p.active && live.has(liveKey(p)))
-    if (!needsBump && !needsPromote) return
-    if (reconcile.isPending || lastReconciledSig.current === liveSig) return
-    lastReconciledSig.current = liveSig
-    reconcile.mutate({
-      activeKeys: livePlays.map((p) => ({
-        gameId: p.gameId,
-        market: p.market,
-        side: p.side,
-        playerId: p.playerId,
-      })),
-      boardLoaded: true,
-    })
-    // livePlays is recomputed each render but its identity is captured by liveSig.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recorded, boardLoaded, liveSig])
+  const rows = recorded ?? []
+  // The API orders active-first by rank; keep that order for the cards.
+  const picks = rows.filter((p) => p.active)
+  const earlier = rows.filter((p) => !p.active && p.firstShownAt != null)
 
   let picksContent
   if (isPending) {
@@ -540,13 +359,11 @@ export function ModelPicks() {
   } else if (isError) {
     picksContent = (
       <p className="text-sm text-zinc-500 bg-[#0e1015] border border-white/10 rounded-xl px-5 py-4">
-        Couldn&apos;t load priced lines, so picks are unavailable right now.
+        Couldn&apos;t load the recorded picks right now.
       </p>
     )
-  } else if (rows.length === 0) {
-    picksContent = <NoOddsCard />
   } else if (picks.length === 0) {
-    picksContent = <PassCard surveyed={rows.length} />
+    picksContent = <NoPicksCard />
   } else {
     picksContent = (
       <div
@@ -559,11 +376,12 @@ export function ModelPicks() {
       >
         {picks.map((pick, i) => (
           <PickCard
-            key={`${pick.play.gameId}-${pick.play.market}-${pick.play.selection}`}
+            key={`${pick.gameId}-${pick.market}-${pick.side}-${pick.playerId ?? ''}`}
             pick={pick}
             rank={i + 1}
-            outcome={modelPlayOutcome(pick.play, gamesById.get(pick.play.gameId), hrByKey)}
-            game={gamesById.get(pick.play.gameId)}
+            reasons={buildReasons(pick, simNote(pick, sim))}
+            outcome={modelPlayOutcome(pick, gamesById.get(pick.gameId), hrByKey)}
+            game={gamesById.get(pick.gameId)}
           />
         ))}
       </div>
@@ -578,8 +396,8 @@ export function ModelPicks() {
           Model&apos;s Picks
         </h2>
         <p className="text-xs text-zinc-500 mt-0.5">
-          Likelihood and value combined: the (at most) {MAX_PICKS} lines where the model&apos;s
-          probability beats the de-vigged market by enough to matter — with the reasoning.
+          At most 3 per day, locked at morning prices — the lines where the model&apos;s
+          probability beats the de-vigged market by enough to matter, with the reasoning.
         </p>
       </div>
 

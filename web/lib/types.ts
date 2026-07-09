@@ -118,12 +118,18 @@ export interface ModelPickResult {
   won: boolean | null
   /** true once score-picks has settled it (won may still be null on a push). */
   scored: boolean
-  /** false once a better late pick displaced this one from the top set (still graded). */
+  /** false once the pick left the board (see bumpReason); still graded + counted. */
   active: boolean
   /** ISO-8601 (UTC) instant the pick first made the board — its line is locked here. */
   firstShownAt: string | null
-  /** ISO-8601 (UTC) instant it was displaced, or null if it never was. */
+  /** ISO-8601 (UTC) instant it left the board, or null if it never did. */
   bumpedAt: string | null
+  /** Why it left: 'lineup' (lineup change broke its case) | 'displaced' (legacy churn). */
+  bumpReason: 'lineup' | 'displaced' | null
+  /** Analyst promotion-gate verdict (V64) that endorsed the pick onto the board. */
+  debateVerdict: string | null
+  debateConfidence: number | null
+  debateRationale: string | null
 }
 
 export interface BatterPlayer {

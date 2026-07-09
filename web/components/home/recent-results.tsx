@@ -69,10 +69,10 @@ export function RecentResults() {
   const won = settled.filter((p) => p.won === true).length
   const lost = settled.filter((p) => p.won === false).length
 
-  // Picks arrive active-first (rank ASC), so the leading three are the final board; the
-  // rest are earlier plays bumped by better late entries — collapsed behind a toggle.
-  const visible = picks.slice(0, 3)
-  const earlier = picks.slice(3)
+  // Picks arrive active-first (rank ASC): the final board up front, then rows that
+  // left it (lineup re-evals, or legacy pre-budget churn) — collapsed behind a toggle.
+  const visible = picks.filter((p) => p.active)
+  const earlier = picks.filter((p) => !p.active)
 
   return (
     <section className="mb-10">

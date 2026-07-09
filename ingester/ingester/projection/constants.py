@@ -39,7 +39,10 @@ DEAD_GAME_STATUSES: frozenset[str] = frozenset({"Postponed", "Suspended", "Cance
 # previously bb_rate was used only as a flat league input to team runs.
 # v2.12.0: probable pitchers detected as likely openers (reliever in a bullpen game)
 # are skipped entirely — no pitcher_projections row, so no card/pick. See opener.py.
-MODEL_VERSION: str = "v2.12.0"
+# v2.13.0: unconfirmed lineups no longer defer the game — the playing-time model's
+# predicted lineup (playing_time.build_predicted_lineup) projects the full slate in
+# the morning run (lineup_confirmed=false), re-projected as real lineups post.
+MODEL_VERSION: str = "v2.13.0"
 
 # ---------------------------------------------------------------------------
 # League-average reference (2025 MLB approximations)

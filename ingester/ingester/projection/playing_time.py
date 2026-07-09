@@ -78,6 +78,36 @@ def compute_playing_time(
     )
 
 
+def build_predicted_lineup(
+    playing_times: dict[int, PlayingTime],
+) -> list[tuple[int, int]]:
+    """Ordered 9-man predicted lineup: [(batting_order 1..9, player_id)].
+
+    Selection: the 9 players likeliest to start (p_start desc; ties broken by
+    expected_pa desc then player_id asc, so the result is deterministic).
+    Order: the chosen 9 sorted by expected_slot asc (a player who has never
+    started sorts last), ties by p_start desc then player_id asc — reproducing
+    the team's typical batting order from recent usage.
+
+    Returns [] when fewer than 9 players have any start history (p_start > 0):
+    a thin history (season start after roster turnover, expansion data) is a
+    reason to keep deferring, not to invent a lineup.
+    """
+    startable = [pt for pt in playing_times.values() if pt.p_start > 0]
+    if len(startable) < 9:
+        return []
+    startable.sort(key=lambda pt: (-pt.p_start, -pt.expected_pa, pt.player_id))
+    nine = startable[:9]
+    nine.sort(
+        key=lambda pt: (
+            pt.expected_slot if pt.expected_slot is not None else float("inf"),
+            -pt.p_start,
+            pt.player_id,
+        )
+    )
+    return [(order, pt.player_id) for order, pt in enumerate(nine, start=1)]
+
+
 def _load_recent_slots(
     conn: psycopg.Connection, team_id: int, as_of, window: int
 ) -> dict[int, list[int | None]]:
