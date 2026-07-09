@@ -98,13 +98,17 @@ consistent with stored CLV being artifact-dominated noise.
 
 ## Next steps (recommended, NOT executed in this sprint)
 
-1. **Fix the basis (H1):** at record time, also store a same-book de-vigged fair prob
-   (new column, keep `fair_prob` as-is for the board) and compute `clv` against it in
-   `score-picks`. Optionally backfill-recompute stored clv from `odds_snapshots` (the
-   `--verify` query shows it's recoverable).
-2. **Fix the run-line mirror (H3):** in `_closing_quote`, look up the opposite side at
-   the **negated** line for run_line (and any future spread market). Recovers CLV for
-   ~30% of the record.
+1. **Fix the basis (H1)** — ✅ **BUILT** (fix/clv-consistent-basis): score-picks now
+   de-vigs BOTH ends at the pick's own book via a shared `_book_quote` helper; the
+   bet-time same-book fair is stored as `fair_prob_book` (V74) and
+   `clv = close_fair_prob − fair_prob_book`. `fair_prob` (best-of-books) is untouched —
+   it remains the board's edge basis. One-shot `recompute-clv` rewrites historical
+   rows from `odds_snapshots` (grades never touched) — run it once on the box after
+   deploy.
+2. **Fix the run-line mirror (H3)** — ✅ **BUILT** (same branch):
+   `_opposite_selection` mirrors the line for handicap sides (home −1.5 ↔ away +1.5),
+   used at both the close and the bet-time lookup (agent-rec scoring inherits it).
+   Recovers CLV for ~30% of the record via `recompute-clv`.
 3. **Give CLV resolution (H4):** the meaningful market move happens before our <3h
    window. The in-flight strict-picks **morning-lock** rework (feat/strict-picks-
    morning-lock: picks locked from the 9am board off predicted lineups, market moves

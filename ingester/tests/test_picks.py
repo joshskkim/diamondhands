@@ -6,7 +6,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from ingester.commands.picks import (
-    MAX_PICKS, OUT, PICK_BUDGET, UNKNOWN, _devig_two_way, _grade, _pick_key,
+    MAX_PICKS, OUT, PICK_BUDGET, UNKNOWN, _bettime_quote, _closing_quote,
+    _devig_two_way, _grade, _opposite_selection, _pick_key,
     american_to_decimal, bar_recheck, build_candidates, build_picks,
     gate_candidates, plan_lineup_reeval, plan_reconcile, poisson_game_prob,
     settle_prop,
@@ -430,6 +431,111 @@ class TestDegeneracyGuard(unittest.TestCase):
         self.assertFalse(is_degenerate_slate(267, 9))
         # Small slates are never judged.
         self.assertFalse(is_degenerate_slate(DEGENERACY_MIN_ROWS - 1, 40))
+
+
+class TestOppositeSelection(unittest.TestCase):
+    def test_totals_share_the_line(self):
+        self.assertEqual(_opposite_selection("over", 8.5), ("under", 8.5))
+        self.assertEqual(_opposite_selection("under", 8.5), ("over", 8.5))
+
+    def test_moneyline_has_no_line(self):
+        self.assertEqual(_opposite_selection("home", None), ("away", None))
+
+    def test_handicap_mirrors_the_line(self):
+        # run_line home -1.5 pairs with away +1.5 — the unmirrored lookup was why
+        # ~all run-line picks had no CLV (2026-07 diagnosis, H3).
+        self.assertEqual(_opposite_selection("home", -1.5), ("away", 1.5))
+        self.assertEqual(_opposite_selection("away", 1.5), ("home", -1.5))
+
+    def test_unknown_side(self):
+        self.assertEqual(_opposite_selection("yes", 0.5), (None, None))
+
+
+class _QuoteResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return self._rows
+
+
+class _QuoteConn:
+    """Fake conn serving odds_snapshots rows to _book_quote's two queries."""
+
+    def __init__(self, rows):
+        # rows: (side, line, price_american, price_decimal, captured_at)
+        self.rows = rows
+
+    def execute(self, sql, params):
+        if "MAX(captured_at)" in sql:
+            side, line, cutoff = params[4], params[5], params[7]
+            ok = (lambda t: t <= cutoff) if "<= %s" in sql else (lambda t: t < cutoff)
+            hits = [r[4] for r in self.rows if r[0] == side and r[1] == line and ok(r[4])]
+            return _QuoteResult([(max(hits) if hits else None,)])
+        # Both-sides read: (side=ours AND line=ours) OR (side=opp AND line=opp).
+        captured_at = params[5]
+        our_side, our_line, opp_side, opp_line = params[6], params[7], params[8], params[9]
+        out = [(r[0], r[1], r[2], r[3]) for r in self.rows
+               if r[4] == captured_at
+               and ((r[0] == our_side and r[1] == our_line)
+                    or (r[0] == opp_side and r[1] == opp_line))]
+        return _QuoteResult(out)
+
+
+class TestBookQuote(unittest.TestCase):
+    T = datetime(2026, 7, 8, 22, 0, tzinfo=timezone.utc)
+
+    def test_run_line_devigs_across_mirrored_lines(self):
+        conn = _QuoteConn([
+            ("home", -1.5, 120, 2.20, self.T),
+            ("away", 1.5, -140, 1.714, self.T),
+        ])
+        am, dec, fair, cap = _closing_quote(
+            conn, 1, "run_line", "home", -1.5, "fanduel",
+            self.T + timedelta(hours=1), None)
+        self.assertEqual(am, 120)
+        self.assertAlmostEqual(fair, (1 / 2.20) / (1 / 2.20 + 1 / 1.714), places=6)
+        self.assertEqual(cap, self.T)
+
+    def test_totals_still_devig_at_shared_line(self):
+        conn = _QuoteConn([
+            ("over", 8.5, -110, 1.909, self.T),
+            ("under", 8.5, -110, 1.909, self.T),
+        ])
+        _, _, fair, _ = _closing_quote(
+            conn, 1, "total", "over", 8.5, "fanduel", self.T + timedelta(hours=1), None)
+        self.assertAlmostEqual(fair, 0.5, places=6)
+
+    def test_missing_opposite_side_yields_price_but_no_fair(self):
+        conn = _QuoteConn([("home", -1.5, 120, 2.20, self.T)])
+        am, dec, fair, cap = _closing_quote(
+            conn, 1, "run_line", "home", -1.5, "fanduel",
+            self.T + timedelta(hours=1), None)
+        self.assertEqual(am, 120)
+        self.assertIsNone(fair)
+
+    def test_no_snapshot_before_cutoff(self):
+        conn = _QuoteConn([("home", -1.5, 120, 2.20, self.T)])
+        am, dec, fair, cap = _closing_quote(
+            conn, 1, "run_line", "home", -1.5, "fanduel",
+            self.T - timedelta(hours=1), None)
+        self.assertIsNone(am)
+        self.assertIsNone(cap)
+
+    def test_bettime_cutoff_is_inclusive(self):
+        conn = _QuoteConn([
+            ("over", 8.5, -110, 1.909, self.T),
+            ("under", 8.5, -110, 1.909, self.T),
+        ])
+        # A snapshot AT the lock instant counts for the bet-time reference...
+        _, _, fair, _ = _bettime_quote(conn, 1, "total", "over", 8.5, "fanduel", self.T, None)
+        self.assertAlmostEqual(fair, 0.5, places=6)
+        # ...but the close is strictly before first pitch.
+        am, _, _, _ = _closing_quote(conn, 1, "total", "over", 8.5, "fanduel", self.T, None)
+        self.assertIsNone(am)
 
 
 if __name__ == "__main__":
