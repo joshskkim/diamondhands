@@ -69,7 +69,12 @@ log = logging.getLogger(__name__)
 _PITCHER_POSITIONS = frozenset({"P", "SP", "RP", "CP", "TWP"})
 
 # Monte-Carlo game simulator (game_sim.py) settings for the per-game sim run.
-SIM_N_SIMS = 4000
+# 16k (was 4k): the sim runs on a fixed seed (game_id), so MC sampling error is a fixed
+# per-game deviation from the model's true prob, not day-to-day flicker. A convergence
+# study (docs/prop-market-evaluation.md) measured ~0.8pp of that error per served prop at
+# 4k vs ~0.3pp at 16k, with zero bias — worth removing since picks are edge-ranked on
+# 6-12.5pp bars. Cost is linear and trivial (~160ms/game, ~2.4s for a 15-game slate).
+SIM_N_SIMS = 16000
 SIM_FULL_HIST_MAX = 25   # combined-run histogram upper bin for the full game
 SIM_F5_HIST_MAX = 15     # combined-run histogram upper bin for first five innings
 

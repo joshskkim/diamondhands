@@ -1,42 +1,49 @@
 'use client'
 
+import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { gameOddsQueryOptions } from '@/lib/api'
-import type { GameMarket, LineQuote, PropMarket } from '@/lib/types'
+import type { LineQuote, PropMarket } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { microLabel } from '@/components/ui/primitives'
-import { pct, signed } from '@/lib/format'
+import { Chip, Stat } from '@/components/game/ui'
+import { pct, signed, signedPct } from '@/lib/format'
+import { bookLabel, formatAmerican, MARKET_LABEL } from '@/lib/odds'
 
-const MARKET_LABEL: Record<string, string> = {
-  moneyline: 'Moneyline',
-  run_line: 'Run line',
-  total: 'Total',
-  hit: 'Hit',
-  hr: 'Home run',
-  pitcher_k: 'Strikeouts',
-  pitcher_outs: 'Outs (IP)',
+// Model edge on one side = our probability minus the de-vigged market probability.
+// Null for markets we don't model (pitcher props carry no modelProb).
+function edgeOf(q: LineQuote | null | undefined): number | null {
+  if (!q || q.modelProb == null || q.fairProb == null) return null
+  return q.modelProb - q.fairProb
 }
 
-function amer(n: number | null | undefined) {
-  if (n == null) return '—'
-  return n > 0 ? `+${n}` : `${n}`
-}
-
-// EV is the headline edge number: warm green for positive, muted/rose for negative.
+// EV is the headline edge number: warm green when the model beats the price, muted
+// when it's a wash, rose when the price is against us.
 function evClass(ev: number | null | undefined) {
-  if (ev == null) return 'text-zinc-600'
-  if (ev > 0.05) return 'text-emerald-400 font-semibold'
+  if (ev == null) return 'text-zinc-500'
+  if (ev > 0.05) return 'text-emerald-400'
   if (ev > 0) return 'text-emerald-300'
   if (ev > -0.05) return 'text-zinc-400'
   return 'text-rose-300'
 }
 
-function evText(ev: number | null | undefined) {
-  if (ev == null) return '—'
-  return (ev > 0 ? '+' : '') + (ev * 100).toFixed(1) + '%'
+function edgeClass(e: number | null | undefined) {
+  if (e == null) return 'text-zinc-500'
+  if (e > 0.02) return 'text-emerald-400'
+  if (e > 0) return 'text-emerald-300'
+  if (e > -0.02) return 'text-zinc-400'
+  return 'text-rose-300'
 }
 
-function gameSelection(market: string, q: LineQuote, homeAbbr: string, awayAbbr: string) {
+// A card gets the cyan "value" treatment when its best side clears +5% EV — the same
+// threshold the picks bar uses, so genuine edges pop out of the grid.
+function valueCard(bestEv: number | null | undefined) {
+  return bestEv != null && bestEv > 0.05
+    ? 'border-cyan-400/30 bg-gradient-to-br from-cyan-500/10 to-[#0e1015]'
+    : 'border-white/10 bg-[#0e1015]'
+}
+
+function gameSelectionLabel(market: string, q: LineQuote, homeAbbr: string, awayAbbr: string) {
   const team = q.side === 'home' ? homeAbbr : awayAbbr
   if (market === 'moneyline') return team
   if (market === 'run_line') return `${team} ${signed(q.line, 1)}`
@@ -44,108 +51,99 @@ function gameSelection(market: string, q: LineQuote, homeAbbr: string, awayAbbr:
   return q.side
 }
 
-function QuoteRow({ label, q }: { label: string; q: LineQuote }) {
-  return (
-    <tr className="border-t border-white/5">
-      <td className="px-3 py-2 text-zinc-200">{label}</td>
-      <td className="px-3 py-2 text-right">
-        <span className="font-mono tabular-nums text-zinc-100">{amer(q.priceAmerican)}</span>{' '}
-        <span className="text-zinc-500 text-xs">{q.bestBook}</span>
-      </td>
-      <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-400">{pct(q.fairProb)}</td>
-      <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-300">{pct(q.modelProb)}</td>
-      <td className={cn('px-3 py-2 text-right font-mono tabular-nums', evClass(q.evPct))}>{evText(q.evPct)}</td>
-    </tr>
-  )
-}
-
-function GameMarketsTable({
-  markets,
+/** One game-market selection (e.g. moneyline home) as a card with a Model/Fair/Edge/EV grid. */
+function GameQuoteCard({
+  market,
+  q,
   homeAbbr,
   awayAbbr,
 }: {
-  markets: GameMarket[]
+  market: string
+  q: LineQuote
   homeAbbr: string
   awayAbbr: string
 }) {
+  const edge = edgeOf(q)
   return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className={microLabel}>
-          <th className="px-3 py-2 text-left font-medium">Market</th>
-          <th className="px-3 py-2 text-right font-medium">Best line</th>
-          <th className="px-3 py-2 text-right font-medium" title="No-vig market probability">Fair</th>
-          <th className="px-3 py-2 text-right font-medium">Model</th>
-          <th className="px-3 py-2 text-right font-medium">EV</th>
-        </tr>
-      </thead>
-      <tbody>
-        {markets.map((m) =>
-          m.quotes.map((q) => (
-            <QuoteRow
-              key={`${m.market}-${q.side}-${q.line}`}
-              label={`${MARKET_LABEL[m.market] ?? m.market} · ${gameSelection(m.market, q, homeAbbr, awayAbbr)}`}
-              q={q}
-            />
-          )),
+    <div className={cn('rounded-xl border px-4 py-3 flex flex-col gap-2.5', valueCard(q.evPct))}>
+      <div className="flex items-center gap-2">
+        <Chip tone="info">{MARKET_LABEL[market] ?? market}</Chip>
+        {q.bestBook && (
+          <span className="ml-auto font-mono text-[11px] text-zinc-500">{bookLabel(q.bestBook)}</span>
         )}
-      </tbody>
-    </table>
+      </div>
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-sm font-bold tracking-tight text-zinc-100">
+          {gameSelectionLabel(market, q, homeAbbr, awayAbbr)}
+        </span>
+        <span className="shrink-0 font-mono tabular-nums text-sm text-zinc-100">
+          {formatAmerican(q.priceAmerican)}
+        </span>
+      </div>
+      <div className="grid grid-cols-4 gap-2">
+        <Stat label="Model" value={pct(q.modelProb)} className="text-zinc-200" />
+        <Stat label="Fair" value={pct(q.fairProb)} className="text-zinc-400" />
+        <Stat label="Edge" value={signedPct(edge)} className={edgeClass(edge)} />
+        <Stat label="EV" value={signedPct(q.evPct)} className={evClass(q.evPct)} />
+      </div>
+    </div>
   )
 }
 
-function PropLabel({ p }: { p: PropMarket }) {
-  const ip = p.market === 'pitcher_outs' && p.line != null ? ` (${(p.line / 3).toFixed(1)} IP)` : ''
+/** One side (Over / Under) of a player prop: price + book on the left, model view on the right. */
+function PropSideRow({ label, q }: { label: string; q: LineQuote | null }) {
+  if (!q) {
+    return (
+      <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] px-2.5 py-2">
+        <Chip tone="neutral" className="shrink-0 font-medium">
+          {label}
+        </Chip>
+        <span className="ml-auto text-sm text-zinc-600">—</span>
+      </div>
+    )
+  }
   return (
-    <>
-      <span className="text-zinc-100">{p.player.name}</span>{' '}
-      <span className="text-zinc-500 text-xs">
-        {MARKET_LABEL[p.market] ?? p.market} {p.line}
-        {ip}
-      </span>
-    </>
+    <div className="flex items-center gap-2 rounded-lg bg-white/[0.02] px-2.5 py-2">
+      <Chip tone="neutral" className="shrink-0 font-medium">
+        {label}
+      </Chip>
+      <span className="font-mono tabular-nums text-sm text-zinc-100">{formatAmerican(q.priceAmerican)}</span>
+      {q.bestBook && <span className="text-[11px] text-zinc-500">{bookLabel(q.bestBook)}</span>}
+      <div className="ml-auto flex items-center gap-3">
+        <Stat label="Model" value={pct(q.modelProb)} className="text-zinc-300" />
+        <Stat label="Fair" value={pct(q.fairProb)} className="text-zinc-400" />
+        <Stat label="EV" value={signedPct(q.evPct)} className={evClass(q.evPct)} />
+      </div>
+    </div>
   )
 }
 
-/** One over/under price cell: american odds, no-vig fair %, and EV underneath. */
-function PropCell({ q }: { q: LineQuote | null }) {
-  if (!q) return <td className="px-3 py-2 text-right text-zinc-600">—</td>
+/** One player-prop card: player + market/line header, then the Over and Under rows. */
+function PropCard({ p }: { p: PropMarket }) {
+  const isPitcher = p.market.startsWith('pitcher')
+  const bestEv = Math.max(p.over?.evPct ?? -1, p.under?.evPct ?? -1)
+  const lineLabel =
+    p.market === 'pitcher_outs' && p.line != null
+      ? `${p.line} (${(p.line / 3).toFixed(1)} IP)`
+      : p.line
   return (
-    <td className="px-3 py-2 text-right">
-      <div className="font-mono tabular-nums text-zinc-100">{amer(q.priceAmerican)}</div>
-      <div className="text-[10px] text-zinc-500">{q.bestBook}</div>
-      {q.fairProb != null && (
-        <div className="text-[10px] font-mono tabular-nums text-zinc-500" title="No-vig fair probability">
-          fair {pct(q.fairProb)}
-        </div>
-      )}
-      <div className={cn('text-xs font-mono tabular-nums', evClass(q.evPct))}>{evText(q.evPct)}</div>
-    </td>
-  )
-}
-
-function PropsTable({ props }: { props: PropMarket[] }) {
-  return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className={microLabel}>
-          <th className="px-3 py-2 text-left font-medium">Prop</th>
-          <th className="px-3 py-2 text-right font-medium">Over</th>
-          <th className="px-3 py-2 text-right font-medium">Under</th>
-        </tr>
-      </thead>
-      <tbody>
-        {props.map((p) => (
-          <tr key={`${p.player.id}-${p.market}-${p.line}`} className="border-t border-white/5">
-            <td className="px-3 py-2">
-              <PropLabel p={p} />
-            </td>
-            <PropCell q={p.over} />
-            <PropCell q={p.under} />
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className={cn('rounded-xl border px-4 py-3 flex flex-col gap-2.5', valueCard(bestEv))}>
+      <div className="flex items-baseline justify-between gap-2">
+        <Link
+          href={`/mlb/players/${p.player.id}`}
+          className="text-sm font-bold tracking-tight text-zinc-100 hover:text-cyan-300 transition-colors"
+        >
+          {p.player.name}
+        </Link>
+        <Chip tone={isPitcher ? 'projected' : 'info'} className="shrink-0">
+          {MARKET_LABEL[p.market] ?? p.market} {lineLabel}
+        </Chip>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <PropSideRow label="Over" q={p.over} />
+        <PropSideRow label="Under" q={p.under} />
+      </div>
+    </div>
   )
 }
 
@@ -181,27 +179,41 @@ export function OddsPanel({
         <h2 className="text-lg font-semibold tracking-tight text-zinc-100">Odds &amp; Edges</h2>
         <span className={microLabel}>Fair = no-vig line · EV = model vs. best price</span>
       </div>
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <div className="bg-[#0e1015] border border-white/10 rounded-xl overflow-hidden">
-          <div className="px-4 py-3 border-b border-white/10 text-sm font-semibold tracking-tight text-zinc-100">
-            Game markets
-          </div>
+
+      <div className="space-y-6">
+        <section>
+          <h3 className="text-sm font-semibold text-zinc-300 mb-2.5">Game markets</h3>
           {data.game.length > 0 ? (
-            <GameMarketsTable markets={data.game} homeAbbr={homeAbbr} awayAbbr={awayAbbr} />
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {data.game.flatMap((m) =>
+                m.quotes.map((q) => (
+                  <GameQuoteCard
+                    key={`${m.market}-${q.side}-${q.line}`}
+                    market={m.market}
+                    q={q}
+                    homeAbbr={homeAbbr}
+                    awayAbbr={awayAbbr}
+                  />
+                )),
+              )}
+            </div>
           ) : (
-            <p className="px-4 py-6 text-sm text-zinc-500">No game markets.</p>
+            <p className="text-sm text-zinc-500">No game markets.</p>
           )}
-        </div>
-        <div className="bg-[#0e1015] border border-white/10 rounded-xl overflow-hidden">
-          <div className="px-4 py-3 border-b border-white/10 text-sm font-semibold tracking-tight text-zinc-100">
-            Player props
-          </div>
+        </section>
+
+        <section>
+          <h3 className="text-sm font-semibold text-zinc-300 mb-2.5">Player props</h3>
           {data.props.length > 0 ? (
-            <PropsTable props={data.props} />
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+              {data.props.map((p) => (
+                <PropCard key={`${p.player.id}-${p.market}-${p.line}`} p={p} />
+              ))}
+            </div>
           ) : (
-            <p className="px-4 py-6 text-sm text-zinc-500">No player props.</p>
+            <p className="text-sm text-zinc-500">No player props.</p>
           )}
-        </div>
+        </section>
       </div>
     </div>
   )
