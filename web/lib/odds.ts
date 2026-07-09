@@ -45,6 +45,7 @@ export const MARKET_LABEL: Record<string, string> = {
   total: 'Total',
   hit: 'Hit',
   hr: 'Home run',
+  bb: 'Walks',
   pitcher_k: 'Strikeouts',
   pitcher_outs: 'Outs',
 }

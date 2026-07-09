@@ -1,7 +1,27 @@
 import { cn } from '@/lib/utils'
+import { microLabel } from '@/components/ui/primitives'
 
 const chipBase =
   'inline-flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5 border'
+
+/** Label-over-value stat tile (Model / Fair / Edge / EV, …). Shared so cards don't
+ *  paste the microLabel + mono-value pair inline. */
+export function Stat({
+  label,
+  value,
+  className,
+}: {
+  label: string
+  value: string
+  className?: string
+}) {
+  return (
+    <div>
+      <div className={microLabel}>{label}</div>
+      <div className={cn('text-[13px] font-mono tabular-nums', className)}>{value}</div>
+    </div>
+  )
+}
 
 export function Chip({
   tone = 'neutral',
