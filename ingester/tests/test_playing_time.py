@@ -6,6 +6,7 @@ import unittest
 from ingester.projection.constants import PA_BY_ORDER
 from ingester.projection.playing_time import (
     PlayingTime,
+    build_predicted_lineup,
     compute_playing_time,
     start_probability,
 )
@@ -64,6 +65,48 @@ class TestComputePlayingTime(unittest.TestCase):
 
     def test_returns_dataclass(self):
         self.assertIsInstance(compute_playing_time(6, [2, 2]), PlayingTime)
+
+
+def pt(player_id, p_start, slot, pa=4.0):
+    return PlayingTime(player_id=player_id, p_start=p_start,
+                       expected_slot=slot, expected_pa=pa)
+
+
+class TestBuildPredictedLineup(unittest.TestCase):
+    def test_everyday_nine_in_slot_order(self):
+        # Nine everyday starters plus two bench bats; lineup = the nine, by slot.
+        times = {i: pt(i, 0.95, float(i)) for i in range(1, 10)}
+        times[20] = pt(20, 0.20, 7.5)
+        times[21] = pt(21, 0.0, None)
+        lineup = build_predicted_lineup(times)
+        self.assertEqual(lineup, [(order, order) for order in range(1, 10)])
+
+    def test_selection_by_start_prob_not_slot(self):
+        # A ninth-slot everyday catcher beats a leadoff-slotted part-timer.
+        times = {i: pt(i, 0.95, float(i)) for i in range(1, 9)}          # 8 regulars
+        times[9] = pt(9, 0.90, 9.0)      # everyday, bats 9th → in
+        times[10] = pt(10, 0.30, 1.0)    # platoon leadoff → out
+        lineup = build_predicted_lineup(times)
+        chosen = {pid for _order, pid in lineup}
+        self.assertIn(9, chosen)
+        self.assertNotIn(10, chosen)
+
+    def test_never_started_sorts_last_and_ties_deterministic(self):
+        times = {i: pt(i, 0.9, float(i)) for i in range(1, 9)}
+        # Equal p_start, no slot history (None) → sorts to the 9-hole.
+        times[30] = pt(30, 0.9, None)
+        lineup = build_predicted_lineup(times)
+        self.assertEqual(lineup[-1], (9, 30))
+
+    def test_insufficient_history_returns_empty(self):
+        times = {i: pt(i, 0.9, float(i)) for i in range(1, 9)}  # only 8 startable
+        times[40] = pt(40, 0.0, None)                            # never starts
+        self.assertEqual(build_predicted_lineup(times), [])
+
+    def test_orders_are_one_through_nine(self):
+        times = {i: pt(i, 0.5 + i * 0.01, float(10 - i)) for i in range(1, 12)}
+        lineup = build_predicted_lineup(times)
+        self.assertEqual([order for order, _pid in lineup], list(range(1, 10)))
 
 
 if __name__ == "__main__":

@@ -1,9 +1,9 @@
 """Tests for lineup-aware PA weighting (v2.0 Sprint 1).
 
-Covers the PA_BY_ORDER mapping and _resolve_lineup's confirmed-vs-projected branching.
+Covers the PA_BY_ORDER mapping and _resolve_lineup's confirmed-vs-predicted branching.
 _resolve_lineup is exercised with a fake connection so no database is required: the
-confirmed branch reads canned game_lineups rows; the fallback branch is verified by
-monkeypatching _likely_hitters.
+confirmed branch reads canned game_lineups rows; the predicted fallback resolves empty
+when the fake returns no recent-usage history.
 """
 from __future__ import annotations
 
@@ -28,13 +28,17 @@ class _FakeResult:
 
 
 class _FakeConn:
-    """Returns the same canned rows for the single game_lineups query in _resolve_lineup."""
+    """Routes _resolve_lineup's game_lineups read to canned rows; any other query
+    (the predicted-lineup fallback's recent-usage / roster reads) returns nothing,
+    so the fallback resolves to an empty predicted lineup."""
 
     def __init__(self, lineup_rows):
         self._lineup_rows = lineup_rows
 
     def execute(self, sql, params=None):
-        return _FakeResult(self._lineup_rows)
+        if "gl.batting_order" in sql and "recent_games" not in sql:
+            return _FakeResult(self._lineup_rows)
+        return _FakeResult([])
 
 
 _AS_OF = date(2025, 4, 15)
@@ -105,8 +109,9 @@ class TestResolveLineup:
 
         assert hitters == []
 
-    def test_partial_lineup_returns_empty(self):
-        # Fewer than nine posted slots is not a confirmation → no projection (no proxy guess).
+    def test_partial_lineup_falls_back_to_predicted(self):
+        # Fewer than nine posted slots is not a confirmation → the predicted-lineup
+        # fallback runs; with no recent-usage history it resolves to [] (skip the side).
         conn = _FakeConn([(order, 1000 + order, "R") for order in range(1, 6)])  # 5 slots
 
         hitters = runner._resolve_lineup(

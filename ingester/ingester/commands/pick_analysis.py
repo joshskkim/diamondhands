@@ -61,8 +61,13 @@ def units_for(outcome: str, price_american: int) -> float:
 
 
 def edge_bucket(edge: float) -> str:
-    """Bucket a pick's recorded model−fair edge on the bar's own thresholds
-    (MIN_EDGE .04 / STRONG_EDGE .06 / LONGSHOT_EDGE .08 / MAX_EDGE .15)."""
+    """Bucket a pick's recorded model−fair edge.
+
+    Bucket boundaries are the PRE-July-2026 bar thresholds (MIN_EDGE .04 /
+    STRONG_EDGE .06 / LONGSHOT_EDGE .08 / MAX_EDGE .15) kept as literals on
+    purpose: the settled record spans both regimes, and these cuts keep the
+    historical slices comparable. The live bar is now MIN_EDGE .06 / MAX_EDGE
+    .125 (see commands/picks.py)."""
     if edge < 0.04:
         return "<.04"
     if edge < STRONG_EDGE:
