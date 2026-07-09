@@ -946,8 +946,6 @@ def _project_team_side(
         )
         return None
 
-    lineup_confirmed = hitters[0].lineup_confirmed  # confirmation is per-side, all-or-nothing
-
     pitcher_throws = _load_pitcher_throws(conn, opposing_pitcher_id)
 
     splits = _load_pitcher_splits(conn, opposing_pitcher_id, season)
@@ -1838,8 +1836,6 @@ def _project_team_side_backtest(
             game.game_id, team_id, len(hitters), LINEUP_STARTERS,
         )
         return None
-
-    lineup_confirmed = hitters[0].lineup_confirmed
 
     pitcher_throws = _load_pitcher_throws(conn, opposing_pitcher_id)
     splits = _load_pitcher_splits_snapshot(conn, opposing_pitcher_id, season, as_of_date)
