@@ -70,7 +70,7 @@ from ingester.commands.pitch_aggregations import (
 )
 from ingester.commands.backtest import cmd_backtest
 from ingester.commands.accuracy import cmd_compute_accuracy
-from ingester.commands.picks import cmd_record_picks, cmd_score_picks
+from ingester.commands.picks import cmd_record_picks, cmd_recompute_clv, cmd_score_picks
 from ingester.commands.pick_analysis import cmd_analyze_picks
 from ingester.commands.briefing import cmd_daily_briefing
 from agent_eval.score_recs import cmd_score_agent_recs
@@ -566,6 +566,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--md", action="store_true", default=False,
         help="Emit markdown tables (for pasting into the findings doc)")
 
+    p_recompute_clv = sub.add_parser(
+        "recompute-clv",
+        help="One-shot backfill: rewrite settled picks' CLV on the consistent "
+             "single-book basis (+ run-line mirror fix); grades untouched",
+    )
+    p_recompute_clv.add_argument(
+        "--days", type=int, default=365,
+        help="Trailing window of settled slates to recompute (default 365)")
+
     # ── Diamond Analyst (agent) ──────────────────────────────────────────────
     p_score_recs = sub.add_parser(
         "score-agent-recs",
@@ -705,6 +714,7 @@ COMMANDS = {
     "compute-accuracy":         cmd_compute_accuracy,
     "record-picks":             cmd_record_picks,
     "score-picks":              cmd_score_picks,
+    "recompute-clv":            cmd_recompute_clv,
     "analyze-picks":            cmd_analyze_picks,
     "score-agent-recs":         cmd_score_agent_recs,
     "agent-eval":               cmd_agent_eval,

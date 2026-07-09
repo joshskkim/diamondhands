@@ -25,8 +25,7 @@ from ingester.db import eastern_today, get_connection
 from ingester.commands.picks import (
     LONGSHOT_EDGE,
     STRONG_EDGE,
-    _OPPOSITE_SIDE,
-    _devig_two_way,
+    _bettime_quote,
 )
 
 _EASTERN = ZoneInfo("America/New_York")
@@ -313,38 +312,15 @@ def _had_any_line_quote(conn, p) -> bool:
 def _bettime_samebook_fair(conn, p) -> float | None:
     """De-vigged fair prob at the pick's own book as of bet time (first_shown_at,
     falling back to recorded_at) — the consistent-basis counterpart of close_fair_prob.
+    Delegates to picks._bettime_quote so it shares the run-line mirror fix.
     None when the snapshot history lacks a two-sided quote at our line by then."""
     bet_ts = p["first_shown_at"] or p["recorded_at"]
     if p["book"] is None or bet_ts is None:
         return None
-    ts_row = conn.execute(
-        """
-        SELECT MAX(captured_at) FROM odds_snapshots
-        WHERE game_id = %s AND scope = %s AND player_id IS NOT DISTINCT FROM %s
-          AND market = %s AND side = %s AND line IS NOT DISTINCT FROM %s
-          AND LOWER(bookmaker) = LOWER(%s) AND captured_at <= %s
-        """,
-        (p["game_id"], _scope(p["market"]), p["player_id"], p["market"], p["side"],
-         p["line"], p["book"], bet_ts),
-    ).fetchone()
-    captured_at = ts_row[0] if ts_row else None
-    if captured_at is None:
-        return None
-    rows = conn.execute(
-        """
-        SELECT side, price_decimal FROM odds_snapshots
-        WHERE game_id = %s AND scope = %s AND player_id IS NOT DISTINCT FROM %s
-          AND market = %s AND LOWER(bookmaker) = LOWER(%s)
-          AND line IS NOT DISTINCT FROM %s AND captured_at = %s
-        """,
-        (p["game_id"], _scope(p["market"]), p["player_id"], p["market"], p["book"],
-         p["line"], captured_at),
-    ).fetchall()
-    prices = {r[0]: float(r[1]) for r in rows}
-    opp = _OPPOSITE_SIDE.get(p["side"])
-    if p["side"] not in prices or opp is None or opp not in prices:
-        return None
-    return _devig_two_way(prices[p["side"]], prices[opp])
+    _, _, fair, _ = _bettime_quote(
+        conn, p["game_id"], p["market"], p["side"], p["line"], p["book"], bet_ts,
+        p["player_id"])
+    return fair
 
 
 # ── report sections ──────────────────────────────────────────────────────────

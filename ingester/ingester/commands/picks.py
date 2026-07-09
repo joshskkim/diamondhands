@@ -688,6 +688,22 @@ def cmd_record_picks(args: argparse.Namespace) -> None:
 _OPPOSITE_SIDE = {"over": "under", "under": "over", "home": "away", "away": "home"}
 
 
+def _opposite_selection(side: str, line: float | None) -> tuple[str | None, float | None]:
+    """(opposite side, opposite side's LINE) for a two-way market.
+
+    Totals share one line (over 8.5 / under 8.5), but handicap markets mirror it:
+    run_line home −1.5 pairs with away **+1.5**. Looking the opposite side up at the
+    pick's own line finds nothing there — which silently censored CLV for ~all
+    run-line picks (2026-07 CLV diagnosis, docs/clv-diagnosis-2026-07.md H3).
+    """
+    opp = _OPPOSITE_SIDE.get(side)
+    if opp is None:
+        return None, None
+    if side in ("home", "away") and line is not None:
+        return opp, -line
+    return opp, line
+
+
 def _devig_two_way(side_decimal: float, opp_decimal: float) -> float | None:
     """De-vig a two-sided market to this side's fair probability (matches OddsService).
 
@@ -703,66 +719,91 @@ def _devig_two_way(side_decimal: float, opp_decimal: float) -> float | None:
     return side_implied / (side_implied + opp_implied)
 
 
-def _closing_quote(
+def _book_quote(
     conn, game_id: int, market: str, side: str, line: float | None,
-    book: str | None, start_time, player_id: int | None,
+    book: str | None, cutoff, player_id: int | None, *, inclusive: bool,
 ) -> tuple[int | None, float | None, float | None, object]:
-    """Find the closing quote for a pick's selection and its de-vigged fair prob.
+    """The pick's selection at its own book as of a cutoff, with a de-vigged fair prob.
 
-    "Closing" = the last odds_snapshots pull strictly before first pitch
-    (start_time_utc). We match the SAME player (props), book + line the pick was taken
-    at, then read both sides from that same pull (one refresh-odds run shares a
-    captured_at, so the opposite side is present at the same timestamp) and de-vig
-    exactly like OddsService:
+    Finds the last odds_snapshots pull for the selection (same player for props, same
+    book + line) at or before the cutoff, then reads both sides from that same pull
+    (one refresh-odds run shares a captured_at) — the opposite side at its OWN line
+    (mirrored for handicaps, see _opposite_selection) — and de-vigs exactly like
+    OddsService:
         fair = side_implied / (side_implied + opp_implied),  implied = 1/decimal.
-    Returns (close_american, close_decimal, close_fair_prob, captured_at); any field is
-    None when the selection or its opposite side can't be found at close.
+    Returns (price_american, price_decimal, fair_prob, captured_at); any field is None
+    when the selection or its opposite side can't be found at the cutoff.
 
-    NOTE the de-vigged close uses the pick's single book on both sides, whereas the
-    stored bet-time fair_prob came from OddsService's best-of-books de-vig — a small
-    vig-basis difference, so CLV here is a close approximation, not an exact line-move.
+    Both ends of CLV go through this helper — the close (cutoff = first pitch,
+    exclusive) AND the bet-time reference (cutoff = first_shown_at, inclusive) — so the
+    de-vig basis is identical on both sides. The previous mixed basis (best-of-books at
+    bet time vs single-book at close) put a systematic negative offset in every stored
+    clv (2026-07 CLV diagnosis, H1).
 
     Book match is case-insensitive: odds_snapshots.bookmaker stores the lowercase Odds-API
     key ("fanduel") but model_picks.book is observed title-cased ("FanDuel"); LOWER() on
     both bridges them so CLV doesn't silently capture nothing on a case mismatch.
     """
     scope = "prop" if market in ("hit", "hr") else "game"
+    cmp = "<=" if inclusive else "<"
     # player_id must match for props (multiple players share a market/line/book); it is
     # NULL for game markets, where IS NOT DISTINCT FROM matches the NULL snapshot rows.
     ts_row = conn.execute(
-        """
+        f"""
         SELECT MAX(captured_at) FROM odds_snapshots
         WHERE game_id = %s AND scope = %s AND player_id IS NOT DISTINCT FROM %s
           AND market = %s AND side = %s
           AND line IS NOT DISTINCT FROM %s AND LOWER(bookmaker) = LOWER(%s)
-          AND captured_at < %s
+          AND captured_at {cmp} %s
         """,
-        (game_id, scope, player_id, market, side, line, book, start_time),
+        (game_id, scope, player_id, market, side, line, book, cutoff),
     ).fetchone()
     captured_at = ts_row[0] if ts_row else None
     if captured_at is None:
         return None, None, None, None
 
-    # Both sides at that pull (same player, book, line).
+    # Both sides at that pull — each at its own line (they differ on handicaps).
+    opp_side, opp_line = _opposite_selection(side, line)
     rows = conn.execute(
         """
-        SELECT side, price_american, price_decimal FROM odds_snapshots
+        SELECT side, line, price_american, price_decimal FROM odds_snapshots
         WHERE game_id = %s AND scope = %s AND player_id IS NOT DISTINCT FROM %s
-          AND market = %s AND LOWER(bookmaker) = LOWER(%s)
-          AND line IS NOT DISTINCT FROM %s AND captured_at = %s
+          AND market = %s AND LOWER(bookmaker) = LOWER(%s) AND captured_at = %s
+          AND ((side = %s AND line IS NOT DISTINCT FROM %s)
+            OR (side = %s AND line IS NOT DISTINCT FROM %s))
         """,
-        (game_id, scope, player_id, market, book, line, captured_at),
+        (game_id, scope, player_id, market, book, captured_at,
+         side, line, opp_side, opp_line),
     ).fetchall()
-    prices = {r[0]: (int(r[1]), float(r[2])) for r in rows}
+    prices = {r[0]: (int(r[2]), float(r[3])) for r in rows}
     if side not in prices:
         return None, None, None, captured_at
-    close_american, close_decimal = prices[side]
+    price_american, price_decimal = prices[side]
 
-    opp = _OPPOSITE_SIDE.get(side)
     fair = None
-    if opp is not None and opp in prices:
-        fair = _devig_two_way(close_decimal, prices[opp][1])
-    return close_american, close_decimal, fair, captured_at
+    if opp_side is not None and opp_side in prices:
+        fair = _devig_two_way(price_decimal, prices[opp_side][1])
+    return price_american, price_decimal, fair, captured_at
+
+
+def _closing_quote(
+    conn, game_id: int, market: str, side: str, line: float | None,
+    book: str | None, start_time, player_id: int | None,
+) -> tuple[int | None, float | None, float | None, object]:
+    """Closing quote = the last pull strictly before first pitch (start_time_utc)."""
+    return _book_quote(conn, game_id, market, side, line, book, start_time,
+                       player_id, inclusive=False)
+
+
+def _bettime_quote(
+    conn, game_id: int, market: str, side: str, line: float | None,
+    book: str | None, first_shown_at, player_id: int | None,
+) -> tuple[int | None, float | None, float | None, object]:
+    """Bet-time reference quote = the last pull at or before the pick's price lock
+    (first_shown_at). Its fair prob is the same-book baseline that clv is measured
+    against; stored on the pick as fair_prob_book."""
+    return _book_quote(conn, game_id, market, side, line, book, first_shown_at,
+                       player_id, inclusive=True)
 
 
 # ── scoring ───────────────────────────────────────────────────────────────────
@@ -820,7 +861,8 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
             SELECT mp.id, mp.rank, mp.game_id, mp.market, mp.side, mp.line,
                    mp.player_id, g.home_score, g.away_score, g.detailed_status,
                    CASE mp.market WHEN 'hit' THEN pgs.hits WHEN 'hr' THEN pgs.home_runs END,
-                   mp.fair_prob, mp.book, g.start_time_utc,
+                   COALESCE(mp.first_shown_at, mp.recorded_at) AS locked_at,
+                   mp.book, g.start_time_utc,
                    EXISTS (SELECT 1 FROM player_game_stats x
                            WHERE x.game_id = mp.game_id) AS game_stats_landed
             FROM model_picks mp
@@ -837,7 +879,7 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
         record: list[str] = []
         for (pick_id, rank, game_id, market, side, line, player_id,
              home, away, detailed_status, prop_val,
-             fair_prob, book, start_time, game_stats_landed) in rows:
+             locked_at, book, start_time, game_stats_landed) in rows:
             tag = f"#{rank}" if rank is not None else "(earlier)"
             if detailed_status in DEAD_GAME_STATUSES:
                 # The game won't be played — settle the pick as voided (no win/loss)
@@ -875,12 +917,15 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
                 market, side, float(line) if line is not None else None,
                 int(home), int(away), int(prop_val) if prop_val is not None else None,
             )
-            # CLV: compare our bet-time de-vigged prob to the closing line. Captured at
-            # scoring (the close exists by now); independent of win/loss. Isolated in a
-            # SAVEPOINT + try/except: CLV is a measurement nicety and must never roll back
-            # or block the pick's grade (a bad closing-odds read would otherwise poison the
-            # whole scoring transaction). On any failure we record the grade with CLV NULL.
-            close_am = close_dec = close_fair = clv = captured_at = None
+            # CLV: same-book de-vigged fair at the price lock vs the same de-vig at the
+            # close — one basis at both ends (a mixed best-of-books/single-book basis
+            # put a systematic negative offset in every clv; 2026-07 diagnosis, H1).
+            # Captured at scoring (the close exists by now); independent of win/loss.
+            # Isolated in a SAVEPOINT + try/except: CLV is a measurement nicety and must
+            # never roll back or block the pick's grade (a bad closing-odds read would
+            # otherwise poison the whole scoring transaction). On any failure we record
+            # the grade with CLV NULL.
+            close_am = close_dec = close_fair = bet_fair = clv = captured_at = None
             try:
                 with conn.transaction():  # SAVEPOINT — a read error rolls back only this
                     close_am, close_dec, close_fair, captured_at = _closing_quote(
@@ -888,21 +933,27 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
                         float(line) if line is not None else None, book, start_time,
                         player_id,
                     )
-                if close_fair is not None and fair_prob is not None:
-                    clv = round(close_fair - float(fair_prob), 4)
+                    _, _, bet_fair, _ = _bettime_quote(
+                        conn, game_id, market, side,
+                        float(line) if line is not None else None, book, locked_at,
+                        player_id,
+                    )
+                if close_fair is not None and bet_fair is not None:
+                    clv = round(close_fair - bet_fair, 4)
                     clv_n += 1
             except Exception as exc:  # noqa: BLE001 — never let CLV break grading
-                close_am = close_dec = close_fair = clv = captured_at = None
+                close_am = close_dec = close_fair = bet_fair = clv = captured_at = None
                 print(f"[score-picks] CLV capture failed for pick {pick_id} "
                       f"(grade still recorded): {exc}", file=sys.stderr)
             conn.execute(
                 "UPDATE model_picks SET result_value=%s, won=%s, scored_at=NOW(), "
                 "close_price_american=%s, close_price_decimal=%s, close_fair_prob=%s, "
-                "clv=%s, clv_captured_at=%s "
+                "fair_prob_book=%s, clv=%s, clv_captured_at=%s "
                 "WHERE id=%s",
                 (value, won, close_am,
                  round(close_dec, 3) if close_dec is not None else None,
                  round(close_fair, 4) if close_fair is not None else None,
+                 round(bet_fair, 4) if bet_fair is not None else None,
                  clv, captured_at, pick_id),
             )
             scored += 1
@@ -921,3 +972,76 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
           f"pending = missing final score or player stats; re-run after backfills).")
     for line_ in record:
         print(line_)
+
+
+def cmd_recompute_clv(args: argparse.Namespace) -> None:
+    """Re-derive CLV for already-settled picks on the consistent single-book basis.
+
+    One-shot backfill for the 2026-07 CLV diagnosis fixes: historical clv values were
+    stored on a mixed de-vig basis (H1) and run-line picks were censored by the
+    unmirrored opposite-side lookup (H3). Everything needed to recompute is retained in
+    append-only odds_snapshots, so this rewrites close_*, fair_prob_book and clv for
+    settled picks in the window. Read-modify-write on measurement columns only — grades
+    (result_value/won/scored_at) are never touched.
+    """
+    since = eastern_today() - timedelta(days=args.days)
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT mp.id, mp.game_id, mp.market, mp.side, mp.line, mp.player_id,
+                   COALESCE(mp.first_shown_at, mp.recorded_at) AS locked_at,
+                   mp.book, g.start_time_utc, mp.clv
+            FROM model_picks mp
+            JOIN games g ON g.id = mp.game_id
+            WHERE mp.scored_at IS NOT NULL AND mp.slate_date >= %s
+            ORDER BY mp.slate_date, mp.id
+            """,
+            (since,),
+        ).fetchall()
+
+        updated = gained = lost = 0
+        old_clvs: list[float] = []
+        new_clvs: list[float] = []
+        for (pick_id, game_id, market, side, line, player_id,
+             locked_at, book, start_time, old_clv) in rows:
+            line_f = float(line) if line is not None else None
+            close_am, close_dec, close_fair, captured_at = _closing_quote(
+                conn, game_id, market, side, line_f, book, start_time, player_id)
+            _, _, bet_fair, _ = _bettime_quote(
+                conn, game_id, market, side, line_f, book, locked_at, player_id)
+            clv = round(close_fair - bet_fair, 4) \
+                if close_fair is not None and bet_fair is not None else None
+            conn.execute(
+                "UPDATE model_picks SET close_price_american=%s, close_price_decimal=%s, "
+                "close_fair_prob=%s, fair_prob_book=%s, clv=%s, clv_captured_at=%s "
+                "WHERE id=%s",
+                (close_am,
+                 round(close_dec, 3) if close_dec is not None else None,
+                 round(close_fair, 4) if close_fair is not None else None,
+                 round(bet_fair, 4) if bet_fair is not None else None,
+                 clv, captured_at, pick_id),
+            )
+            updated += 1
+            if old_clv is not None:
+                old_clvs.append(float(old_clv))
+            if clv is not None:
+                new_clvs.append(clv)
+            if clv is not None and old_clv is None:
+                gained += 1
+            elif clv is None and old_clv is not None:
+                lost += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    def _avg(vals: list[float]) -> str:
+        return f"{sum(vals) / len(vals):+.4f}" if vals else "n/a"
+
+    print(f"[recompute-clv] {updated} settled picks since {since}: "
+          f"clvN {len(old_clvs)} -> {len(new_clvs)} (+{gained} gained, -{lost} lost), "
+          f"avgClv {_avg(old_clvs)} -> {_avg(new_clvs)} "
+          f"(consistent single-book basis; grades untouched)")
