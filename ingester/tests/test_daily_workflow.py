@@ -8,6 +8,7 @@ projector skips them all day (late/West-Coast games never got projected).
 from __future__ import annotations
 
 import argparse
+import os
 import unittest
 from datetime import date
 from unittest import mock
@@ -52,7 +53,10 @@ def _run_daily(quick: bool) -> list[str]:
     for p in patchers.values():
         p.start()
     try:
-        daily.cmd_daily(args)
+        # The run-log is on by default and get_connection() reads .env, so without this the
+        # test would write real pipeline_runs rows into whatever dev DB is configured.
+        with mock.patch.dict(os.environ, {"DIAMOND_RUNLOG_ENABLED": "0"}):
+            daily.cmd_daily(args)
     finally:
         for p in patchers.values():
             p.stop()
