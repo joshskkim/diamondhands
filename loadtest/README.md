@@ -25,6 +25,19 @@ cd loadtest
 
 Each run writes `results/<label>.json` and prints a compact avg/p95 table per endpoint.
 
+## Leaderboard pool-stress
+
+`leaderboard-stress.js` drives only `/api/leaderboards/pitch-type` — the heaviest query — at 15
+VUs to exercise the single-flight guard and the HikariCP pool:
+
+```bash
+SCRIPT=leaderboard-stress.js ./run.sh leaderboard-after
+```
+
+The archived `results/leaderboard-{before,after}.json` pair documents the fix, but predates a
+strip of the snapshot tables to the current season and so cannot be reproduced — see
+`results/README.md`.
+
 ## What to look at
 - **k6 console table** + `results/*.json`: avg/p95 per endpoint, before vs after.
 - **Grafana** (`http://localhost:3001`): p95-by-URI and HikariCP active/pending panels —

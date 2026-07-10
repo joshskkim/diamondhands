@@ -110,10 +110,24 @@ join cannot change the result):
 | Raw query (psql) | ~98 s | ~70 ms |
 | Cold request (API) | (pool timeout / 500) | 0.26 s, then ~0.02 s cached |
 | 20 concurrent cold requests | 20 DB computations, pool exhausted | **1 DB computation**, all 200, ~75 ms |
-| Stress (cache off, 15 VUs) | ~100% errors, p95 60 s | **0% errors**, avg 2.5 s |
+| Stress (cache off, 15 VUs) | ~100% errors, p95 60 s | **0% errors**, avg 2.5 s, p95 7.8 s |
 
 A `leaderboard.db.query` counter was added to make the single-flight effect directly
 observable (it increments only on an actual heavy-query execution).
+
+The stress run's p95 stays at 7.8 s *after* the fix because that profile disables the cache
+(`spring.cache.type: none`), so the guard's peer-check can never hit and every lock waiter
+recomputes. 15 VUs across 7 pitch keys therefore queue behind 7 per-key locks: concurrent DB
+queries stay at ≤ 7, under the 10-connection pool, so requests are slow but none fail. That is
+lock serialization, not residual pathology — with the cache on (production) the same burst
+collapses to the one query the row above measures.
+
+Both runs are archived: `loadtest/results/leaderboard-{before,after}.json`. They are not
+reproducible today — the fix targeted full scans of `pitcher_arsenal` (444k rows at capture) and
+`batter_pitch_type_stats` (509k), and the dev DB has since been stripped to the current season
+(~59k / ~65k), so a fresh run understates the original pathology. The invariant the fix actually
+buys — one DB query per key under a concurrent cold burst — is pinned by `LeaderboardServiceTest`
+instead, which asserts on the `leaderboard.db.query` counter and is independent of DB size.
 
 ## 4. SLOs & alerting
 
