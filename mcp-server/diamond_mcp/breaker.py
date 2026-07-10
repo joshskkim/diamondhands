@@ -26,8 +26,18 @@ class CircuitBreaker:
         return "open"
 
     def allow(self) -> bool:
-        """True if a request may proceed (closed or half-open for a probe)."""
-        return self.state != "open"
+        """True if a request may proceed.
+
+        Closed: always. Half-open: the first caller only. Claiming the probe re-arms the
+        cooldown, so concurrent callers fail fast and a probe that never reports back
+        cannot wedge the breaker shut.
+        """
+        state = self.state
+        if state == "open":
+            return False
+        if state == "half_open":
+            self.opened_at = time.monotonic()
+        return True
 
     def record_success(self) -> None:
         self.failures = 0
