@@ -13,6 +13,7 @@ import { Trend, Rate } from 'k6/metrics';
 // this script intentionally removes that cushion to expose the underlying ceiling.
 
 const BASE = __ENV.BASE_URL || 'http://host.docker.internal:8080';
+const LABEL = __ENV.LABEL || 'leaderboard-stress';
 const PITCHES = ['FF', 'SI', 'FC', 'SL', 'CU', 'CH', 'FS'];
 
 const tLeader = new Trend('ep_leaderboard', true);
@@ -44,8 +45,8 @@ export function handleSummary(data) {
   const m = data.metrics;
   const lat = m.ep_leaderboard ? m.ep_leaderboard.values : null;
   const err = m.leaderboard_errors ? m.leaderboard_errors.values.rate : null;
-  console.log('\n=== leaderboard pool-stress ===');
+  console.log(`\n=== ${LABEL} ===`);
   if (lat) console.log(`latency  avg=${lat.avg.toFixed(0)}ms p95=${lat['p(95)'].toFixed(0)}ms max=${lat.max.toFixed(0)}ms`);
   if (err !== null) console.log(`error rate (non-200, incl. pool timeouts): ${(err * 100).toFixed(1)}%`);
-  return { '/scripts/results/leaderboard-stress.json': JSON.stringify(data, null, 2) };
+  return { [`/scripts/results/${LABEL}.json`]: JSON.stringify(data, null, 2) };
 }
