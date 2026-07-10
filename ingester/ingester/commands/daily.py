@@ -34,6 +34,7 @@ from ingester.commands.lineups import cmd_refresh_lineups
 from ingester.commands.odds import cmd_refresh_odds
 from ingester.commands.scores import cmd_backfill_scores
 from ingester.projection.runner import cmd_project
+from ingester.runlog import RunLog
 
 
 def cmd_daily(args: argparse.Namespace) -> None:
@@ -156,21 +157,46 @@ def cmd_daily(args: argparse.Namespace) -> None:
     names = " -> ".join(name for name, _, _ in steps)
     print(f"[daily] {target}: {names}\n")
 
+    # Persist what this loop already measures (see ingester/runlog.py). Rows written come
+    # from pg_stat deltas taken either side of fn(), so the steps stay untouched — but note
+    # that _close_prior_slate and _grade_today swallow their sub-step failures, so they
+    # always land as one 'ok' step whose delta sums every sub-step they ran.
+    runlog = RunLog.begin("quick" if getattr(args, "quick", False) else "full", target)
+
     overall_start = time.monotonic()
     warnings: list[str] = []
-    for i, (name, fn, fatal) in enumerate(steps, 1):
-        print(f"[daily] ({i}/{len(steps)}) {name} …")
-        step_start = time.monotonic()
-        try:
-            fn(args)
-        except Exception as exc:  # noqa: BLE001
-            if fatal:
-                print(f"\n[daily] FAILED at step {i}/{len(steps)} ({name}): {exc}")
-                raise
-            print(f"[daily] ⚠ {name} failed (non-fatal): {exc} — continuing\n")
-            warnings.append(name)
-            continue
-        print(f"[daily] ✓ {name} ({time.monotonic() - step_start:.1f}s)\n")
+    failed = False
+    try:
+        for i, (name, fn, fatal) in enumerate(steps, 1):
+            print(f"[daily] ({i}/{len(steps)}) {name} …")
+            before = runlog.snapshot() if runlog else None
+            step_start = time.monotonic()
+            try:
+                fn(args)
+            except Exception as exc:  # noqa: BLE001
+                step_ms = int((time.monotonic() - step_start) * 1000)
+                if fatal:
+                    failed = True
+                    if runlog:
+                        runlog.record_step(i, name, "fail", step_ms, before, runlog.snapshot())
+                    print(f"\n[daily] FAILED at step {i}/{len(steps)} ({name}): {exc}")
+                    raise
+                print(f"[daily] ⚠ {name} failed (non-fatal): {exc} — continuing\n")
+                warnings.append(name)
+                if runlog:
+                    runlog.record_step(i, name, "warn", step_ms, before, runlog.snapshot())
+                continue
+            step_ms = int((time.monotonic() - step_start) * 1000)
+            if runlog:
+                runlog.record_step(i, name, "ok", step_ms, before, runlog.snapshot())
+            print(f"[daily] ✓ {name} ({time.monotonic() - step_start:.1f}s)\n")
+    finally:
+        # finally, not a trailing call: a fatal step re-raises out of the loop and the run
+        # header would otherwise stay stuck in 'running' forever.
+        if runlog:
+            status = "fail" if failed else ("warn" if warnings else "ok")
+            runlog.finish(status, len(steps), len(warnings),
+                          int((time.monotonic() - overall_start) * 1000))
 
     elapsed = time.monotonic() - overall_start
     if warnings:
