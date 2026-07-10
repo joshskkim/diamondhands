@@ -23,7 +23,8 @@ import java.util.concurrent.locks.ReentrantLock;
 @Service
 public class LeaderboardService {
 
-    private static final String CACHE = "pitchTypeLeaderboard";
+    // Package-private so LeaderboardServiceTest names the cache instead of duplicating it.
+    static final String CACHE = "pitchTypeLeaderboard";
 
     /** Supported pitch types in display order, with friendly names. */
     private static final List<PitchTypeRefDto> PITCH_TYPES = List.of(
