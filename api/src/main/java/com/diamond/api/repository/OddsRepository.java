@@ -51,7 +51,7 @@ public class OddsRepository {
     // A player_id is a batter's or a pitcher's, never both, so the batter- and
     // pitcher-side joins are mutually exclusive and each row carries exactly one model.
     private static final String PROP_MODEL_COLUMNS = """
-               bp.p_hit_1plus, bp.p_hit_2plus, bp.p_hr, bp.p_bb_1plus,
+               bp.p_hit_1plus, bp.p_hit_1plus_served, bp.p_hit_2plus, bp.p_hr, bp.p_bb_1plus,
                sbp.n_sims AS sbp_n_sims, sbp.tb_hist, sbp.hrr_hist,
                pp.workload->'p_k'    AS workload_p_k,
                pp.workload->'p_outs' AS workload_p_outs,
@@ -384,6 +384,7 @@ public class OddsRepository {
     private PropModelRow mapPropModel(ResultSet rs) throws SQLException {
         return new PropModelRow(
             toDouble(rs.getBigDecimal("p_hit_1plus")),
+            toDouble(rs.getBigDecimal("p_hit_1plus_served")),
             toDouble(rs.getBigDecimal("p_hit_2plus")),
             toDouble(rs.getBigDecimal("p_hr")),
             toDouble(rs.getBigDecimal("p_bb_1plus")),
@@ -445,7 +446,7 @@ public class OddsRepository {
      * ({@code pBb} is walks ALLOWED — distinct from the batter's {@code pBb1} walks-drawn prob.)
      */
     public record PropModelRow(
-        Double pHit1, Double pHit2, Double pHr, Double pBb1,
+        Double pHit1, Double pHit1Served, Double pHit2, Double pHr, Double pBb1,
         Integer simNSims, int[] tbHist, int[] hrrHist,
         Map<String, Double> pK, Map<String, Double> pOuts, Map<String, Double> pBb,
         Integer pitcherNSims, int[] hitsHist, int[] erHist) {
@@ -457,7 +458,8 @@ public class OddsRepository {
         public boolean equals(Object o) {
             if (this == o) return true;
             if (!(o instanceof PropModelRow r)) return false;
-            return Objects.equals(pHit1, r.pHit1) && Objects.equals(pHit2, r.pHit2)
+            return Objects.equals(pHit1, r.pHit1) && Objects.equals(pHit1Served, r.pHit1Served)
+                && Objects.equals(pHit2, r.pHit2)
                 && Objects.equals(pHr, r.pHr) && Objects.equals(pBb1, r.pBb1)
                 && Objects.equals(simNSims, r.simNSims)
                 && Arrays.equals(tbHist, r.tbHist) && Arrays.equals(hrrHist, r.hrrHist)
@@ -469,7 +471,7 @@ public class OddsRepository {
 
         @Override
         public int hashCode() {
-            return Objects.hash(pHit1, pHit2, pHr, pBb1, simNSims,
+            return Objects.hash(pHit1, pHit1Served, pHit2, pHr, pBb1, simNSims,
                 Arrays.hashCode(tbHist), Arrays.hashCode(hrrHist), pK, pOuts, pBb,
                 pitcherNSims, Arrays.hashCode(hitsHist), Arrays.hashCode(erHist));
         }

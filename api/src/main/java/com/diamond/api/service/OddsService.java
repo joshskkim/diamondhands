@@ -276,11 +276,16 @@ public class OddsService {
      *       histograms (tb/hrr, hits-allowed/ER) price any half-line, while the workload
      *       model's K/outs ladders only hold the lines projection/workload.py materialized.</li>
      * </ul>
+     *
+     * <p>hit at 0.5 reads the engine's SERVED prob ({@code p_hit_1plus_served}) — already
+     * clear-rate blended, so {@link PropBlend} no longer blends hit (see its CANONICAL map).
+     * hit 1.5 still uses the raw {@code p_hit_2plus}. Null served = degenerate raw the engine
+     * declined to blend → no play, same as any unpriced line.
      */
     private Double propOverProb(String market, double line, OddsRepository.PropModelRow m) {
         if (m == null) return null;
         return switch (market) {
-            case "hit" -> line == 0.5 ? m.pHit1() : line == 1.5 ? m.pHit2() : null;
+            case "hit" -> line == 0.5 ? m.pHit1Served() : line == 1.5 ? m.pHit2() : null;
             case "hr" -> line == 0.5 ? m.pHr() : null;
             case "bb" -> line == 0.5 ? m.pBb1() : null;
             case "tb" -> PropDistribution.histProb(m.tbHist(), m.simNSims(), line);
