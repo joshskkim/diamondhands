@@ -292,6 +292,7 @@ public class OddsService {
             case "hrr" -> PropDistribution.histProb(m.hrrHist(), m.simNSims(), line);
             case "pitcher_k" -> PropDistribution.ladderProb(m.pK(), line);
             case "pitcher_outs" -> PropDistribution.ladderProb(m.pOuts(), line);
+            case "pitcher_walks" -> PropDistribution.ladderProb(m.pBb(), line);
             case "pitcher_hits_allowed" ->
                 PropDistribution.histProb(m.hitsHist(), m.pitcherNSims(), line);
             case "pitcher_earned_runs" ->
@@ -386,6 +387,7 @@ public class OddsService {
             case "hrr" -> "H+R+RBI";
             case "pitcher_k" -> "Ks";
             case "pitcher_outs" -> "Outs";
+            case "pitcher_walks" -> "Walks allowed";
             case "pitcher_hits_allowed" -> "Hits allowed";
             case "pitcher_earned_runs" -> "Earned runs";
             default -> prop.market();

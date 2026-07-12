@@ -883,7 +883,7 @@ def _load_workload_params(conn: psycopg.Connection, as_of: date) -> WorkloadPara
     """
     rows = conn.execute(
         """
-        SELECT player_id, outs, batters_faced, strikeouts, game_date
+        SELECT player_id, outs, batters_faced, strikeouts, walks, game_date
         FROM pitcher_starts WHERE game_date < %s ORDER BY player_id, game_date
         """,
         (as_of,),
@@ -892,9 +892,11 @@ def _load_workload_params(conn: psycopg.Connection, as_of: date) -> WorkloadPara
         return None
     total_outs = sum(r[1] for r in rows)
     total_k = sum((r[3] or 0) for r in rows)
+    total_bb = sum((r[4] or 0) for r in rows)
     total_bf = sum((r[2] or 0) for r in rows)
     league_mean_outs = total_outs / len(rows)
     league_k_per_bf = (total_k / total_bf) if total_bf else 0.22
+    league_bb_per_bf = (total_bb / total_bf) if total_bf else 0.08
     bf_pairs = [(r[1], r[2]) for r in rows if r[2]]
     bf_int, bf_slope = fit_bf_given_outs(bf_pairs)
     by_pitcher_oldest: dict[int, list[int]] = {}
@@ -904,6 +906,7 @@ def _load_workload_params(conn: psycopg.Connection, as_of: date) -> WorkloadPara
     return WorkloadParams(
         league_mean_outs=league_mean_outs,
         league_k_per_bf=league_k_per_bf,
+        league_bb_per_bf=league_bb_per_bf,
         residuals=tuple(residuals),
         bf_intercept=bf_int,
         bf_slope=bf_slope,
@@ -912,11 +915,12 @@ def _load_workload_params(conn: psycopg.Connection, as_of: date) -> WorkloadPara
 
 def _load_pitcher_start_history(
     conn: psycopg.Connection, pitcher_id: int, as_of: date
-) -> tuple[list[int], list[tuple[int, int]]]:
-    """(outs, (k, bf)) for a pitcher's starts before the slate, MOST-RECENT-FIRST."""
+) -> tuple[list[int], list[tuple[int, int]], list[tuple[int, int]]]:
+    """(outs, (k, bf), (bb, bf)) for a pitcher's starts before the slate, MOST-RECENT-FIRST."""
     rows = conn.execute(
         """
-        SELECT outs, COALESCE(strikeouts, 0), COALESCE(batters_faced, 0)
+        SELECT outs, COALESCE(strikeouts, 0), COALESCE(batters_faced, 0),
+               COALESCE(walks, 0)
         FROM pitcher_starts
         WHERE player_id = %s AND game_date < %s
         ORDER BY game_date DESC
@@ -925,7 +929,8 @@ def _load_pitcher_start_history(
     ).fetchall()
     outs = [int(r[0]) for r in rows]
     kbf = [(int(r[1]), int(r[2])) for r in rows]
-    return outs, kbf
+    bbbf = [(int(r[3]), int(r[2])) for r in rows]
+    return outs, kbf, bbbf
 
 
 def _load_pitcher_season_role(
@@ -1166,7 +1171,7 @@ def _project_team_side(
         return None
 
     # Recorded-start history powers both the opener check and the workload model.
-    outs_hist, kbf_hist = _load_pitcher_start_history(
+    outs_hist, kbf_hist, bbbf_hist = _load_pitcher_start_history(
         conn, opposing_pitcher_id, summary.game_date
     )
 
@@ -1191,8 +1196,8 @@ def _project_team_side(
             opp_starter_is_opener=True,
         )
 
-    # Workload model for the opposing starter: how deep he goes + the K distribution
-    # that rides on it (validated out-of-sample, PR #48). Drives the prop board and
+    # Workload model for the opposing starter: how deep he goes + the K/BB distributions
+    # that ride on it (K validated out-of-sample, PR #48). Drives the prop board and
     # the sim's depth for THIS lineup. An empty history is fine — the model regresses to
     # the league prior (expected_outs → league_mean_outs), so a starter we've never seen
     # start still gets a league-average K/Outs curve instead of a null that blanks his
@@ -1201,7 +1206,7 @@ def _project_team_side(
     workload = None
     opp_starter_innings = None
     if wl_params is not None:
-        workload = compute_starter_workload(outs_hist, kbf_hist, wl_params)
+        workload = compute_starter_workload(outs_hist, kbf_hist, wl_params, bbbf_hist)
         opp_starter_innings = workload["innings"]
 
     # The opposing starter's projected line is the aggregate of this lineup vs him.

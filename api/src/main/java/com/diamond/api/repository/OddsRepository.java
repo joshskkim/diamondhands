@@ -46,7 +46,7 @@ public class OddsRepository {
     // column answers which market lives in OddsService.propOverProb:
     //   batter_projections      → hit / hr / bb (closed-form occurrence probs)
     //   game_sim_batter_props   → tb / hrr      (simulator histograms, any half-line)
-    //   pitcher_projections     → pitcher_k / pitcher_outs (workload ladder, fixed lines)
+    //   pitcher_projections     → pitcher_k / pitcher_outs / pitcher_walks (workload ladder)
     //   game_sim_pitcher_props  → pitcher_hits_allowed / pitcher_earned_runs (histograms)
     // A player_id is a batter's or a pitcher's, never both, so the batter- and
     // pitcher-side joins are mutually exclusive and each row carries exactly one model.
@@ -55,6 +55,7 @@ public class OddsRepository {
                sbp.n_sims AS sbp_n_sims, sbp.tb_hist, sbp.hrr_hist,
                pp.workload->'p_k'    AS workload_p_k,
                pp.workload->'p_outs' AS workload_p_outs,
+               pp.workload->'p_bb'   AS workload_p_bb,
                spp.n_sims AS spp_n_sims, spp.hits_hist, spp.er_hist
         """;
 
@@ -392,6 +393,7 @@ public class OddsRepository {
             toIntArray(rs.getArray("hrr_hist")),
             toLadder(rs.getString("workload_p_k")),
             toLadder(rs.getString("workload_p_outs")),
+            toLadder(rs.getString("workload_p_bb")),
             (Integer) rs.getObject("spp_n_sims"),
             toIntArray(rs.getArray("hits_hist")),
             toIntArray(rs.getArray("er_hist")));
@@ -439,13 +441,14 @@ public class OddsRepository {
      * all (scratched, no sim row) carries nulls throughout, which
      * {@code OddsService.propOverProb} turns into "no model" rather than a bogus 0%.
      *
-     * <p>{@code pK} / {@code pOuts} are the workload model's threshold ladders keyed by
-     * line ("5.5" → p); they only hold the lines projection/workload.py materialized.
+     * <p>{@code pK} / {@code pOuts} / {@code pBb} are the workload model's threshold ladders
+     * keyed by line ("5.5" → p); they only hold the lines projection/workload.py materialized.
+     * ({@code pBb} is walks ALLOWED — distinct from the batter's {@code pBb1} walks-drawn prob.)
      */
     public record PropModelRow(
         Double pHit1, Double pHit1Served, Double pHit2, Double pHr, Double pBb1,
         Integer simNSims, int[] tbHist, int[] hrrHist,
-        Map<String, Double> pK, Map<String, Double> pOuts,
+        Map<String, Double> pK, Map<String, Double> pOuts, Map<String, Double> pBb,
         Integer pitcherNSims, int[] hitsHist, int[] erHist) {
 
         // A record's generated equals() compares array fields by reference, which would make
@@ -461,6 +464,7 @@ public class OddsRepository {
                 && Objects.equals(simNSims, r.simNSims)
                 && Arrays.equals(tbHist, r.tbHist) && Arrays.equals(hrrHist, r.hrrHist)
                 && Objects.equals(pK, r.pK) && Objects.equals(pOuts, r.pOuts)
+                && Objects.equals(pBb, r.pBb)
                 && Objects.equals(pitcherNSims, r.pitcherNSims)
                 && Arrays.equals(hitsHist, r.hitsHist) && Arrays.equals(erHist, r.erHist);
         }
@@ -468,7 +472,7 @@ public class OddsRepository {
         @Override
         public int hashCode() {
             return Objects.hash(pHit1, pHit1Served, pHit2, pHr, pBb1, simNSims,
-                Arrays.hashCode(tbHist), Arrays.hashCode(hrrHist), pK, pOuts,
+                Arrays.hashCode(tbHist), Arrays.hashCode(hrrHist), pK, pOuts, pBb,
                 pitcherNSims, Arrays.hashCode(hitsHist), Arrays.hashCode(erHist));
         }
     }

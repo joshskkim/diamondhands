@@ -68,6 +68,7 @@ const BATTER_UNIT: Record<string, string> = { hrr: 'H+R+RBI', hr: 'HR', tb: 'TB'
 const PITCHER_MARKET_META: Record<string, { chip: string; unit: string; noun: string }> = {
   pitcher_k: { chip: 'Pitcher Ks', unit: 'K', noun: 'strikeouts' },
   pitcher_outs: { chip: 'Outs', unit: 'outs', noun: 'outs recorded' },
+  pitcher_walks: { chip: 'Walks allowed', unit: 'BB', noun: 'walks allowed' },
   pitcher_hits_allowed: { chip: 'Hits allowed', unit: 'H', noun: 'hits allowed' },
   pitcher_earned_runs: { chip: 'Earned runs', unit: 'ER', noun: 'earned runs' },
 }
@@ -95,6 +96,7 @@ function batterActual(market: string, r: BatterResult | undefined): number | nul
 }
 const PITCHER_RESULT_FIELD: Record<string, keyof PitcherResult> = {
   pitcher_k: 'strikeouts', pitcher_outs: 'outs',
+  pitcher_walks: 'walks',
   pitcher_hits_allowed: 'hitsAllowed', pitcher_earned_runs: 'earnedRuns',
 }
 

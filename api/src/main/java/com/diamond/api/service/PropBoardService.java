@@ -200,6 +200,7 @@ public class PropBoardService {
     private static final List<Double> OUTS_LINES = List.of(14.5, 17.5);
     private static final List<Double> HITS_LINES = List.of(4.5, 5.5, 6.5);
     private static final List<Double> ER_LINES = List.of(1.5, 2.5, 3.5);
+    private static final List<Double> BB_LINES = List.of(1.5, 2.5);
 
     private static final List<PitcherMarket> PITCHER_MARKETS = List.of(
         // K / outs distributions come from the workload model's JSON ladders. When absent (no
@@ -215,6 +216,12 @@ public class PropBoardService {
             r -> ladderProbs(r.pOuts(), OUTS_LINES),
             r -> hasLadder(r.pOuts()),
             (r, line) -> ladderProb(r.pOuts(), line)),
+        // Walks allowed: same workload-ladder shape as Ks (Binomial(BF, bb_rate) over the
+        // outs distribution). No workload row → pBb null → hasDist gates the row out.
+        new PitcherMarket("pitcher_walks", PitcherRow::expectedBb, BB_LINES,
+            r -> ladderProbs(r.pBb(), BB_LINES),
+            r -> hasLadder(r.pBb()),
+            (r, line) -> ladderProb(r.pBb(), line)),
         // Hits allowed / earned runs come from the simulator's histograms, so P(over) is
         // read off the distribution at any half-line. No histogram (no sim row) → no card.
         new PitcherMarket("pitcher_hits_allowed", PitcherRow::expectedHits, HITS_LINES,

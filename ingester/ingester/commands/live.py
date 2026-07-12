@@ -87,6 +87,7 @@ def _box_player_rows(box: dict, game_pk, game_date) -> tuple[list[dict], list[di
                     "outs": int(pit["outs"]), "batters_faced": pit.get("battersFaced"),
                     "pitcher_strikeouts": pit.get("strikeOuts"),
                     "hits_allowed": pit.get("hits"), "earned_runs": pit.get("earnedRuns"),
+                    "pitcher_walks": pit.get("baseOnBalls"),
                 })
     return batters, pitchers
 
@@ -122,16 +123,17 @@ ON CONFLICT (player_id, game_id) DO UPDATE SET
 _PITCHER_UPSERT = """
 INSERT INTO player_game_live (
     player_id, game_id, game_date,
-    outs, batters_faced, pitcher_strikeouts, hits_allowed, earned_runs, updated_at
+    outs, batters_faced, pitcher_strikeouts, hits_allowed, earned_runs, pitcher_walks, updated_at
 ) VALUES (
     %(player_id)s, %(game_id)s, %(game_date)s,
-    %(outs)s, %(batters_faced)s, %(pitcher_strikeouts)s, %(hits_allowed)s, %(earned_runs)s, NOW()
+    %(outs)s, %(batters_faced)s, %(pitcher_strikeouts)s, %(hits_allowed)s, %(earned_runs)s,
+    %(pitcher_walks)s, NOW()
 )
 ON CONFLICT (player_id, game_id) DO UPDATE SET
     game_date = EXCLUDED.game_date,
     outs = EXCLUDED.outs, batters_faced = EXCLUDED.batters_faced,
     pitcher_strikeouts = EXCLUDED.pitcher_strikeouts, hits_allowed = EXCLUDED.hits_allowed,
-    earned_runs = EXCLUDED.earned_runs, updated_at = NOW()
+    earned_runs = EXCLUDED.earned_runs, pitcher_walks = EXCLUDED.pitcher_walks, updated_at = NOW()
 """
 
 
