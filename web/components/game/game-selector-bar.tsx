@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { format } from 'date-fns'
 import Link from 'next/link'
-import { useEffect, useRef, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, type CSSProperties } from 'react'
 import { todayGamesQueryOptions } from '@/lib/api'
 import type { TodayGame } from '@/lib/types'
 import { cn, parseApiDate } from '@/lib/utils'
@@ -138,6 +138,15 @@ function MatchupScore({ score, favSide }: { score: ScoreState; favSide: 'home' |
   )
 }
 
+// Ordering tier: live games first, upcoming next, finished/dead last — so the
+// slate keeps actionable games in view as the day's early games wrap up.
+function orderTier(g: TodayGame): number {
+  if (g.detailedStatus && DEAD_STATUSES.has(g.detailedStatus)) return 2 // dead → end
+  if (g.finalHomeScore != null && g.finalAwayScore != null) return 2 // final → end
+  const isLive = g.status === 'Live' || (g.liveHomeScore != null && g.liveAwayScore != null)
+  return isLive ? 0 : 1 // live first, else upcoming
+}
+
 // The sub-line beneath a matchup: dead-game status, else the live/final score, else time · total.
 function ChipMeta({ game, favSide }: { game: TodayGame; favSide: 'home' | 'away' | null }) {
   if (game.detailedStatus && DEAD_STATUSES.has(game.detailedStatus)) {
@@ -163,6 +172,13 @@ export function GameSelectorBar({ activeGameId }: { activeGameId?: number }) {
   const { data: games } = useQuery(todayGamesQueryOptions())
   const activeRef = useRef<HTMLAnchorElement | null>(null)
   const stripRef = useRef<HTMLDivElement | null>(null)
+
+  // Live → upcoming → final. Stable sort keeps each tier in the server's
+  // start-time order; copy the array so we never sort the query cache in place.
+  const ordered = useMemo(
+    () => (games ? [...games].sort((a, b) => orderTier(a) - orderTier(b)) : undefined),
+    [games],
+  )
 
   // Bring the current game into view when the bar mounts / the slate loads.
   useEffect(() => {
@@ -196,13 +212,13 @@ export function GameSelectorBar({ activeGameId }: { activeGameId?: number }) {
     return () => el.removeEventListener('wheel', onWheel)
   }, [games])
 
-  if (!games || games.length === 0) return null
+  if (!ordered || ordered.length === 0) return null
 
   return (
     <div className="sticky top-12 md:top-0 z-30 -mx-4 mb-6 border-b border-white/10 bg-[#08090d]/90 px-4 py-2 backdrop-blur">
       {/* horizontal chip strip — scrolls with the wheel on desktop, touch-drag on mobile */}
       <div ref={stripRef} className="scrollbar-slim flex gap-2 overflow-x-auto">
-        {games.map((g) => {
+        {ordered.map((g) => {
           const isActive = g.gameId === activeGameId
           const glow = favoriteGlow(g.projection?.expectedHomeRuns, g.projection?.expectedAwayRuns)
           return (
