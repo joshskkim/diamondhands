@@ -6,10 +6,8 @@ import java.util.List;
  * The headline starting pitcher for one pitcher-prop market (strikeouts, outs,
  * hits allowed, earned runs), ranked by MODEL-VS-LINE EDGE: |model P(over) −
  * de-vigged book P(over)| at the pitcher's consensus line, with the recommended
- * side wherever the edge points ({@code rankedBy} = "edge"). On days with no
- * usable odds for the market, falls back to the workload model's expected-volume
- * ranking with the model's lean at the nearest modeled line ({@code rankedBy} =
- * "volume", edge fields null).
+ * side wherever the edge points ({@code rankedBy} = "edge"). A market with no
+ * beatable two-way line produces no card at all, so a card is always an edge pick.
  *
  * {@code expectedValue} is the headline projection (expected Ks / outs / hits /
  * ER). {@code distribution} is the over-probability at each modeled threshold.
@@ -26,9 +24,8 @@ public record PitcherPropPickDto(
     double expectedValue,
     Double expectedIp,
     List<Threshold> distribution,
-    // The single recommended pick: in edge mode, the side of the positive edge at the
-    // book's consensus line; in volume mode, the model's lean at the modeled line
-    // closest to expectedValue. bestProb is that side's model probability.
+    // The single recommended pick: the side of the positive edge at the book's consensus
+    // line. bestProb is that side's model probability.
     Double bestLine,
     String bestSide,         // "over" | "under"
     Double bestProb,
@@ -37,11 +34,11 @@ public record PitcherPropPickDto(
     String bestBook,
     Integer priceAmerican,
     Double evPct,
-    // Edge mode only: |model − no-vig| probability gap and the de-vigged book
-    // probability for the recommended side; which ranking produced this card.
+    // |model − no-vig| probability gap and the de-vigged book probability for the
+    // recommended side; how this card was ranked (always "edge").
     Double edge,
     Double fairProb,
-    String rankedBy,         // "edge" | "volume"
+    String rankedBy,         // "edge"
     // Reasoning drivers (null when skill rows are absent): the pitcher's own BF-weighted
     // profile, the opposing lineup's PA-weighted K rate / xwOBA, and the pitcher's top
     // pitches by usage (empty list when no arsenal snapshot exists).
@@ -57,8 +54,10 @@ public record PitcherPropPickDto(
     /** One over-threshold from the workload distribution: P(over {@code line}). */
     public record Threshold(double line, double prob) {}
 
-    /** An honorable mention: same expected-volume ranking, no distribution. */
-    public record RunnerUp(int pitcherId, String pitcher, String team, double expectedValue) {}
+    /** A runner-up starter for this market, in the same edge order as the headline pick:
+     *  its recommended side and model-vs-line edge, plus the headline projection for context. */
+    public record RunnerUp(int pitcherId, String pitcher, String team, double expectedValue,
+                           String bestSide, Double edge) {}
 
     /** One pitch in the starter's mix: usage / whiff / velocity (any may be null). */
     public record ArsenalPitch(String pitchType, Double usageRate, Double whiffRate, Double avgVelocity) {}

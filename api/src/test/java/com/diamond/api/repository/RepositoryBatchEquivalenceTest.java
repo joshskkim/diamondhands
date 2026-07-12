@@ -31,6 +31,7 @@ class RepositoryBatchEquivalenceTest {
 
     @Autowired private PitchRepository pitchRepo;
     @Autowired private PropBoardRepository propRepo;
+    @Autowired private ClearRateRepository clearRateRepo;
     @Autowired private ProjectionRepository projRepo;
     @Autowired private OddsRepository oddsRepo;
     @Autowired private JdbcTemplate jdbc;
@@ -43,12 +44,12 @@ class RepositoryBatchEquivalenceTest {
         assumeTrue(!slate.isEmpty(), "no slate data for " + date);
 
         List<Integer> ids = slate.stream().map(SlateRow::playerId).distinct().limit(25).toList();
-        Map<Integer, PropBoardRepository.ClearRates> batch = propRepo.findClearRatesBatch(ids, date);
+        Map<Integer, ClearRateRepository.ClearRates> batch = clearRateRepo.findClearRatesBatch(ids, date);
 
         for (Integer id : ids) {
             assertThat(batch.get(id))
                 .as("clear rates for player %s", id)
-                .isEqualTo(propRepo.findClearRates(id, date));
+                .isEqualTo(clearRateRepo.findClearRates(id, date));
         }
     }
 

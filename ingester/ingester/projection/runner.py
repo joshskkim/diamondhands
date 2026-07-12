@@ -1156,10 +1156,14 @@ def _project_team_side(
 
     # Workload model for the opposing starter: how deep he goes + the K distribution
     # that rides on it (validated out-of-sample, PR #48). Drives the prop board and
-    # the sim's depth for THIS lineup. Falls back silently when no prior starts exist.
+    # the sim's depth for THIS lineup. An empty history is fine — the model regresses to
+    # the league prior (expected_outs → league_mean_outs), so a starter we've never seen
+    # start still gets a league-average K/Outs curve instead of a null that blanks his
+    # game-page/board props. We've already passed the opener check above, so this is a
+    # real starter, not a bullpen game.
     workload = None
     opp_starter_innings = None
-    if wl_params is not None and outs_hist:
+    if wl_params is not None:
         workload = compute_starter_workload(outs_hist, kbf_hist, wl_params)
         opp_starter_innings = workload["innings"]
 
