@@ -14,6 +14,10 @@ how deep he goes. v1 is deliberately empirical and explainable:
   * K | BF ~ Binomial(BF, k-rate), with the per-BF k-rate recency-weighted and
     regressed toward league; P(K ≥ line) mixes the binomial over the outs
     distribution.
+  * WALKS are the same shape as Ks — BB | BF ~ Binomial(BF, bb-rate) mixed over the
+    outs distribution — so the K and BB ladders share the rate-blend and
+    count-over helpers (per_bf_rate_blend / p_count_over) and differ only in which
+    per-start counts and league rate they feed in.
 
 Pure functions only; ingester.commands wiring and the eval harness live elsewhere.
 """
@@ -33,6 +37,9 @@ WORKLOAD_WINDOW: int = 10
 WORKLOAD_PRIOR_STARTS: float = 3.0
 # Per-BF strikeout rate: phantom league BF for the EB blend.
 K_RATE_PRIOR_BF: float = 100.0
+# Per-BF walk rate: phantom league BF for the EB blend. Walks are rarer and noisier per
+# start than Ks, so a slightly heavier prior keeps a thin sample closer to league.
+BB_RATE_PRIOR_BF: float = 120.0
 # Physical bounds on a start's outs.
 MAX_OUTS: int = 27
 
@@ -43,6 +50,9 @@ MAX_OUTS: int = 27
 # 11.5–20.5 (14.5/17.5 ≈ "5 IP" / "6 IP" sit mid-range) and K 2.5–9.5.
 WORKLOAD_OUTS_LINES: tuple[float, ...] = tuple(x + 0.5 for x in range(11, 21))
 WORKLOAD_K_LINES: tuple[float, ...] = tuple(x + 0.5 for x in range(2, 10))
+# Walks allowed: books quote a starter's walk line around 1.5–2.5; the grid spans 0.5–3.5
+# so ladderProb can price (and interpolate to) any book line in that range.
+WORKLOAD_BB_LINES: tuple[float, ...] = tuple(x + 0.5 for x in range(0, 4))
 # Clamp the sim's per-side starter innings to a sane range (a μ of 16 outs ≈ 5 IP;
 # never let a noisy estimate pull a starter below 3 or above 8 innings in the sim).
 WORKLOAD_SIM_MIN_INNINGS: int = 3
@@ -55,6 +65,7 @@ class WorkloadParams:
 
     league_mean_outs: float          # league-average outs per start
     league_k_per_bf: float           # league per-BF strikeout rate
+    league_bb_per_bf: float          # league per-BF walk rate
     residuals: tuple[float, ...]     # pooled (actual − expected) outs residuals
     bf_intercept: float              # BF ≈ intercept + slope × outs
     bf_slope: float
@@ -86,21 +97,34 @@ def expected_outs(outs_history: list[int], league_mean_outs: float,
     return (n_eff * mean + prior_starts * league_mean_outs) / (n_eff + prior_starts)
 
 
-def k_rate_blend(k_bf_history: list[tuple[int, int]], league_k_per_bf: float,
-                 prior_bf: float = K_RATE_PRIOR_BF) -> float:
-    """Recency-weighted per-BF strikeout rate, regressed toward league.
+def per_bf_rate_blend(count_bf_history: list[tuple[int, int]], league_rate: float,
+                      prior_bf: float) -> float:
+    """Recency-weighted per-BF rate of some event, regressed toward the league rate.
 
-    `k_bf_history` is (strikeouts, batters_faced) per start, most-recent-first.
+    `count_bf_history` is (event_count, batters_faced) per start, most-recent-first.
     Weighted by recency × BF so a 2-inning blowup doesn't count like a full start.
+    Shared by the strikeout and walk ladders — see k_rate_blend / bb_rate_blend.
     """
     num = den = 0.0
     w = 1.0
-    for k, bf in k_bf_history[:WORKLOAD_WINDOW]:
+    for count, bf in count_bf_history[:WORKLOAD_WINDOW]:
         if bf and bf > 0:
-            num += w * k
+            num += w * count
             den += w * bf
         w *= WORKLOAD_RECENCY_DECAY
-    return (num + prior_bf * league_k_per_bf) / (den + prior_bf)
+    return (num + prior_bf * league_rate) / (den + prior_bf)
+
+
+def k_rate_blend(k_bf_history: list[tuple[int, int]], league_k_per_bf: float,
+                 prior_bf: float = K_RATE_PRIOR_BF) -> float:
+    """Recency-weighted per-BF strikeout rate, regressed toward league."""
+    return per_bf_rate_blend(k_bf_history, league_k_per_bf, prior_bf)
+
+
+def bb_rate_blend(bb_bf_history: list[tuple[int, int]], league_bb_per_bf: float,
+                  prior_bf: float = BB_RATE_PRIOR_BF) -> float:
+    """Recency-weighted per-BF walk rate, regressed toward league."""
+    return per_bf_rate_blend(bb_bf_history, league_bb_per_bf, prior_bf)
 
 
 def outs_distribution(mu: float, params: WorkloadParams) -> dict[int, float]:
@@ -125,16 +149,32 @@ def expected_bf(outs: float, params: WorkloadParams) -> float:
     return params.bf_intercept + params.bf_slope * outs
 
 
-def p_strikeouts_over(line: float, mu_outs: float, k_per_bf: float,
-                      params: WorkloadParams) -> float:
-    """P(K > line): Binomial(BF(outs), k_rate) mixed over the outs distribution."""
+def p_count_over(line: float, mu_outs: float, per_bf_rate: float,
+                 params: WorkloadParams) -> float:
+    """P(count > line): Binomial(BF(outs), per_bf_rate) mixed over the outs distribution.
+
+    The shared engine behind both the strikeout and walk ladders — the only difference
+    between them is the per-BF event rate passed in.
+    """
     total = 0.0
     for o, p_o in outs_distribution(mu_outs, params).items():
         bf = max(int(round(expected_bf(o, params))), 0)
-        # P(K >= ceil(line + 0.5)) == P(K > line) for half-lines.
-        k_needed = int(line) + 1
-        total += p_o * float(binom.sf(k_needed - 1, bf, k_per_bf))
+        # P(count >= ceil(line + 0.5)) == P(count > line) for half-lines.
+        needed = int(line) + 1
+        total += p_o * float(binom.sf(needed - 1, bf, per_bf_rate))
     return total
+
+
+def p_strikeouts_over(line: float, mu_outs: float, k_per_bf: float,
+                      params: WorkloadParams) -> float:
+    """P(K > line): Binomial(BF(outs), k_rate) mixed over the outs distribution."""
+    return p_count_over(line, mu_outs, k_per_bf, params)
+
+
+def p_walks_over(line: float, mu_outs: float, bb_per_bf: float,
+                 params: WorkloadParams) -> float:
+    """P(BB > line): Binomial(BF(outs), bb_rate) mixed over the outs distribution."""
+    return p_count_over(line, mu_outs, bb_per_bf, params)
 
 
 # ── fitting helpers (used by the eval harness / refresh wiring) ───────────────
@@ -175,15 +215,19 @@ def compute_starter_workload(
     outs_history: list[int],
     kbf_history: list[tuple[int, int]],
     params: WorkloadParams,
+    bbbf_history: list[tuple[int, int]] | None = None,
 ) -> dict:
     """Bundle the workload model's outputs for one starter into a JSON-ready dict.
 
-    Histories are most-recent-first. Returns mu_outs, the blended per-BF K rate,
-    P(outs > line) for each WORKLOAD_OUTS_LINES, P(K > line) for each
-    WORKLOAD_K_LINES, and the sim-clamped starter innings.
+    Histories are most-recent-first. Returns mu_outs, the blended per-BF K and walk
+    rates, P(outs > line) for each WORKLOAD_OUTS_LINES, P(K > line) for each
+    WORKLOAD_K_LINES, P(BB > line) for each WORKLOAD_BB_LINES, and the sim-clamped
+    starter innings. `bbbf_history` is (walks, batters_faced) per start; when absent the
+    walk rate falls to the league prior (an empty history regresses fully to league).
     """
     mu = expected_outs(outs_history, params.league_mean_outs)
     kr = k_rate_blend(kbf_history, params.league_k_per_bf)
+    br = bb_rate_blend(bbbf_history or [], params.league_bb_per_bf)
     innings = max(
         WORKLOAD_SIM_MIN_INNINGS,
         min(WORKLOAD_SIM_MAX_INNINGS, int(round(mu / 3.0))),
@@ -191,7 +235,9 @@ def compute_starter_workload(
     return {
         "mu_outs": round(mu, 2),
         "k_rate": round(kr, 4),
+        "bb_rate": round(br, 4),
         "innings": innings,
         "p_outs": {f"{L}": round(p_outs_over(L, mu, params), 4) for L in WORKLOAD_OUTS_LINES},
         "p_k": {f"{L}": round(p_strikeouts_over(L, mu, kr, params), 4) for L in WORKLOAD_K_LINES},
+        "p_bb": {f"{L}": round(p_walks_over(L, mu, br, params), 4) for L in WORKLOAD_BB_LINES},
     }

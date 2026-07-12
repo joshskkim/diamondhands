@@ -121,9 +121,10 @@ public class PropBoardRepository {
         SELECT pp.game_id, at2.abbreviation || ' @ ' || ht.abbreviation AS matchup,
                pp.pitcher_id, p.full_name, t.abbreviation AS team,
                opp.abbreviation AS opponent,
-               pp.expected_k, pp.expected_outs, pp.expected_ip,
+               pp.expected_k, pp.expected_outs, pp.expected_ip, pp.expected_bb,
                pp.workload->'p_k'    AS workload_p_k,
                pp.workload->'p_outs' AS workload_p_outs,
+               pp.workload->'p_bb'   AS workload_p_bb,
                spp.n_sims AS spp_n_sims,
                spp.expected_hits AS spp_hits, spp.expected_er AS spp_er,
                spp.hits_hist, spp.er_hist,
@@ -274,7 +275,9 @@ public class PropBoardRepository {
             rs.getInt("pitcher_id"), rs.getString("full_name"),
             rs.getString("team"), rs.getString("opponent"),
             dbl(rs, "expected_k"), dbl(rs, "expected_outs"), dbl(rs, "expected_ip"),
+            dbl(rs, "expected_bb"),
             toLadder(rs.getString("workload_p_k")), toLadder(rs.getString("workload_p_outs")),
+            toLadder(rs.getString("workload_p_bb")),
             (Integer) rs.getObject("spp_n_sims"),
             dbl(rs, "spp_hits"), dbl(rs, "spp_er"),
             toIntArray(rs.getArray("hits_hist")), toIntArray(rs.getArray("er_hist")),
@@ -437,11 +440,11 @@ public class PropBoardRepository {
     public record PitcherRow(
         long gameId, String matchup,
         int pitcherId, String pitcher, String team, String opponent,
-        Double expectedK, Double expectedOuts, Double expectedIp,
+        Double expectedK, Double expectedOuts, Double expectedIp, Double expectedBb,
         // Full workload threshold ladders keyed by line ("5.5" → P(over)); null when the
         // pitcher has no workload row. Priced (and interpolated) at any book line in range
-        // by PropDistribution.ladderProb.
-        Map<String, Double> pK, Map<String, Double> pOuts,
+        // by PropDistribution.ladderProb. pBb is walks allowed (Binomial(BF, bb_rate)).
+        Map<String, Double> pK, Map<String, Double> pOuts, Map<String, Double> pBb,
         // Game-simulator hits-allowed / earned-runs distributions (null when the game
         // had no sim row — e.g. no confirmed lineups). nSims is the histogram denominator.
         Integer nSims, Double expectedHits, Double expectedEr, int[] hitsHist, int[] erHist,

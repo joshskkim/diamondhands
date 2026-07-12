@@ -53,28 +53,34 @@ class OddsServiceTest {
     /** A model row with nothing projected — the shape a scratched player produces. */
     private static PropModelRow emptyModel() {
         return new PropModelRow(null, null, null, null,
-            null, new int[0], new int[0], null, null, null, new int[0], new int[0]);
+            null, new int[0], new int[0], null, null, null, null, new int[0], new int[0]);
     }
 
     private static PropModelRow batterModel(Double pHit1, Double pHr, Double pBb1) {
         return new PropModelRow(pHit1, null, pHr, pBb1,
-            null, new int[0], new int[0], null, null, null, new int[0], new int[0]);
+            null, new int[0], new int[0], null, null, null, null, new int[0], new int[0]);
     }
 
     /** 100 sims: `hist[i]` = sims in which the player recorded exactly i. */
     private static PropModelRow simBatterModel(int[] tbHist, int[] hrrHist) {
         return new PropModelRow(null, null, null, null,
-            100, tbHist, hrrHist, null, null, null, new int[0], new int[0]);
+            100, tbHist, hrrHist, null, null, null, null, new int[0], new int[0]);
     }
 
     private static PropModelRow pitcherModel(Map<String, Double> pK, Map<String, Double> pOuts) {
         return new PropModelRow(null, null, null, null,
-            null, new int[0], new int[0], pK, pOuts, null, new int[0], new int[0]);
+            null, new int[0], new int[0], pK, pOuts, null, null, new int[0], new int[0]);
+    }
+
+    /** A starter's walks-allowed workload ladder (priced like K/outs). */
+    private static PropModelRow walksPitcherModel(Map<String, Double> pBb) {
+        return new PropModelRow(null, null, null, null,
+            null, new int[0], new int[0], null, null, pBb, null, new int[0], new int[0]);
     }
 
     private static PropModelRow simPitcherModel(int[] hitsHist, int[] erHist) {
         return new PropModelRow(null, null, null, null,
-            null, new int[0], new int[0], null, null, 100, hitsHist, erHist);
+            null, new int[0], new int[0], null, null, null, 100, hitsHist, erHist);
     }
 
     private static PropOddRow prop(String market, String side, double line, PropModelRow model) {
@@ -164,6 +170,16 @@ class OddsServiceTest {
     }
 
     @Test
+    void pitcherWalksPricesOffTheWorkloadLadder() {
+        // Walks allowed read P(over) off the same workload ladder as Ks/outs.
+        Map<String, Double> pBb = Map.of("1.5", 0.55, "2.5", 0.28);
+        assertThat(overProb(playsFor("pitcher_walks", 1.5, walksPitcherModel(pBb))))
+            .isCloseTo(0.55, org.assertj.core.data.Offset.offset(EPS));
+        // A line off the materialized grid can't be priced — no play, not a 0%.
+        assertThat(playsFor("pitcher_walks", 4.5, walksPitcherModel(pBb))).isEmpty();
+    }
+
+    @Test
     void pitcherSimMarketsPriceOffHistograms() {
         // 100 sims: 50 with <=4 hits, 30 with 5, 20 with 6. P(over 4.5) = 50/100.
         int[] hits = {10, 10, 10, 10, 10, 30, 20};
@@ -197,7 +213,7 @@ class OddsServiceTest {
             100, new ClearRates(null, null, null, null, null, null,
                                 0.42, null, null, null, null, null, 60, 0)));
         PropModelRow twoHits = new PropModelRow(0.70, 0.30, null, null,
-            null, new int[0], new int[0], null, null, null, new int[0], new int[0]);
+            null, new int[0], new int[0], null, null, null, null, new int[0], new int[0]);
 
         assertThat(overProb(playsFor("hit", 1.5, twoHits)))
             .isCloseTo(0.30, org.assertj.core.data.Offset.offset(EPS));

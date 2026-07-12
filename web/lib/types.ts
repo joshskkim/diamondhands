@@ -511,7 +511,7 @@ export interface PitcherRunnerUp {
  * two-way line does, so `rankedBy` is always 'edge'.
  */
 export interface PitcherPropPick {
-  /** 'pitcher_k' | 'pitcher_outs' | 'pitcher_hits_allowed' | 'pitcher_earned_runs' */
+  /** 'pitcher_k' | 'pitcher_outs' | 'pitcher_walks' | 'pitcher_hits_allowed' | 'pitcher_earned_runs' */
   market: string
   gameId: number
   matchup: string
@@ -793,6 +793,7 @@ export interface PitcherResult {
   outs: number | null
   hitsAllowed: number | null
   earnedRuns: number | null
+  walks: number | null
 }
 
 /** GET /api/results/players — actual per-player results for a slate. */

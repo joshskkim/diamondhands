@@ -5,12 +5,14 @@ import unittest
 
 from ingester.projection.workload import (
     WorkloadParams,
+    bb_rate_blend,
     expected_outs,
     fit_bf_given_outs,
     k_rate_blend,
     outs_distribution,
     p_outs_over,
     p_strikeouts_over,
+    p_walks_over,
     walk_forward_residuals,
     weighted_mean,
 )
@@ -18,6 +20,7 @@ from ingester.projection.workload import (
 PARAMS = WorkloadParams(
     league_mean_outs=15.5,
     league_k_per_bf=0.22,
+    league_bb_per_bf=0.08,
     residuals=(-6.0, -3.0, 0.0, 0.0, 3.0, 6.0),
     bf_intercept=4.0,
     bf_slope=1.3,
@@ -84,6 +87,30 @@ class TestStrikeouts(unittest.TestCase):
         self.assertGreater(deep, shallow)
 
 
+class TestWalks(unittest.TestCase):
+    """Walks share the K ladder's shape (Binomial(BF, rate) over the outs dist), so these
+    mirror TestStrikeouts with the walk rate/lines."""
+
+    def test_bb_rate_blend_thin_history_near_league(self):
+        self.assertAlmostEqual(bb_rate_blend([], 0.08), 0.08, places=6)
+        # 40 BF of wild work only nudges off league with the phantom prior.
+        blended = bb_rate_blend([(6, 40)], 0.08)
+        self.assertGreater(blended, 0.08)
+        self.assertLess(blended, 0.15)
+
+    def test_bb_blowup_start_weighs_by_bf(self):
+        # (0 BB, 0 BF) entries are ignored entirely.
+        self.assertAlmostEqual(bb_rate_blend([(0, 0)], 0.08), 0.08, places=6)
+
+    def test_p_walks_monotone_in_rate_and_depth(self):
+        lo = p_walks_over(1.5, 16.0, 0.06, PARAMS)
+        hi = p_walks_over(1.5, 16.0, 0.12, PARAMS)
+        self.assertGreater(hi, lo)
+        shallow = p_walks_over(1.5, 13.0, 0.09, PARAMS)
+        deep = p_walks_over(1.5, 19.0, 0.09, PARAMS)
+        self.assertGreater(deep, shallow)
+
+
 class TestFitting(unittest.TestCase):
     def test_bf_fit_recovers_line(self):
         pairs = [(o, int(round(4 + 1.3 * o))) for o in range(6, 28, 3)]
@@ -103,15 +130,18 @@ class TestComputeStarterWorkload(unittest.TestCase):
     def test_bundle_shape_and_innings_clamp(self):
         from ingester.projection.workload import (
             compute_starter_workload, WORKLOAD_OUTS_LINES, WORKLOAD_K_LINES,
-            WORKLOAD_SIM_MIN_INNINGS, WORKLOAD_SIM_MAX_INNINGS,
+            WORKLOAD_BB_LINES, WORKLOAD_SIM_MIN_INNINGS, WORKLOAD_SIM_MAX_INNINGS,
         )
-        wl = compute_starter_workload([18, 17, 19], [(7, 24), (6, 22), (8, 25)], PARAMS)
+        wl = compute_starter_workload(
+            [18, 17, 19], [(7, 24), (6, 22), (8, 25)], PARAMS,
+            [(2, 24), (3, 22), (1, 25)])
         self.assertIn("mu_outs", wl)
         self.assertEqual(set(wl["p_outs"]), {f"{L}" for L in WORKLOAD_OUTS_LINES})
         self.assertEqual(set(wl["p_k"]), {f"{L}" for L in WORKLOAD_K_LINES})
+        self.assertEqual(set(wl["p_bb"]), {f"{L}" for L in WORKLOAD_BB_LINES})
         self.assertTrue(WORKLOAD_SIM_MIN_INNINGS <= wl["innings"] <= WORKLOAD_SIM_MAX_INNINGS)
         # All probabilities in [0,1].
-        for p in list(wl["p_outs"].values()) + list(wl["p_k"].values()):
+        for p in list(wl["p_outs"].values()) + list(wl["p_k"].values()) + list(wl["p_bb"].values()):
             self.assertGreaterEqual(p, 0.0)
             self.assertLessEqual(p, 1.0)
 
@@ -128,14 +158,17 @@ class TestComputeStarterWorkload(unittest.TestCase):
         # not just mu — is usable: populated K/outs ladders in [0,1] and a clamped innings.
         from ingester.projection.workload import (
             compute_starter_workload, WORKLOAD_OUTS_LINES, WORKLOAD_K_LINES,
-            WORKLOAD_SIM_MIN_INNINGS, WORKLOAD_SIM_MAX_INNINGS,
+            WORKLOAD_BB_LINES, WORKLOAD_SIM_MIN_INNINGS, WORKLOAD_SIM_MAX_INNINGS,
         )
         wl = compute_starter_workload([], [], PARAMS)
         self.assertAlmostEqual(wl["mu_outs"], PARAMS.league_mean_outs, places=2)
+        # No walk history passed → the walk rate regresses fully to the league prior.
+        self.assertAlmostEqual(wl["bb_rate"], PARAMS.league_bb_per_bf, places=4)
         self.assertEqual(set(wl["p_outs"]), {f"{L}" for L in WORKLOAD_OUTS_LINES})
         self.assertEqual(set(wl["p_k"]), {f"{L}" for L in WORKLOAD_K_LINES})
+        self.assertEqual(set(wl["p_bb"]), {f"{L}" for L in WORKLOAD_BB_LINES})
         self.assertTrue(WORKLOAD_SIM_MIN_INNINGS <= wl["innings"] <= WORKLOAD_SIM_MAX_INNINGS)
-        for p in list(wl["p_outs"].values()) + list(wl["p_k"].values()):
+        for p in list(wl["p_outs"].values()) + list(wl["p_k"].values()) + list(wl["p_bb"].values()):
             self.assertGreaterEqual(p, 0.0)
             self.assertLessEqual(p, 1.0)
 
@@ -153,18 +186,31 @@ class TestLineGrid(unittest.TestCase):
         for line in (3.5, 4.5, 5.5, 6.5, 7.5, 9.5):
             self.assertIn(f"{line}", wl["p_k"])
 
+    def test_grid_covers_quoted_walk_lines(self):
+        from ingester.projection.workload import compute_starter_workload
+        wl = compute_starter_workload([18, 17, 19], [(7, 24)] * 3, PARAMS, [(2, 24)] * 3)
+        # Observed in player_prop_odds: pitcher walk lines cluster at 1.5–2.5.
+        for line in (1.5, 2.5):
+            self.assertIn(f"{line}", wl["p_bb"])
+
     def test_keys_are_plain_half_line_strings(self):
         # The API looks these up by a normalized line key ("15.5"), so no "15.50"/"15".
-        from ingester.projection.workload import WORKLOAD_K_LINES, WORKLOAD_OUTS_LINES
-        for line in (*WORKLOAD_OUTS_LINES, *WORKLOAD_K_LINES):
+        from ingester.projection.workload import (
+            WORKLOAD_BB_LINES, WORKLOAD_K_LINES, WORKLOAD_OUTS_LINES,
+        )
+        for line in (*WORKLOAD_OUTS_LINES, *WORKLOAD_K_LINES, *WORKLOAD_BB_LINES):
             self.assertRegex(f"{line}", r"^\d+\.5$")
 
     def test_p_over_decreases_across_the_grid(self):
         from ingester.projection.workload import (
-            WORKLOAD_K_LINES, WORKLOAD_OUTS_LINES, compute_starter_workload,
+            WORKLOAD_BB_LINES, WORKLOAD_K_LINES, WORKLOAD_OUTS_LINES, compute_starter_workload,
         )
-        wl = compute_starter_workload([18, 17, 19], [(7, 24)] * 3, PARAMS)
-        for lines, key in ((WORKLOAD_OUTS_LINES, "p_outs"), (WORKLOAD_K_LINES, "p_k")):
+        wl = compute_starter_workload([18, 17, 19], [(7, 24)] * 3, PARAMS, [(2, 24)] * 3)
+        for lines, key in (
+            (WORKLOAD_OUTS_LINES, "p_outs"),
+            (WORKLOAD_K_LINES, "p_k"),
+            (WORKLOAD_BB_LINES, "p_bb"),
+        ):
             probs = [wl[key][f"{L}"] for L in sorted(lines)]
             for lo, hi in zip(probs, probs[1:]):
                 self.assertGreaterEqual(lo, hi)
