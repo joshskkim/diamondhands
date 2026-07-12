@@ -55,7 +55,7 @@ public class PitchRepository {
               WHERE player_id = ? AND vs_handedness = ? AND as_of_date <= ?
               ORDER BY as_of_date DESC, season DESC LIMIT 1
           )
-        ORDER BY a.usage_rate DESC
+        ORDER BY a.usage_rate DESC, a.pitch_type
         """;
 
     public List<PitchArsenalDto> arsenal(int pitcherId, String pitcherHand, String batterHand, LocalDate asOf) {
@@ -130,7 +130,7 @@ public class PitchRepository {
         JOIN ph ON ph.player_id = a.player_id
         LEFT JOIN pitch_type_league_baselines b
           ON b.season = a.season AND b.pitch_type = a.pitch_type AND b.vs_handedness = ph.pitcher_hand
-        ORDER BY a.player_id, a.vs_handedness, a.usage_rate DESC
+        ORDER BY a.player_id, a.vs_handedness, a.usage_rate DESC, a.pitch_type
         """;
 
     /** Arsenal per (pitcherId, batterHand), ordered by usage desc — keyed "pitcherId|batterHand".

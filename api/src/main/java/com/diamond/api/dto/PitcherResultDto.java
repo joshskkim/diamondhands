@@ -7,5 +7,6 @@ public record PitcherResultDto(
     Integer strikeouts,
     Integer outs,
     Integer hitsAllowed,
-    Integer earnedRuns
+    Integer earnedRuns,
+    Integer walks
 ) {}

@@ -4,7 +4,7 @@ import java.util.List;
 
 /**
  * The headline starting pitcher for one pitcher-prop market (strikeouts, outs,
- * hits allowed, earned runs), ranked by MODEL-VS-LINE EDGE: |model P(over) −
+ * walks allowed, hits allowed, earned runs), ranked by MODEL-VS-LINE EDGE: |model P(over) −
  * de-vigged book P(over)| at the pitcher's consensus line, with the recommended
  * side wherever the edge points ({@code rankedBy} = "edge"). A market with no
  * beatable two-way line produces no card at all, so a card is always an edge pick.
@@ -14,7 +14,7 @@ import java.util.List;
  * Odds fields are the best cached price for the recommended side.
  */
 public record PitcherPropPickDto(
-    String market,           // "pitcher_k" | "pitcher_outs" | "pitcher_hits_allowed" | "pitcher_earned_runs"
+    String market,           // "pitcher_k" | "pitcher_outs" | "pitcher_walks" | "pitcher_hits_allowed" | "pitcher_earned_runs"
     long gameId,
     String matchup,
     int pitcherId,

@@ -69,6 +69,7 @@ PROP_MARKETS = {
     "pitcher_outs": "pitcher_outs",
     "pitcher_hits_allowed": "pitcher_hits_allowed",
     "pitcher_earned_runs": "pitcher_earned_runs",
+    "pitcher_walks": "pitcher_walks",
 }
 
 _FIXTURES = Path(__file__).parent / "fixtures"
