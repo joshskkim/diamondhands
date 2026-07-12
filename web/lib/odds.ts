@@ -50,6 +50,7 @@ export const MARKET_LABEL: Record<string, string> = {
   hrr: 'H+R+RBI',
   pitcher_k: 'Strikeouts',
   pitcher_outs: 'Outs',
+  pitcher_walks: 'Walks allowed',
   pitcher_hits_allowed: 'Hits allowed',
   pitcher_earned_runs: 'Earned runs',
 }
@@ -60,6 +61,7 @@ export const BATTER_PROP_MARKETS = ['hit', 'hr', 'tb', 'hrr', 'bb'] as const
 export const PITCHER_PROP_MARKETS = [
   'pitcher_k',
   'pitcher_outs',
+  'pitcher_walks',
   'pitcher_hits_allowed',
   'pitcher_earned_runs',
 ] as const

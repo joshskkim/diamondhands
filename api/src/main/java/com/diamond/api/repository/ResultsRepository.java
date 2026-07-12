@@ -26,7 +26,7 @@ public class ResultsRepository {
         """;
 
     private static final String PITCHERS_SQL = """
-        SELECT player_id, game_id, strikeouts, outs, hits_allowed, earned_runs
+        SELECT player_id, game_id, strikeouts, outs, hits_allowed, earned_runs, walks
         FROM pitcher_starts
         WHERE game_date = ?
         """;
@@ -41,7 +41,8 @@ public class ResultsRepository {
         """;
 
     private static final String LIVE_PITCHERS_SQL = """
-        SELECT player_id, game_id, pitcher_strikeouts AS strikeouts, outs, hits_allowed, earned_runs
+        SELECT player_id, game_id, pitcher_strikeouts AS strikeouts, outs, hits_allowed,
+               earned_runs, pitcher_walks AS walks
         FROM player_game_live
         WHERE game_date = ? AND outs IS NOT NULL
         """;
@@ -89,7 +90,8 @@ public class ResultsRepository {
             nullableInt(rs, "strikeouts"),
             nullableInt(rs, "outs"),
             nullableInt(rs, "hits_allowed"),
-            nullableInt(rs, "earned_runs"));
+            nullableInt(rs, "earned_runs"),
+            nullableInt(rs, "walks"));
     }
 
     private static Integer nullableInt(ResultSet rs, String col) throws SQLException {

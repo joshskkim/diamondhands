@@ -253,6 +253,31 @@ class PropBoardServiceTest {
     }
 
     @Test
+    void board_pitcherWalksCard_edgeRankedOffWorkloadLadder() {
+        // Walks allowed price off the same workload ladder as Ks. The ace's model
+        // P(over 1.5 BB)=0.55 vs a de-vigged 0.50 → 5pt over edge → an over card at 1.5.
+        LocalDate date = LocalDate.of(2026, 6, 18);
+        PropBoardRepository repo = mockRepo(date);
+        when(repo.findPitcherRows(date)).thenReturn(List.of(pitcherRow()));
+        when(repo.findPitcherMarketQuotes(date, "pitcher_walks")).thenReturn(Map.of(
+            new PropBoardRepository.PitcherQuoteKey(1L, 55),
+            new PropBoardRepository.PitcherQuotes(1.5, 0.50, 0.50,
+                new PropBoardRepository.PitcherPrice(1.5, "fanduel", 100, 2.0),
+                new PropBoardRepository.PitcherPrice(1.5, "fanduel", -120, 1.83))));
+
+        PropBoardResponse resp = new PropBoardService(repo, clearRates).board(date);
+
+        PitcherPropPickDto bb = resp.pitcherPicks().stream()
+            .filter(p -> p.market().equals("pitcher_walks")).findFirst().orElseThrow();
+        assertThat(bb.rankedBy()).isEqualTo("edge");
+        assertThat(bb.bestSide()).isEqualTo("over");
+        assertThat(bb.bestLine()).isEqualTo(1.5);
+        assertThat(bb.bestProb()).isEqualTo(0.55);        // model P(over 1.5 BB)
+        assertThat(bb.edge()).isEqualTo(0.05);            // |0.55 − 0.50|
+        assertThat(bb.expectedValue()).isEqualTo(1.8);    // headline = expectedBb
+    }
+
+    @Test
     void board_omitsPitcherCard_whenBookLineOffLadder() {
         // A 3.5 K line below the workload ladder's range → the model can't price it → no
         // edge candidate → no card at all (not a projection-ranked pick).
@@ -332,8 +357,8 @@ class PropBoardServiceTest {
         return new PitcherRow(
             3L, "AWY @ HOM",
             57, "No Workload", "HOM", "AWY",
-            6.0, 16.0, 5.5,
-            null, null,              // p_k / p_outs ladders null (workload never computed)
+            6.0, 16.0, 5.5, 2.0,
+            null, null, null,        // p_k / p_outs / p_bb ladders null (workload never computed)
             null, null, null, new int[0], new int[0],  // no sim histograms
             0.25, 0.08, 0.32, 0.03, 0.22, 0.32,
             List.of(new PitcherPropPickDto.ArsenalPitch("FF", 0.50, 0.20, 94.0)));
@@ -383,9 +408,10 @@ class PropBoardServiceTest {
         return new PitcherRow(
             1L, "AWY @ HOM",
             55, "Ace Arm", "HOM", "AWY",
-            6.0, 16.0, 5.5,
+            6.0, 16.0, 5.5, 1.8,
             Map.of("4.5", 0.71, "5.5", 0.52, "6.5", 0.31),   // p_k ladder
             Map.of("14.5", 0.62, "17.5", 0.38),              // p_outs ladder
+            Map.of("1.5", 0.55, "2.5", 0.24),                // p_bb ladder
             null, null, null, new int[0], new int[0],
             0.28, 0.07, 0.30, 0.03, 0.24, 0.31,
             List.of(new PitcherPropPickDto.ArsenalPitch("SL", 0.38, 0.33, 86.2)));
@@ -396,9 +422,10 @@ class PropBoardServiceTest {
         return new PitcherRow(
             2L, "AWY @ HOM",
             56, "Soft Toss", "HOM", "AWY",
-            4.0, 14.0, 4.5,
+            4.0, 14.0, 4.5, 2.6,
             Map.of("4.5", 0.40, "5.5", 0.20, "6.5", 0.08),   // p_k ladder
             Map.of("14.5", 0.45, "17.5", 0.20),              // p_outs ladder
+            Map.of("1.5", 0.64, "2.5", 0.36),                // p_bb ladder
             null, null, null, new int[0], new int[0],
             0.18, 0.09, 0.34, 0.04, 0.20, 0.33,
             List.of(new PitcherPropPickDto.ArsenalPitch("CH", 0.30, 0.22, 82.0)));
