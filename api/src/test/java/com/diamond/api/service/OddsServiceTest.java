@@ -52,28 +52,35 @@ class OddsServiceTest {
 
     /** A model row with nothing projected — the shape a scratched player produces. */
     private static PropModelRow emptyModel() {
-        return new PropModelRow(null, null, null, null,
+        return new PropModelRow(null, null, null, null, null,
             null, new int[0], new int[0], null, null, null, new int[0], new int[0]);
     }
 
-    private static PropModelRow batterModel(Double pHit1, Double pHr, Double pBb1) {
-        return new PropModelRow(pHit1, null, pHr, pBb1,
+    /** A batter's SERVED hit prob — the pre-blended value the odds path reads for hit@0.5
+     *  (the engine already applied the clear-rate blend; the API must not re-blend it). */
+    private static PropModelRow hitModel(Double served) {
+        return new PropModelRow(null, served, null, null, null,
+            null, new int[0], new int[0], null, null, null, new int[0], new int[0]);
+    }
+
+    private static PropModelRow batterModel(Double pHr, Double pBb1) {
+        return new PropModelRow(null, null, null, pHr, pBb1,
             null, new int[0], new int[0], null, null, null, new int[0], new int[0]);
     }
 
     /** 100 sims: `hist[i]` = sims in which the player recorded exactly i. */
     private static PropModelRow simBatterModel(int[] tbHist, int[] hrrHist) {
-        return new PropModelRow(null, null, null, null,
+        return new PropModelRow(null, null, null, null, null,
             100, tbHist, hrrHist, null, null, null, new int[0], new int[0]);
     }
 
     private static PropModelRow pitcherModel(Map<String, Double> pK, Map<String, Double> pOuts) {
-        return new PropModelRow(null, null, null, null,
+        return new PropModelRow(null, null, null, null, null,
             null, new int[0], new int[0], pK, pOuts, null, new int[0], new int[0]);
     }
 
     private static PropModelRow simPitcherModel(int[] hitsHist, int[] erHist) {
-        return new PropModelRow(null, null, null, null,
+        return new PropModelRow(null, null, null, null, null,
             null, new int[0], new int[0], null, null, 100, hitsHist, erHist);
     }
 
@@ -100,20 +107,19 @@ class OddsServiceTest {
     // ── the degenerate-probability guard ─────────────────────────────────────
 
     @Test
-    void zeroProbBatter_doesNotSurfaceA100PercentUnder() {
-        List<BestPlayDto> plays = playsFor("hit", 0.5, batterModel(0.0, 0.03, null));
+    void zeroServedHit_doesNotSurfaceA100PercentUnder() {
+        // The engine writes NULL served for a degenerate batter, but defend at the API too:
+        // a served 0 must be dropped by sane(), not surface its phantom 100% under.
+        List<BestPlayDto> plays = playsFor("hit", 0.5, hitModel(0.0));
 
-        // The degenerate over (p=0) and its phantom 100% under are both dropped: no play
-        // for this player, and certainly none with a model probability of 1.0.
         assertThat(plays).noneMatch(p -> p.modelProb() >= 1.0 - 1e-9);
         assertThat(plays).allMatch(p -> p.playerId() == null || p.playerId() != 100);
     }
 
     @Test
-    void zeroProbIsDroppedBeforeTheBlendCanLaunderIt() {
-        // Regression: blending p=0 toward the 0.62 league hit rate yields ~0.18, which looks
-        // perfectly sane. The sentinel has to be caught on the RAW probability.
-        assertThat(playsFor("hit", 0.5, batterModel(0.0, null, null))).isEmpty();
+    void nullServedHit_yieldsNoPlay() {
+        // The engine's usual signal for "don't bet this batter's hit" — no served value.
+        assertThat(playsFor("hit", 0.5, hitModel(null))).isEmpty();
     }
 
     @Test
@@ -127,10 +133,11 @@ class OddsServiceTest {
 
     @Test
     void batterOccurrenceMarketsPriceAtTheirOwnLine() {
-        assertThat(overProb(playsFor("hr", 0.5, batterModel(null, 0.12, null)))).isNotNull();
-        assertThat(overProb(playsFor("bb", 0.5, batterModel(null, null, 0.28)))).isNotNull();
+        assertThat(overProb(playsFor("hit", 0.5, hitModel(0.55)))).isNotNull();
+        assertThat(overProb(playsFor("hr", 0.5, batterModel(0.12, null)))).isNotNull();
+        assertThat(overProb(playsFor("bb", 0.5, batterModel(null, 0.28)))).isNotNull();
         // hr is a 1+ market: a book quoting 1.5 gets no model rather than a wrong one.
-        assertThat(playsFor("hr", 1.5, batterModel(null, 0.12, null))).isEmpty();
+        assertThat(playsFor("hr", 1.5, batterModel(0.12, null))).isEmpty();
     }
 
     @Test
@@ -178,25 +185,36 @@ class OddsServiceTest {
 
     @Test
     void batterMarketBlendsTowardTheDemonstratedClearRate() {
-        // A 60-game .42 hitter, model says 0.70. The blend pulls it toward the empirical
-        // rate: n=60, PRIOR_N=25, SHRINK_K=60 → empirical = (60*.42 + 25*.62)/85 = .4788;
-        // w = 85/145 = .5862 → .5862*.4788 + .4138*.70 = .5703.
+        // HR still blends at serve time (only hit moved to the engine). A 60-game .20-HR
+        // hitter, model 0.30: empirical = (60*.20 + 25*.15)/85 = .18529; w = 85/145 = .58621
+        // → .58621*.18529 + .41379*.30 = .23278.
         when(clearRates.findClearRatesBatch(any(), any())).thenReturn(Map.of(
             100, new ClearRates(null, null, null, null, null, null,
-                                0.42, null, null, null, null, null, 60, 0)));
+                                null, 0.20, null, null, null, null, 60, 0)));
 
-        assertThat(overProb(playsFor("hit", 0.5, batterModel(0.70, null, null))))
-            .isCloseTo(0.5703, org.assertj.core.data.Offset.offset(1e-4));
+        assertThat(overProb(playsFor("hr", 0.5, batterModel(0.30, null))))
+            .isCloseTo(0.23278, org.assertj.core.data.Offset.offset(1e-4));
     }
 
     @Test
-    void offCanonicalLine_isNotBlended() {
-        // The hit clear rate measures 1+ hits. A 2+ hit quote is a different event, so the
-        // model's own probability passes through untouched.
+    void servedHitIsNotReblended() {
+        // The engine already blended hit into p_hit_1plus_served; the API must read it as-is,
+        // even with a (batter-shaped) clear rate present — no double shrinkage.
         when(clearRates.findClearRatesBatch(any(), any())).thenReturn(Map.of(
             100, new ClearRates(null, null, null, null, null, null,
                                 0.42, null, null, null, null, null, 60, 0)));
-        PropModelRow twoHits = new PropModelRow(0.70, 0.30, null, null,
+
+        assertThat(overProb(playsFor("hit", 0.5, hitModel(0.55))))
+            .isCloseTo(0.55, org.assertj.core.data.Offset.offset(EPS));
+    }
+
+    @Test
+    void hitAtOneAndAHalfUsesRawSecondHitProb() {
+        // hit 1.5 reads the raw p_hit_2plus (never blended, never served) — unchanged.
+        when(clearRates.findClearRatesBatch(any(), any())).thenReturn(Map.of(
+            100, new ClearRates(null, null, null, null, null, null,
+                                0.42, null, null, null, null, null, 60, 0)));
+        PropModelRow twoHits = new PropModelRow(null, null, 0.30, null, null,
             null, new int[0], new int[0], null, null, null, new int[0], new int[0]);
 
         assertThat(overProb(playsFor("hit", 1.5, twoHits)))
@@ -217,7 +235,7 @@ class OddsServiceTest {
 
     @Test
     void healthyProbBatter_stillSurfacesBothSides() {
-        List<BestPlayDto> plays = playsFor("hit", 0.5, batterModel(0.6, null, null));
+        List<BestPlayDto> plays = playsFor("hit", 0.5, hitModel(0.6));
 
         // A real projection is unaffected by the guard; over + under still sum to 1.
         double over = plays.stream().filter(p -> "over".equals(p.side()))

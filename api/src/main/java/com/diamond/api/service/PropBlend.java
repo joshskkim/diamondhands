@@ -38,11 +38,15 @@ final class PropBlend {
     /** The one line a market's clear rate measures, and the league-average rate at it —
      *  the prior a thin empirical sample regresses toward. tb/hrr measured over 2026
      *  player_game_stats (share of starter games with 2+ total bases / 2+ hits+runs+RBI);
-     *  hit/hr/bb are the long-standing 1+ rates. Mirrors ClearRateRepository's SQL. */
+     *  hr/bb are the long-standing 1+ rates. Mirrors ClearRateRepository's SQL.
+     *
+     *  hit is NOT here: the projection engine now pre-blends it (p_hit_1plus_served) — a
+     *  held-out backtest showed blend-alone beats stacking the engine's blend with a
+     *  serve-time one — so OddsService reads the served column and this class leaves hit
+     *  untouched. */
     private record Canonical(double line, double leagueRate) {}
 
     private static final Map<String, Canonical> CANONICAL = Map.of(
-        "hit", new Canonical(0.5, 0.62),
         "hr",  new Canonical(0.5, 0.15),
         "bb",  new Canonical(0.5, 0.30),
         "tb",  new Canonical(1.5, 0.31),
