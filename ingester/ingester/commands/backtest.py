@@ -21,6 +21,7 @@ from ingester.metrics import (
     baseline_brier,
     brier_score,
     calibration_buckets,
+    expected_calibration_error,
     log_loss,
     mae,
     mae_per_game,
@@ -29,6 +30,7 @@ from ingester.metrics import (
     top_k_lift,
 )
 from ingester.projection.constants import LEAGUE_RUNS_PER_GAME_BASE, MODEL_VERSION
+from ingester.projection.prop_blend import blend_market
 from ingester.projection.runner import run_backtest_projections
 
 
@@ -174,19 +176,60 @@ class _Outcomes:
     # prior-season batted-ball profile. Aligned 1:1 to p_hr/a_hr. Keyed by feature
     # name: barrel, pulled_air, sweet_spot, p90_ev. The baselines the model must beat.
     hr_rankers: dict[str, list[float | None]]
+    # As-of-date season clear rates for the empirical-shrinkage blend (--clear-rate-blend),
+    # aligned 1:1 to p_hit1/p_hr. Leak-free: each is the player's rate over his same-season
+    # games STRICTLY BEFORE this one (None / 0 for his first game). All None when the flag
+    # is off. n_season backs both markets (hit and hr are boxscore-complete columns).
+    hit_season: list[float | None]
+    hr_season: list[float | None]
+    n_season: list[int | None]
 
 
 def _load_outcomes(
     conn: psycopg.Connection,
     run_id: int,
     want_csv: bool = False,
+    want_clear_rates: bool = False,
 ) -> _Outcomes:
     """
     Join backtest_projections to player_game_stats for the given run.
     Only rows with non-NULL predictions AND matching player_game_stats are included.
+
+    When want_clear_rates, also attach each hitter's as-of-date season clear rate for hit
+    and hr (the empirical-shrinkage blend's input). It's computed with an expanding window
+    over player_game_stats that EXCLUDEs the current game's date group — the exact
+    `game_date < slate` boundary the live ClearRateRepository uses, so the backtest scores
+    the blend the site would actually have served. Gated behind the flag because the window
+    scans the whole table; a normal run selects NULLs and pays nothing.
     """
-    rows = conn.execute(
+    if want_clear_rates:
+        clear_rate_cte = """
+        WITH clear_rates AS (
+            SELECT player_id, game_id,
+                   COUNT(*)                  OVER w AS n_season,
+                   AVG((hits > 0)::int)      OVER w AS hit_season,
+                   AVG((home_runs > 0)::int) OVER w AS hr_season
+            FROM player_game_stats
+            WHERE plate_appearances > 0
+            WINDOW w AS (
+                PARTITION BY player_id, EXTRACT(YEAR FROM game_date)::int
+                ORDER BY game_date
+                RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE GROUP
+            )
+        )
         """
+        clear_rate_cols = "cr.hit_season, cr.hr_season, cr.n_season"
+        clear_rate_join = ("LEFT JOIN clear_rates cr "
+                           "ON cr.player_id = bp.player_id AND cr.game_id = bp.game_id")
+    else:
+        clear_rate_cte = ""
+        clear_rate_cols = ("NULL::float AS hit_season, NULL::float AS hr_season, "
+                           "NULL::int AS n_season")
+        clear_rate_join = ""
+
+    rows = conn.execute(
+        f"""
+        {clear_rate_cte}
         SELECT
             bp.p_hit_1plus, bp.p_hit_2plus, bp.p_hr, bp.p_k_1plus,
             bp.expected_hits,
@@ -200,7 +243,8 @@ def _load_outcomes(
             CASE WHEN pgs.strikeouts>= 1 THEN 1 ELSE 0 END,
             bp.sim_p_hit_1plus, bp.sim_p_hr, bp.sim_p_k_1plus,
             bbb.barrel_pct, bbb.pulled_air_pct, bbb.sweet_spot_pct, bbb.p90_ev_fbld,
-            bx.xhr_per_bb
+            bx.xhr_per_bb,
+            {clear_rate_cols}
         FROM backtest_projections bp
         JOIN games g ON g.id = bp.game_id
         JOIN player_game_stats pgs
@@ -217,6 +261,7 @@ def _load_outcomes(
         LEFT JOIN batter_xhr bx
             ON bx.player_id = bp.player_id
             AND bx.season = EXTRACT(YEAR FROM g.game_date)::int - 1
+        {clear_rate_join}
         WHERE bp.backtest_run_id = %s
           AND pgs.game_id IS NOT NULL
           AND bp.p_hit_1plus IS NOT NULL
@@ -239,6 +284,7 @@ def _load_outcomes(
         csv_rows=[],
         sim_hit1=[], sim_hr=[], sim_k=[],
         hr_rankers={"barrel": [], "pulled_air": [], "sweet_spot": [], "p90_ev": [], "xhr": []},
+        hit_season=[], hr_season=[], n_season=[],
     )
 
     for row in rows:
@@ -246,7 +292,8 @@ def _load_outcomes(
          exp_hits, game_id, player_id, game_date,
          actual_hits, act_h1, act_h2, act_hr, act_k,
          sim_h1, sim_hr, sim_k,
-         f_barrel, f_pull_air, f_sweet, f_p90, f_xhr) = row
+         f_barrel, f_pull_air, f_sweet, f_p90, f_xhr,
+         cr_hit_season, cr_hr_season, cr_n_season) = row
 
         out.p_hit1.append(float(pred_h1))
         out.p_hit2.append(float(pred_h2) if pred_h2 is not None else float(pred_h1))
@@ -264,6 +311,9 @@ def _load_outcomes(
         out.hr_rankers["sweet_spot"].append(float(f_sweet) if f_sweet is not None else None)
         out.hr_rankers["p90_ev"].append(float(f_p90) if f_p90 is not None else None)
         out.hr_rankers["xhr"].append(float(f_xhr) if f_xhr is not None else None)
+        out.hit_season.append(float(cr_hit_season) if cr_hit_season is not None else None)
+        out.hr_season.append(float(cr_hr_season) if cr_hr_season is not None else None)
+        out.n_season.append(int(cr_n_season) if cr_n_season is not None else None)
 
         gid = int(game_id)
         eh = float(exp_hits) if exp_hits is not None else 0.0
@@ -411,6 +461,78 @@ def _sweep_sim_weights(out: _Outcomes) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Clear-rate blend validation (--clear-rate-blend)
+# ---------------------------------------------------------------------------
+
+# A raw prob of (effectively) 0 or 1 is the "not really projected" sentinel — the serving
+# path drops it before the blend rather than regress it toward a base rate (see
+# OddsService.sane). Mirror that here so the blend is scored on the same population.
+_PROB_EPS = 1e-6
+
+
+def _report_clear_rate_blend(out: _Outcomes) -> None:
+    """A/B the empirical-shrinkage blend against the raw model on the two markets it both
+    transforms (at their canonical line) AND the harness scores: hit(>=1) and hr(>=1).
+
+    Unlike the sim-weight sweep there is no free parameter — SHRINK_K/PRIOR_N are fixed —
+    so this is a straight before/after, not an in-sample fit. The blend is a CALIBRATION
+    move, so the load-bearing metrics are log-loss and reliability (ECE + the top buckets
+    where the model is most overconfident), not the rank-blind AUC family."""
+    markets = [
+        ("hit", out.p_hit1, out.hit_season, out.a_hit1),
+        ("hr",  out.p_hr,   out.hr_season,  out.a_hr),
+    ]
+    n_with_rate = sum(1 for n in out.n_season if n)
+    print(f"\nClear-rate blend A/B ({sum(1 for n in out.n_season if n is not None):,} rows, "
+          f"{n_with_rate:,} with a prior-game rate; canonical line only):")
+    if not any(s is not None for s in out.n_season):
+        print("  (no clear rates loaded — this run wasn't scored with --clear-rate-blend)")
+        return
+
+    for name, raw, season, actual in markets:
+        # Blend at the canonical 0.5 line; keep the raw prob where it's the degenerate
+        # sentinel (blending it would launder a 0 into a plausible base rate).
+        blended = [
+            r if (r is None or r <= _PROB_EPS or r >= 1.0 - _PROB_EPS)
+            else blend_market(name, 0.5, r, s, n)
+            for r, s, n in zip(raw, season, out.n_season)
+        ]
+        b_raw, b_bl = brier_score(raw, actual), brier_score(blended, actual)
+        ll_raw, ll_bl = log_loss(raw, actual), log_loss(blended, actual)
+        cal_raw = calibration_buckets(raw, actual)
+        cal_bl = calibration_buckets(blended, actual)
+        ece_raw, ece_bl = expected_calibration_error(cal_raw), expected_calibration_error(cal_bl)
+
+        def _delta(before: float, after: float) -> str:
+            d = after - before
+            pct = (d / before * 100.0) if before else 0.0
+            flag = "better" if d < 0 else "worse" if d > 0 else "flat"
+            return f"{before:.5f} -> {after:.5f}  ({d:+.5f}, {pct:+.1f}%, {flag})"
+
+        print(f"\n  [{name}]  (lower is better for all three)")
+        print(f"    Brier    {_delta(b_raw, b_bl)}")
+        print(f"    log-loss {_delta(ll_raw, ll_bl)}")
+        print(f"    ECE      {_delta(ece_raw, ece_bl)}")
+        # The thesis is upper-bucket overconfidence, so show the top prediction buckets:
+        # predicted mean vs realized rate, before and after. The blend should pull an
+        # over-predicting bucket's mean down toward its realized rate.
+        # Buckets are per-prediction-range, so raw and blended don't share bins; index each
+        # by its [lo,hi) range and show the top raw buckets alongside the blended bucket at
+        # the same range (— when the blend emptied that range by pulling predictions out).
+        bl_by_range = {(b["lo"], b["hi"]): b for b in cal_bl}
+        print(f"    {'bucket':<12}{'raw: pred->act (n)':>24}{'blended: pred->act (n)':>26}")
+        for br in cal_raw[-3:]:
+            rng = f"{br['lo']:.1f}-{br['hi']:.1f}"
+            bb = bl_by_range.get((br["lo"], br["hi"]))
+            raw_cell = f"{br['predicted_mean']:.3f}->{br['actual_rate']:.3f} ({br['n']})"
+            bl_cell = (f"{bb['predicted_mean']:.3f}->{bb['actual_rate']:.3f} ({bb['n']})"
+                       if bb else "—")
+            print(f"    {rng:<12}{raw_cell:>24}{bl_cell:>26}")
+    print("\n  Calibration verdict is aggregate-safe (fixed constants, no fit); still worth "
+          "a held-out range before moving the blend into the projection engine.")
+
+
+# ---------------------------------------------------------------------------
 # Command entrypoint
 # ---------------------------------------------------------------------------
 
@@ -472,6 +594,12 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         model_version = f"{model_version}-teamdef"
         print("[backtest] Team defense: ON (leak-free xBA hit-suppression factor)")
 
+    clear_rate_blend = getattr(args, "clear_rate_blend", False)
+    if clear_rate_blend:
+        # Purely a scoring-time transform on the raw hit/hr probs — projection is unchanged,
+        # so this only loads clear rates and prints an A/B (no model_version suffix).
+        print("[backtest] Clear-rate blend: ON (A/B the empirical-shrinkage blend on hit/hr)")
+
     print(f"[backtest] Range {start} → {end}  |  Model {model_version}")
 
     conn = get_connection()
@@ -503,7 +631,7 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         print(f"[backtest] Projections done — {total_days} game-days projected")
 
         # Step c+d: load outcomes and compute metrics.
-        out = _load_outcomes(conn, run_id, want_csv=want_csv)
+        out = _load_outcomes(conn, run_id, want_csv=want_csv, want_clear_rates=clear_rate_blend)
         if not out.p_hit1:
             print(
                 "[backtest] WARN: No matched batter rows found. "
@@ -628,6 +756,10 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     # Sim-blend weight fitting (only when --sim-props captured the simulator's estimate).
     if sim_props:
         _sweep_sim_weights(out)
+
+    # Empirical-shrinkage blend A/B (scores the serving-layer PropBlend on hit/hr).
+    if clear_rate_blend:
+        _report_clear_rate_blend(out)
 
     # Step g: optional CSV.
     if want_csv and out.csv_rows:

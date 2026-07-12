@@ -520,6 +520,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Apply the leak-free opposing-team-defense hit-suppression factor "
              "(needs team_defense_daily; refresh-team-defense)",
     )
+    p_backtest.add_argument(
+        "--clear-rate-blend", action="store_true", default=False, dest="clear_rate_blend",
+        help="A/B the serving layer's empirical-shrinkage blend (PropBlend) on hit/hr: "
+             "score the raw model vs the clear-rate-blended prob (leak-free as-of-date "
+             "clear rates). Scoring-time only — projections unchanged",
+    )
 
     p_accuracy = sub.add_parser(
         "compute-accuracy",
