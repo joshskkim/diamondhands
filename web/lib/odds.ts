@@ -46,9 +46,23 @@ export const MARKET_LABEL: Record<string, string> = {
   hit: 'Hit',
   hr: 'Home run',
   bb: 'Walks',
+  tb: 'Total bases',
+  hrr: 'H+R+RBI',
   pitcher_k: 'Strikeouts',
   pitcher_outs: 'Outs',
+  pitcher_hits_allowed: 'Hits allowed',
+  pitcher_earned_runs: 'Earned runs',
 }
+
+/** Player-prop markets by the side of the ball they belong to, in display order.
+ *  Drives the game page's prop market selector. */
+export const BATTER_PROP_MARKETS = ['hit', 'hr', 'tb', 'hrr', 'bb'] as const
+export const PITCHER_PROP_MARKETS = [
+  'pitcher_k',
+  'pitcher_outs',
+  'pitcher_hits_allowed',
+  'pitcher_earned_runs',
+] as const
 
 /** "AWY @ HOM" → team abbr for a 'home'/'away' side token. */
 export function teamForSide(matchup: string, side: string): string {

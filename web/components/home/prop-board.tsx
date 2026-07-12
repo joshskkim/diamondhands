@@ -581,6 +581,14 @@ function BestPick({ pick, unit }: { pick: PitcherPropPick; unit: string }) {
         {side} {pick.bestLine} {unit}
       </span>
       <span className="font-mono tabular-nums text-amber-300">{pct(pick.bestProb)}</span>
+      {pick.edge != null && (
+        <span
+          title={`Model ${pct(pick.bestProb)} vs. the de-vigged book ${pct(pick.fairProb ?? 0)} on this side`}
+          className="font-mono tabular-nums text-xs font-semibold text-emerald-400"
+        >
+          +{(pick.edge * 100).toFixed(0)}% vs line
+        </span>
+      )}
       {hasEv && (
         <span className="ml-auto text-xs text-zinc-500">
           {formatAmerican(pick.priceAmerican as number)} {bookLabel(pick.bestBook)} ·{' '}
@@ -596,8 +604,8 @@ function BestPick({ pick, unit }: { pick: PitcherPropPick; unit: string }) {
 
 // Pitcher cards are AMBER (batter cards are cyan) so "whose prop is this" is never
 // ambiguous. The headline number is the projection (expected Ks/outs/hits/ER); the
-// Best pick row is the recommended side. In edge mode a chip shows the model-vs-line
-// gap that earned the card; in volume-fallback mode a muted badge flags the mode.
+// Best pick row is the recommended side with the model-vs-line edge that earned the
+// card. A card exists only when there's a beatable line, so every card is an edge pick.
 function PitcherCard({
   pick,
   outcome,
@@ -624,19 +632,12 @@ function PitcherCard({
         <span className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-amber-300 border-amber-400/40 bg-amber-500/10">
           {meta.chip}
         </span>
-        {pick.rankedBy === 'edge' && pick.edge != null ? (
+        {pick.edge != null && (
           <span
             title={`Model ${pct(pick.bestProb ?? 0)} vs. the de-vigged book ${pct(pick.fairProb ?? 0)} on this side`}
             className="text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border text-emerald-300 border-emerald-400/40 bg-emerald-500/10"
           >
             +{(pick.edge * 100).toFixed(0)}% vs line
-          </span>
-        ) : (
-          <span
-            title="No odds for this market today — ranked by projected volume instead of edge"
-            className="text-[10px] uppercase tracking-[0.12em] text-zinc-600"
-          >
-            Volume-ranked
           </span>
         )}
         {outcome && <OutcomeBadge outcome={outcome} iconOnly />}
@@ -683,7 +684,12 @@ function PitcherCard({
           name: ru.pitcher,
           team: ru.team,
           href: `/mlb/players/${ru.pitcherId}`,
-          value: `${ru.expectedValue.toFixed(1)} ${meta.unit}`,
+          // Same edge order as the headline — show each runner-up's side + disparity,
+          // not a projected-volume leaderboard.
+          value:
+            ru.edge != null
+              ? `${ru.bestSide === 'over' ? 'Over' : 'Under'} · +${(ru.edge * 100).toFixed(0)}%`
+              : `${ru.expectedValue.toFixed(1)} ${meta.unit}`,
         }))}
       />
     </div>
@@ -829,9 +835,7 @@ export function PropBoard() {
       {!isPending && !isError && data.pitcherPicks.length > 0 && (
         <div className="mt-6">
           <p className={cn(microLabel, 'mb-2')}>
-            {data.pitcherPicks.some((p) => p.rankedBy === 'edge')
-              ? 'Pitcher props — biggest edge between the model and the book line'
-              : 'Pitcher props — top starter by projected volume (no odds today)'}
+            Pitcher props — biggest edge between the model and the book line
           </p>
           <div
             className={cn(

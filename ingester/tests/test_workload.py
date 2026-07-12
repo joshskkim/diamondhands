@@ -99,10 +99,6 @@ class TestFitting(unittest.TestCase):
         self.assertAlmostEqual(res[1], 12 - expected_outs([18], 15.5), places=6)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestComputeStarterWorkload(unittest.TestCase):
     def test_bundle_shape_and_innings_clamp(self):
         from ingester.projection.workload import (
@@ -127,6 +123,52 @@ class TestComputeStarterWorkload(unittest.TestCase):
         self.assertGreaterEqual(deep["innings"], shallow["innings"])
 
     def test_empty_history_falls_to_league(self):
-        from ingester.projection.workload import compute_starter_workload
+        # runner.py computes a workload even for a starter with no recorded starts (relying
+        # on the league-prior fallback) so his props don't blank. Assert the full bundle —
+        # not just mu — is usable: populated K/outs ladders in [0,1] and a clamped innings.
+        from ingester.projection.workload import (
+            compute_starter_workload, WORKLOAD_OUTS_LINES, WORKLOAD_K_LINES,
+            WORKLOAD_SIM_MIN_INNINGS, WORKLOAD_SIM_MAX_INNINGS,
+        )
         wl = compute_starter_workload([], [], PARAMS)
         self.assertAlmostEqual(wl["mu_outs"], PARAMS.league_mean_outs, places=2)
+        self.assertEqual(set(wl["p_outs"]), {f"{L}" for L in WORKLOAD_OUTS_LINES})
+        self.assertEqual(set(wl["p_k"]), {f"{L}" for L in WORKLOAD_K_LINES})
+        self.assertTrue(WORKLOAD_SIM_MIN_INNINGS <= wl["innings"] <= WORKLOAD_SIM_MAX_INNINGS)
+        for p in list(wl["p_outs"].values()) + list(wl["p_k"].values()):
+            self.assertGreaterEqual(p, 0.0)
+            self.assertLessEqual(p, 1.0)
+
+
+class TestLineGrid(unittest.TestCase):
+    """The stored grid decides which book lines get a model probability at all — a line
+    off the grid is served as "no model". These pin the range books actually quote."""
+
+    def test_grid_covers_quoted_book_lines(self):
+        from ingester.projection.workload import compute_starter_workload
+        wl = compute_starter_workload([18, 17, 19], [(7, 24)] * 3, PARAMS)
+        # Observed in player_prop_odds: outs 12.5–18.5, K 3.5–9.5.
+        for line in (12.5, 13.5, 14.5, 15.5, 16.5, 17.5, 18.5):
+            self.assertIn(f"{line}", wl["p_outs"])
+        for line in (3.5, 4.5, 5.5, 6.5, 7.5, 9.5):
+            self.assertIn(f"{line}", wl["p_k"])
+
+    def test_keys_are_plain_half_line_strings(self):
+        # The API looks these up by a normalized line key ("15.5"), so no "15.50"/"15".
+        from ingester.projection.workload import WORKLOAD_K_LINES, WORKLOAD_OUTS_LINES
+        for line in (*WORKLOAD_OUTS_LINES, *WORKLOAD_K_LINES):
+            self.assertRegex(f"{line}", r"^\d+\.5$")
+
+    def test_p_over_decreases_across_the_grid(self):
+        from ingester.projection.workload import (
+            WORKLOAD_K_LINES, WORKLOAD_OUTS_LINES, compute_starter_workload,
+        )
+        wl = compute_starter_workload([18, 17, 19], [(7, 24)] * 3, PARAMS)
+        for lines, key in ((WORKLOAD_OUTS_LINES, "p_outs"), (WORKLOAD_K_LINES, "p_k")):
+            probs = [wl[key][f"{L}"] for L in sorted(lines)]
+            for lo, hi in zip(probs, probs[1:]):
+                self.assertGreaterEqual(lo, hi)
+
+
+if __name__ == "__main__":
+    unittest.main()

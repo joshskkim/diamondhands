@@ -7,11 +7,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.sql.Array;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,6 +27,7 @@ public class PropBoardRepository {
     private static final ObjectMapper ARSENAL_JSON = new ObjectMapper();
     private static final TypeReference<List<PitcherPropPickDto.ArsenalPitch>> ARSENAL_TYPE =
         new TypeReference<>() {};
+    private static final TypeReference<Map<String, Double>> LADDER_TYPE = new TypeReference<>() {};
 
     private final JdbcTemplate jdbc;
 
@@ -81,77 +80,6 @@ public class PropBoardRepository {
           AND %s
         """.formatted(GameStatus.livePredicate("g"));
 
-    // How often the player has cleared each card's line recently and on the season
-    // (0.5 occurrence lines for hr/bb; the 1.5 lines for total bases and H+R+RBI).
-    // L10 spans seasons on purpose (recent form early in the year); season is the
-    // current calendar year only. H+R+RBI aggregates additionally require runs/rbi
-    // non-null: those columns are boxscore-only (V69) and older rows predate the
-    // backfill — n_hrr_season keeps the blend's sample size honest for that market.
-    // rn tiebreaks on game_id: without it a doubleheader at the L10 boundary ranks
-    // nondeterministically, and the single/batch forms can disagree on which game
-    // falls inside the window (caught live by RepositoryBatchEquivalenceTest).
-    private static final String RATES_SQL = """
-        WITH logs AS (
-            SELECT hits, home_runs, strikeouts, walks, total_bases, runs, rbi, game_date,
-                   ROW_NUMBER() OVER (ORDER BY game_date DESC, game_id DESC) AS rn
-            FROM player_game_stats
-            WHERE player_id = ? AND game_date < ? AND plate_appearances > 0
-        )
-        SELECT
-            AVG((hits > 0)::int)        FILTER (WHERE rn <= 10) AS hit_l10,
-            AVG((home_runs > 0)::int)   FILTER (WHERE rn <= 10) AS hr_l10,
-            AVG((strikeouts > 0)::int)  FILTER (WHERE rn <= 10) AS k_l10,
-            AVG((walks > 0)::int)       FILTER (WHERE rn <= 10) AS bb_l10,
-            AVG((total_bases >= 2)::int) FILTER (WHERE rn <= 10) AS tb_l10,
-            AVG(((hits + runs + rbi) >= 2)::int)
-                FILTER (WHERE rn <= 10 AND runs IS NOT NULL AND rbi IS NOT NULL) AS hrr_l10,
-            AVG((hits > 0)::int)        FILTER (WHERE game_date >= ?) AS hit_season,
-            AVG((home_runs > 0)::int)   FILTER (WHERE game_date >= ?) AS hr_season,
-            AVG((strikeouts > 0)::int)  FILTER (WHERE game_date >= ?) AS k_season,
-            AVG((walks > 0)::int)       FILTER (WHERE game_date >= ?) AS bb_season,
-            AVG((total_bases >= 2)::int) FILTER (WHERE game_date >= ?) AS tb_season,
-            AVG(((hits + runs + rbi) >= 2)::int)
-                FILTER (WHERE game_date >= ? AND runs IS NOT NULL AND rbi IS NOT NULL) AS hrr_season,
-            COUNT(*)                    FILTER (WHERE game_date >= ?) AS n_season,
-            COUNT(*) FILTER (WHERE game_date >= ? AND runs IS NOT NULL AND rbi IS NOT NULL)
-                AS n_hrr_season
-        FROM logs
-        """;
-
-    // Batched form of RATES_SQL: clear rates for many players in one round-trip. Same
-    // window logic, but PARTITION BY player_id and GROUP BY player_id so a single query
-    // replaces the per-candidate N+1. Player ids are passed as a SQL array (= ANY(?)).
-    private static final String RATES_BATCH_SQL = """
-        WITH logs AS (
-            SELECT player_id, hits, home_runs, strikeouts, walks, total_bases, runs, rbi,
-                   game_date,
-                   ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY game_date DESC, game_id DESC) AS rn
-            FROM player_game_stats
-            WHERE player_id = ANY(?) AND game_date < ? AND plate_appearances > 0
-        )
-        SELECT
-            player_id,
-            AVG((hits > 0)::int)        FILTER (WHERE rn <= 10) AS hit_l10,
-            AVG((home_runs > 0)::int)   FILTER (WHERE rn <= 10) AS hr_l10,
-            AVG((strikeouts > 0)::int)  FILTER (WHERE rn <= 10) AS k_l10,
-            AVG((walks > 0)::int)       FILTER (WHERE rn <= 10) AS bb_l10,
-            AVG((total_bases >= 2)::int) FILTER (WHERE rn <= 10) AS tb_l10,
-            AVG(((hits + runs + rbi) >= 2)::int)
-                FILTER (WHERE rn <= 10 AND runs IS NOT NULL AND rbi IS NOT NULL) AS hrr_l10,
-            AVG((hits > 0)::int)        FILTER (WHERE game_date >= ?) AS hit_season,
-            AVG((home_runs > 0)::int)   FILTER (WHERE game_date >= ?) AS hr_season,
-            AVG((strikeouts > 0)::int)  FILTER (WHERE game_date >= ?) AS k_season,
-            AVG((walks > 0)::int)       FILTER (WHERE game_date >= ?) AS bb_season,
-            AVG((total_bases >= 2)::int) FILTER (WHERE game_date >= ?) AS tb_season,
-            AVG(((hits + runs + rbi) >= 2)::int)
-                FILTER (WHERE game_date >= ? AND runs IS NOT NULL AND rbi IS NOT NULL) AS hrr_season,
-            COUNT(*)                    FILTER (WHERE game_date >= ?) AS n_season,
-            COUNT(*) FILTER (WHERE game_date >= ? AND runs IS NOT NULL AND rbi IS NOT NULL)
-                AS n_hrr_season
-        FROM logs
-        GROUP BY player_id
-        """;
-
     // Best cached over-price for the player's 0.5 line, if odds were ever pulled for
     // this slate. Absence is normal (model-only board).
     private static final String PRICE_SQL = """
@@ -183,7 +111,9 @@ public class PropBoardRepository {
         """;
 
     // Starting-pitcher projections + workload distribution for the pitcher-prop cards.
-    // p_k thresholds are 4.5/5.5/6.5; p_outs are 14.5/17.5 (fixed by the workload model).
+    // The full p_k / p_outs threshold ladders come straight out of the workload jsonb
+    // (materialized over K 2.5–9.5, outs 11.5–20.5) so PropDistribution.ladderProb can
+    // price — and interpolate to — any book line in range, not just a fixed 3-line grid.
     // hits-allowed / earned-runs come from the game simulator (game_sim_pitcher_props):
     // raw histogram counts the service turns into P(over line). opponent = the lineup
     // this starter faces.
@@ -192,11 +122,8 @@ public class PropBoardRepository {
                pp.pitcher_id, p.full_name, t.abbreviation AS team,
                opp.abbreviation AS opponent,
                pp.expected_k, pp.expected_outs, pp.expected_ip,
-               (pp.workload->'p_k'->>'4.5')::float     AS pk_45,
-               (pp.workload->'p_k'->>'5.5')::float     AS pk_55,
-               (pp.workload->'p_k'->>'6.5')::float     AS pk_65,
-               (pp.workload->'p_outs'->>'14.5')::float AS po_145,
-               (pp.workload->'p_outs'->>'17.5')::float AS po_175,
+               pp.workload->'p_k'    AS workload_p_k,
+               pp.workload->'p_outs' AS workload_p_outs,
                spp.n_sims AS spp_n_sims,
                spp.expected_hits AS spp_hits, spp.expected_er AS spp_er,
                spp.hits_hist, spp.er_hist,
@@ -320,41 +247,6 @@ public class PropBoardRepository {
         return jdbc.query(SLATE_SQL, this::mapSlate, date);
     }
 
-    public ClearRates findClearRates(int playerId, LocalDate date) {
-        LocalDate seasonStart = LocalDate.of(date.getYear(), 1, 1);
-        return jdbc.query(RATES_SQL,
-            rs -> rs.next() ? mapRates(rs) : null,
-            playerId, date, seasonStart, seasonStart, seasonStart, seasonStart,
-            seasonStart, seasonStart, seasonStart, seasonStart);
-    }
-
-    /** Clear rates for many players in one query (keyed by player_id). Players with no
-     *  qualifying game log are simply absent from the map — same as a null single lookup. */
-    public Map<Integer, ClearRates> findClearRatesBatch(Collection<Integer> playerIds, LocalDate date) {
-        if (playerIds.isEmpty()) {
-            return Map.of();
-        }
-        LocalDate seasonStart = LocalDate.of(date.getYear(), 1, 1);
-        Integer[] ids = playerIds.toArray(new Integer[0]);
-        return jdbc.query(
-            con -> {
-                PreparedStatement ps = con.prepareStatement(RATES_BATCH_SQL);
-                ps.setArray(1, con.createArrayOf("integer", ids));
-                ps.setObject(2, date);
-                for (int i = 3; i <= 10; i++) {
-                    ps.setObject(i, seasonStart);
-                }
-                return ps;
-            },
-            rs -> {
-                Map<Integer, ClearRates> out = new HashMap<>();
-                while (rs.next()) {
-                    out.put(rs.getInt("player_id"), mapRates(rs));
-                }
-                return out;
-            });
-    }
-
     public BestPrice findBestOverPrice(LocalDate date, int playerId, String market) {
         List<BestPrice> rows = jdbc.query(PRICE_SQL,
             (rs, n) -> new BestPrice(
@@ -382,8 +274,7 @@ public class PropBoardRepository {
             rs.getInt("pitcher_id"), rs.getString("full_name"),
             rs.getString("team"), rs.getString("opponent"),
             dbl(rs, "expected_k"), dbl(rs, "expected_outs"), dbl(rs, "expected_ip"),
-            dbl(rs, "pk_45"), dbl(rs, "pk_55"), dbl(rs, "pk_65"),
-            dbl(rs, "po_145"), dbl(rs, "po_175"),
+            toLadder(rs.getString("workload_p_k")), toLadder(rs.getString("workload_p_outs")),
             (Integer) rs.getObject("spp_n_sims"),
             dbl(rs, "spp_hits"), dbl(rs, "spp_er"),
             toIntArray(rs.getArray("hits_hist")), toIntArray(rs.getArray("er_hist")),
@@ -392,6 +283,20 @@ public class PropBoardRepository {
             dbl(rs, "opp_k_rate"), dbl(rs, "opp_xwoba"),
             parseArsenal(rs.getString("arsenal_json"))),
             date);
+    }
+
+    /** A workload threshold ladder ({"5.5": 0.42, …}) out of the `workload` jsonb; null
+     *  when the column is absent (no workload row) or unparseable. Mirrors
+     *  {@code OddsRepository.toLadder} so the two boards read the same distribution. */
+    private static Map<String, Double> toLadder(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            return ARSENAL_JSON.readValue(json, LADDER_TYPE);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** json_agg of the pitcher's top pitches → typed list; empty when null or unparseable. */
@@ -483,15 +388,6 @@ public class PropBoardRepository {
             dbl(rs, "opp_pitcher_k_rate"));
     }
 
-    private ClearRates mapRates(ResultSet rs) throws SQLException {
-        return new ClearRates(
-            dbl(rs, "hit_l10"), dbl(rs, "hr_l10"), dbl(rs, "k_l10"), dbl(rs, "bb_l10"),
-            dbl(rs, "tb_l10"), dbl(rs, "hrr_l10"),
-            dbl(rs, "hit_season"), dbl(rs, "hr_season"), dbl(rs, "k_season"), dbl(rs, "bb_season"),
-            dbl(rs, "tb_season"), dbl(rs, "hrr_season"),
-            rs.getInt("n_season"), rs.getInt("n_hrr_season"));
-    }
-
     private static Double dbl(ResultSet rs, String col) throws SQLException {
         Object v = rs.getObject(col);
         return v == null ? null : ((Number) v).doubleValue();
@@ -536,25 +432,16 @@ public class PropBoardRepository {
         Double oppPitcherBbRate, Double oppPitcherKRate
     ) {}
 
-    public record ClearRates(
-        Double hitL10, Double hrL10, Double kL10, Double bbL10,
-        Double tbL10, Double hrrL10,
-        Double hitSeason, Double hrSeason, Double kSeason, Double bbSeason,
-        Double tbSeason, Double hrrSeason,
-        int nSeason,
-        // H+R+RBI sample size: games with runs/rbi actually recorded (boxscore-only
-        // columns, V69) — smaller than nSeason until the backfill catches history up.
-        int nHrrSeason
-    ) {}
-
     public record BestPrice(String bookmaker, int priceAmerican, double priceDecimal) {}
 
     public record PitcherRow(
         long gameId, String matchup,
         int pitcherId, String pitcher, String team, String opponent,
         Double expectedK, Double expectedOuts, Double expectedIp,
-        Double pk45, Double pk55, Double pk65,
-        Double po145, Double po175,
+        // Full workload threshold ladders keyed by line ("5.5" → P(over)); null when the
+        // pitcher has no workload row. Priced (and interpolated) at any book line in range
+        // by PropDistribution.ladderProb.
+        Map<String, Double> pK, Map<String, Double> pOuts,
         // Game-simulator hits-allowed / earned-runs distributions (null when the game
         // had no sim row — e.g. no confirmed lineups). nSims is the histogram denominator.
         Integer nSims, Double expectedHits, Double expectedEr, int[] hitsHist, int[] erHist,

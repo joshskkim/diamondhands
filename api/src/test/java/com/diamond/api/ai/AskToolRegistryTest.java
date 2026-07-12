@@ -53,8 +53,8 @@ class AskToolRegistryTest {
             }
         };
         return new AskToolRegistry(
-            new GameService(null), new ProjectionService(null, null), new OddsService(null),
-            new PropBoardService(null), new MostLikelyService(null), accuracy,
+            new GameService(null), new ProjectionService(null, null), new OddsService(null, null),
+            new PropBoardService(null, null), new MostLikelyService(null), accuracy,
             players, new ObjectMapper());
     }
 

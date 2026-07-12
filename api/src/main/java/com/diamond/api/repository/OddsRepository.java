@@ -1,16 +1,22 @@
 package com.diamond.api.repository;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.sql.Array;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Reads stored sportsbook odds (game_odds / player_prop_odds) joined to the context the
@@ -19,6 +25,9 @@ import java.util.Map;
  */
 @Repository
 public class OddsRepository {
+
+    private static final ObjectMapper WORKLOAD_JSON = new ObjectMapper();
+    private static final TypeReference<Map<String, Double>> LADDER_TYPE = new TypeReference<>() {};
 
     private final JdbcTemplate jdbc;
 
@@ -33,18 +42,44 @@ public class OddsRepository {
         ORDER BY market, side, price_decimal DESC, bookmaker
         """;
 
+    // Every model source that can price a quoted prop, joined to the quote itself. Which
+    // column answers which market lives in OddsService.propOverProb:
+    //   batter_projections      → hit / hr / bb (closed-form occurrence probs)
+    //   game_sim_batter_props   → tb / hrr      (simulator histograms, any half-line)
+    //   pitcher_projections     → pitcher_k / pitcher_outs (workload ladder, fixed lines)
+    //   game_sim_pitcher_props  → pitcher_hits_allowed / pitcher_earned_runs (histograms)
+    // A player_id is a batter's or a pitcher's, never both, so the batter- and
+    // pitcher-side joins are mutually exclusive and each row carries exactly one model.
+    private static final String PROP_MODEL_COLUMNS = """
+               bp.p_hit_1plus, bp.p_hit_2plus, bp.p_hr, bp.p_bb_1plus,
+               sbp.n_sims AS sbp_n_sims, sbp.tb_hist, sbp.hrr_hist,
+               pp.workload->'p_k'    AS workload_p_k,
+               pp.workload->'p_outs' AS workload_p_outs,
+               spp.n_sims AS spp_n_sims, spp.hits_hist, spp.er_hist
+        """;
+
+    private static final String PROP_MODEL_JOINS = """
+        LEFT JOIN batter_projections bp
+               ON bp.game_id = po.game_id AND bp.player_id = po.player_id
+        LEFT JOIN game_sim_batter_props sbp
+               ON sbp.game_id = po.game_id AND sbp.player_id = po.player_id
+        LEFT JOIN pitcher_projections pp
+               ON pp.game_id = po.game_id AND pp.pitcher_id = po.player_id
+        LEFT JOIN game_sim_pitcher_props spp
+               ON spp.game_id = po.game_id AND spp.pitcher_id = po.player_id
+        """;
+
     private static final String PROP_ODDS_SQL = """
         SELECT po.player_id, po.player_name, p.bats, p.position,
                po.market, po.side, po.line, po.bookmaker,
                po.price_american, po.price_decimal, po.implied_prob,
-               bp.p_hit_1plus, bp.p_hit_2plus, bp.p_hr
+        %s
         FROM player_prop_odds po
         JOIN players p ON p.id = po.player_id
-        LEFT JOIN batter_projections bp
-               ON bp.game_id = po.game_id AND bp.player_id = po.player_id
+        %s
         WHERE po.game_id = ?
         ORDER BY po.market, po.player_name, po.line, po.side, po.price_decimal DESC, po.bookmaker
-        """;
+        """.formatted(PROP_MODEL_COLUMNS, PROP_MODEL_JOINS);
 
     private static final String RUN_PROJ_SQL = """
         SELECT expected_home_runs, expected_away_runs
@@ -87,6 +122,12 @@ public class OddsRepository {
             : null, gameId);
     }
 
+    /** The game's slate date — the "as of" cutoff for a player's clear rates. */
+    public LocalDate findGameDate(long gameId) {
+        return jdbc.query("SELECT game_date FROM games WHERE id = ?",
+            rs -> rs.next() ? rs.getObject("game_date", LocalDate.class) : null, gameId);
+    }
+
     public List<Long> findGameIdsWithOdds(LocalDate date) {
         return jdbc.queryForList(GAME_IDS_SQL, Long.class, date);
     }
@@ -104,18 +145,19 @@ public class OddsRepository {
         ORDER BY go.game_id, go.market, go.side, go.price_decimal DESC, go.bookmaker
         """;
 
+    // Slate-wide form of PROP_ODDS_SQL — same model joins, or /api/odds/best would price
+    // fewer markets than the per-game panel.
     private static final String PROP_ODDS_BY_DATE_SQL = """
         SELECT po.game_id, po.player_id, po.player_name, p.bats, p.position,
                po.market, po.side, po.line, po.bookmaker,
                po.price_american, po.price_decimal, po.implied_prob,
-               bp.p_hit_1plus, bp.p_hit_2plus, bp.p_hr
+        %s
         FROM player_prop_odds po
         JOIN games g ON g.id = po.game_id AND g.game_date = ?
         JOIN players p ON p.id = po.player_id
-        LEFT JOIN batter_projections bp
-               ON bp.game_id = po.game_id AND bp.player_id = po.player_id
+        %s
         ORDER BY po.game_id, po.market, po.player_name, po.line, po.side, po.price_decimal DESC, po.bookmaker
-        """;
+        """.formatted(PROP_MODEL_COLUMNS, PROP_MODEL_JOINS);
 
     private static final String RUN_PROJ_BY_DATE_SQL = """
         SELECT gp.game_id, gp.expected_home_runs, gp.expected_away_runs
@@ -335,9 +377,44 @@ public class OddsRepository {
             rs.getInt("price_american"),
             rs.getBigDecimal("price_decimal").doubleValue(),
             rs.getBigDecimal("implied_prob").doubleValue(),
+            mapPropModel(rs));
+    }
+
+    private PropModelRow mapPropModel(ResultSet rs) throws SQLException {
+        return new PropModelRow(
             toDouble(rs.getBigDecimal("p_hit_1plus")),
             toDouble(rs.getBigDecimal("p_hit_2plus")),
-            toDouble(rs.getBigDecimal("p_hr")));
+            toDouble(rs.getBigDecimal("p_hr")),
+            toDouble(rs.getBigDecimal("p_bb_1plus")),
+            (Integer) rs.getObject("sbp_n_sims"),
+            toIntArray(rs.getArray("tb_hist")),
+            toIntArray(rs.getArray("hrr_hist")),
+            toLadder(rs.getString("workload_p_k")),
+            toLadder(rs.getString("workload_p_outs")),
+            (Integer) rs.getObject("spp_n_sims"),
+            toIntArray(rs.getArray("hits_hist")),
+            toIntArray(rs.getArray("er_hist")));
+    }
+
+    /** A workload threshold ladder ({"5.5": 0.42, …}) out of the `workload` jsonb. */
+    private static Map<String, Double> toLadder(String json) {
+        if (json == null || json.isBlank()) return null;
+        try {
+            return WORKLOAD_JSON.readValue(json, LADDER_TYPE);
+        } catch (JsonProcessingException e) {
+            return null;
+        }
+    }
+
+    private static int[] toIntArray(Array a) throws SQLException {
+        if (a == null) return new int[0];
+        Object raw = a.getArray();
+        if (raw instanceof Number[] nums) {
+            int[] out = new int[nums.length];
+            for (int i = 0; i < nums.length; i++) out[i] = nums[i] == null ? 0 : nums[i].intValue();
+            return out;
+        }
+        return new int[0];
     }
 
     private static Double toDouble(BigDecimal bd) {
@@ -352,7 +429,47 @@ public class OddsRepository {
         int playerId, String playerName, String bats, String position,
         String market, String side, double line, String bookmaker,
         int priceAmerican, double priceDecimal, double impliedProb,
-        Double pHit1, Double pHit2, Double pHr) {}
+        PropModelRow model) {}
+
+    /**
+     * The model's view of one quoted prop: whichever of the four projection sources
+     * covers this player's markets. All fields are nullable — a batter carries the
+     * batter columns and nulls on the pitcher side, and a player with no projection at
+     * all (scratched, no sim row) carries nulls throughout, which
+     * {@code OddsService.propOverProb} turns into "no model" rather than a bogus 0%.
+     *
+     * <p>{@code pK} / {@code pOuts} are the workload model's threshold ladders keyed by
+     * line ("5.5" → p); they only hold the lines projection/workload.py materialized.
+     */
+    public record PropModelRow(
+        Double pHit1, Double pHit2, Double pHr, Double pBb1,
+        Integer simNSims, int[] tbHist, int[] hrrHist,
+        Map<String, Double> pK, Map<String, Double> pOuts,
+        Integer pitcherNSims, int[] hitsHist, int[] erHist) {
+
+        // A record's generated equals() compares array fields by reference, which would make
+        // two rows read from identical DB state unequal. RepositoryBatchEquivalenceTest
+        // compares these by value to prove the batch query matches the per-game one.
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof PropModelRow r)) return false;
+            return Objects.equals(pHit1, r.pHit1) && Objects.equals(pHit2, r.pHit2)
+                && Objects.equals(pHr, r.pHr) && Objects.equals(pBb1, r.pBb1)
+                && Objects.equals(simNSims, r.simNSims)
+                && Arrays.equals(tbHist, r.tbHist) && Arrays.equals(hrrHist, r.hrrHist)
+                && Objects.equals(pK, r.pK) && Objects.equals(pOuts, r.pOuts)
+                && Objects.equals(pitcherNSims, r.pitcherNSims)
+                && Arrays.equals(hitsHist, r.hitsHist) && Arrays.equals(erHist, r.erHist);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(pHit1, pHit2, pHr, pBb1, simNSims,
+                Arrays.hashCode(tbHist), Arrays.hashCode(hrrHist), pK, pOuts,
+                pitcherNSims, Arrays.hashCode(hitsHist), Arrays.hashCode(erHist));
+        }
+    }
 
     public record RunProj(double expHome, double expAway) {}
 

@@ -36,10 +36,13 @@ K_RATE_PRIOR_BF: float = 100.0
 # Physical bounds on a start's outs.
 MAX_OUTS: int = 27
 
-# Standard sportsbook lines we precompute P(over) for (the prop board / picks read
-# these). Outs 14.5/17.5 ≈ "5 IP" / "6 IP"; the K ladder spans common K props.
-WORKLOAD_OUTS_LINES: tuple[float, ...] = (14.5, 17.5)
-WORKLOAD_K_LINES: tuple[float, ...] = (3.5, 4.5, 5.5, 6.5)
+# Sportsbook lines we precompute P(over) for (the prop board / picks / game-page odds
+# panel read these). p_outs_over / p_strikeouts_over price any half-line; the grid just
+# decides which ones survive into the stored jsonb, and a book line off the grid gets no
+# model probability at all. So the grid spans the range books actually quote: outs
+# 11.5–20.5 (14.5/17.5 ≈ "5 IP" / "6 IP" sit mid-range) and K 2.5–9.5.
+WORKLOAD_OUTS_LINES: tuple[float, ...] = tuple(x + 0.5 for x in range(11, 21))
+WORKLOAD_K_LINES: tuple[float, ...] = tuple(x + 0.5 for x in range(2, 10))
 # Clamp the sim's per-side starter innings to a sane range (a μ of 16 outs ≈ 5 IP;
 # never let a noisy estimate pull a starter below 3 or above 8 innings in the sim).
 WORKLOAD_SIM_MIN_INNINGS: int = 3

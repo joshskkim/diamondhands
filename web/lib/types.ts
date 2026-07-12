@@ -493,19 +493,22 @@ export interface PitcherThreshold {
   prob: number
 }
 
-/** An honorable-mention pitcher: same ranking metric, no distribution. */
+/** A runner-up pitcher, in the same edge order as the headline pick: its recommended
+ *  side and model-vs-line edge, with the headline projection for context. */
 export interface PitcherRunnerUp {
   pitcherId: number
   pitcher: string
   team: string
   expectedValue: number
+  bestSide: 'over' | 'under'
+  edge: number | null
 }
 
 /**
  * The headline starting pitcher for one pitcher-prop market, ranked by MODEL-VS-LINE
  * EDGE (|model P(over) − de-vigged book P(over)| at the consensus line), with the
- * recommended side wherever the edge points. On odds-less days it falls back to the
- * workload model's expected-volume ranking (`rankedBy` = 'volume', edge fields null).
+ * recommended side wherever the edge points. A card exists only when a beatable
+ * two-way line does, so `rankedBy` is always 'edge'.
  */
 export interface PitcherPropPick {
   /** 'pitcher_k' | 'pitcher_outs' | 'pitcher_hits_allowed' | 'pitcher_earned_runs' */
@@ -520,8 +523,8 @@ export interface PitcherPropPick {
   expectedValue: number
   expectedIp: number | null
   distribution: PitcherThreshold[]
-  /** The single recommended pick: in edge mode the side of the positive edge at the
-   *  book's consensus line; in volume mode the model's lean at the nearest modeled line. */
+  /** The single recommended pick: the side of the positive edge at the book's
+   *  consensus line. */
   bestLine: number | null
   bestSide: 'over' | 'under' | null
   bestProb: number | null
@@ -530,12 +533,12 @@ export interface PitcherPropPick {
   bestBook: string | null
   priceAmerican: number | null
   evPct: number | null
-  /** Edge mode only: |model − no-vig| probability gap, and the de-vigged book probability
-   *  for the recommended side. Null in volume-fallback mode. */
+  /** |model − no-vig| probability gap, and the de-vigged book probability for the
+   *  recommended side. */
   edge: number | null
   fairProb: number | null
-  /** Which ranking produced this card: 'edge' (model vs line) or 'volume' (fallback). */
-  rankedBy: 'edge' | 'volume'
+  /** How this card was ranked — always 'edge' (a card exists only with a beatable line). */
+  rankedBy: 'edge'
   /** Reasoning drivers (null when skill rows are absent): the pitcher's own BF-weighted
    *  profile and the opposing lineup's PA-weighted K rate / xwOBA. */
   pitcherKRate: number | null

@@ -1,6 +1,8 @@
 package com.diamond.api.service;
 
 import com.diamond.api.dto.*;
+import com.diamond.api.repository.ClearRateRepository;
+import com.diamond.api.repository.ClearRateRepository.ClearRates;
 import com.diamond.api.repository.OddsRepository;
 import com.diamond.api.repository.OddsRepository.GameMeta;
 import com.diamond.api.repository.OddsRepository.GameOddRow;
@@ -13,15 +15,21 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Turns stored odds into (a) per-game best lines with model edge and (b) a slate-wide
  * "best plays" board. Best line = highest decimal price across books for a side/line.
  * Model edge (EV%) is attached where we have a model probability: moneyline/run_line/total
- * via {@link OddsModel} on projected runs, and hit/HR props directly from batter projections.
+ * via {@link OddsModel} on projected runs, and every player-prop market the odds feed
+ * carries via {@link #propOverProb} — as long as the book's line is one the model can
+ * price. Batter probabilities are then regressed toward the player's demonstrated clear
+ * rate ({@link PropBlend}) so a number here matches the prop board's for the same
+ * selection.
  */
 @Service
 public class OddsService {
@@ -37,9 +45,11 @@ public class OddsService {
     private static final double PROB_EPS = 1e-6;
 
     private final OddsRepository repo;
+    private final ClearRateRepository clearRates;
 
-    public OddsService(OddsRepository repo) {
+    public OddsService(OddsRepository repo, ClearRateRepository clearRates) {
         this.repo = repo;
+        this.clearRates = clearRates;
     }
 
     @Cacheable(cacheNames = "odds", key = "#gameId")
@@ -49,18 +59,29 @@ public class OddsService {
         if (gameRows.isEmpty() && propRows.isEmpty()) {
             return new GameOddsResponse(gameId, false, List.of(), List.of());
         }
-        return buildGameOdds(gameId, gameRows, propRows, repo.findRunProj(gameId));
+        return buildGameOdds(gameId, gameRows, propRows, repo.findRunProj(gameId),
+            clearRatesFor(propRows, repo.findGameDate(gameId)));
+    }
+
+    /** Clear rates for every player quoted in these props, in one query. */
+    private Map<Integer, ClearRates> clearRatesFor(List<PropOddRow> propRows, LocalDate date) {
+        if (date == null || propRows.isEmpty()) return Map.of();
+        Set<Integer> ids = new HashSet<>();
+        for (PropOddRow r : propRows) ids.add(r.playerId());
+        return clearRates.findClearRatesBatch(ids, date);
     }
 
     /** Build a game's odds response from already-fetched rows (shared by the per-game and
      *  slate-batch paths). */
     private GameOddsResponse buildGameOdds(long gameId, List<GameOddRow> gameRows,
-                                           List<PropOddRow> propRows, RunProj proj) {
+                                           List<PropOddRow> propRows, RunProj proj,
+                                           Map<Integer, ClearRates> ratesByPlayer) {
         if (gameRows.isEmpty() && propRows.isEmpty()) {
             return new GameOddsResponse(gameId, false, List.of(), List.of());
         }
         OddsModel model = proj == null ? null : new OddsModel(proj.expHome(), proj.expAway());
-        return new GameOddsResponse(gameId, true, buildGameMarkets(gameRows, model), buildProps(propRows));
+        return new GameOddsResponse(gameId, true, buildGameMarkets(gameRows, model),
+            buildProps(propRows, ratesByPlayer));
     }
 
     /** Batter prop over-prices for the slate (best price across books), keyed for Best Bets. */
@@ -94,8 +115,7 @@ public class OddsService {
 
     /** Selection key shared with the client: line trailing-zeros stripped (0.50 → "0.5"). */
     static String lineShopKey(long gameId, int playerId, String market, String side, double line) {
-        String normLine = java.math.BigDecimal.valueOf(line).stripTrailingZeros().toPlainString();
-        return gameId + ":" + playerId + ":" + market + ":" + side + ":" + normLine;
+        return gameId + ":" + playerId + ":" + market + ":" + side + ":" + PropDistribution.lineKey(line);
     }
 
     /** Hit-rate "traffic light" per batter prop market for the slate (last 5/10/20 + season). */
@@ -114,20 +134,24 @@ public class OddsService {
     @Observed(name = "odds.bestPlays", contextualName = "odds.bestPlays")
     @Cacheable(cacheNames = "oddsBest", key = "#date")
     public List<BestPlayDto> bestPlays(LocalDate date) {
-        // Fetch the whole slate's odds/props/projections/meta in four queries, instead of
-        // ~five queries per game (the old per-game gameOdds() loop was an N+1 over the slate).
+        // Fetch the whole slate's odds/props/projections/meta in a handful of queries,
+        // instead of ~five queries per game (the old per-game gameOdds() loop was an N+1
+        // over the slate). Clear rates likewise: one batch for every quoted player.
         Map<Long, List<GameOddRow>> oddsByGame = repo.findGameOddsByDate(date);
         Map<Long, List<PropOddRow>> propsByGame = repo.findPropOddsByDate(date);
         Map<Long, RunProj> projByGame = repo.findRunProjByDate(date);
         Map<Long, GameMeta> metaByGame = repo.findGameMetaByDate(date);
         Map<String, OddsRepository.VerdictRow> verdicts = repo.findPickVerdictsByDate(date);
+        Map<Integer, ClearRates> ratesByPlayer = clearRatesFor(
+            propsByGame.values().stream().flatMap(List::stream).toList(), date);
 
         List<BestPlayDto> plays = new ArrayList<>();
         for (long gameId : repo.findGameIdsWithOdds(date)) {
             GameOddsResponse odds = buildGameOdds(gameId,
                 oddsByGame.getOrDefault(gameId, List.of()),
                 propsByGame.getOrDefault(gameId, List.of()),
-                projByGame.get(gameId));
+                projByGame.get(gameId),
+                ratesByPlayer);
             if (!odds.hasOdds()) continue;
             GameMeta meta = metaByGame.get(gameId);
             String matchup = meta == null ? "" : meta.awayAbbr() + " @ " + meta.homeAbbr();
@@ -200,7 +224,7 @@ public class OddsService {
 
     // ── Player props ─────────────────────────────────────────────────────────
 
-    private List<PropMarketDto> buildProps(List<PropOddRow> rows) {
+    private List<PropMarketDto> buildProps(List<PropOddRow> rows, Map<Integer, ClearRates> ratesByPlayer) {
         // (player|market|line) -> side -> books
         Map<String, Map<String, List<PropOddRow>>> grouped = new LinkedHashMap<>();
         for (PropOddRow r : rows) {
@@ -213,8 +237,16 @@ public class OddsService {
             PropOddRow any = firstRow(sides);
             PlayerDto player = new PlayerDto(any.playerId(), any.playerName(), any.bats(), any.position());
             // sane() drops a degenerate p (e.g. p_hit_1plus = 0 for a 0-PA batter); without
-            // it the under reads 1.0 - 0 = 100%. When over is sane, 1 - over is sane too.
-            Double overProb = sane(propOverProb(any.market(), any.line(), any));
+            // it the under reads 1.0 - 0 = 100%. It MUST run on the raw probability: 0/1 is
+            // the "not really projected" sentinel, and blending a 0.0 toward the league rate
+            // would launder it into a plausible-looking ~0.18 that sails past the guard.
+            Double rawProb = sane(propOverProb(any.market(), any.line(), any.model()));
+            // Then regress toward the batter's demonstrated clear rate, so a player reads the
+            // same here as on the prop board. PropBlend no-ops for markets/lines with no
+            // comparable rate (every pitcher market, and off-canonical lines like hit 1.5).
+            // A convex blend of a sane p with a league rate stays inside (0, 1).
+            Double overProb = rawProb == null ? null : PropBlend.blend(
+                any.market(), any.line(), rawProb, ratesByPlayer.get(any.playerId()));
             Double underProb = overProb == null ? null : 1.0 - overProb;
             List<PropOddRow> overBooks = sides.get("over");
             List<PropOddRow> underBooks = sides.get("under");
@@ -233,12 +265,33 @@ public class OddsService {
         return out;
     }
 
-    /** Over probability for a prop line from our model, or null for unmodeled markets. */
-    private Double propOverProb(String market, double line, PropOddRow r) {
+    /**
+     * Over probability for a prop line from our model, or null when we can't price this
+     * market at this line. Two families:
+     *
+     * <ul>
+     *   <li>Occurrence props (hit/hr/bb) are closed-form per-PA probabilities computed at
+     *       one fixed line each — a book quoting hit 2.5 gets no model.</li>
+     *   <li>Line-based props read P(over) off a stored distribution: the simulator's
+     *       histograms (tb/hrr, hits-allowed/ER) price any half-line, while the workload
+     *       model's K/outs ladders only hold the lines projection/workload.py materialized.</li>
+     * </ul>
+     */
+    private Double propOverProb(String market, double line, OddsRepository.PropModelRow m) {
+        if (m == null) return null;
         return switch (market) {
-            case "hit" -> line == 0.5 ? r.pHit1() : line == 1.5 ? r.pHit2() : null;
-            case "hr" -> line == 0.5 ? r.pHr() : null;
-            default -> null; // pitcher_k, pitcher_outs: best-line only for now
+            case "hit" -> line == 0.5 ? m.pHit1() : line == 1.5 ? m.pHit2() : null;
+            case "hr" -> line == 0.5 ? m.pHr() : null;
+            case "bb" -> line == 0.5 ? m.pBb1() : null;
+            case "tb" -> PropDistribution.histProb(m.tbHist(), m.simNSims(), line);
+            case "hrr" -> PropDistribution.histProb(m.hrrHist(), m.simNSims(), line);
+            case "pitcher_k" -> PropDistribution.ladderProb(m.pK(), line);
+            case "pitcher_outs" -> PropDistribution.ladderProb(m.pOuts(), line);
+            case "pitcher_hits_allowed" ->
+                PropDistribution.histProb(m.hitsHist(), m.pitcherNSims(), line);
+            case "pitcher_earned_runs" ->
+                PropDistribution.histProb(m.erHist(), m.pitcherNSims(), line);
+            default -> null;
         };
     }
 
@@ -323,8 +376,13 @@ public class OddsService {
         String label = switch (prop.market()) {
             case "hit" -> "Hit";
             case "hr" -> "HR";
+            case "bb" -> "Walks";
+            case "tb" -> "Total bases";
+            case "hrr" -> "H+R+RBI";
             case "pitcher_k" -> "Ks";
             case "pitcher_outs" -> "Outs";
+            case "pitcher_hits_allowed" -> "Hits allowed";
+            case "pitcher_earned_runs" -> "Earned runs";
             default -> prop.market();
         };
         return prop.player().name() + " " + label + " "
