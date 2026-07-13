@@ -113,6 +113,8 @@ export interface ModelPickResult {
   priceAmerican: number
   book: string | null
   strong: boolean
+  /** The single standout among the slate's picks — the highest-conviction one. A slate may have none. */
+  topPick: boolean
   resultValue: number | null
   /** true = hit, false = miss, null = push/void or not yet graded. */
   won: boolean | null

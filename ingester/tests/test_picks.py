@@ -7,10 +7,10 @@ from datetime import datetime, timedelta, timezone
 
 from ingester.commands.picks import (
     MAX_PICKS, OUT, PICK_BUDGET, UNKNOWN, _bettime_quote, _closing_quote,
-    _devig_two_way, _grade, _opposite_selection, _pick_key,
+    _current_model_prob, _devig_two_way, _grade, _opposite_selection, _pick_key,
     american_to_decimal, bar_recheck, build_candidates, build_picks,
-    gate_candidates, plan_lineup_reeval, plan_reconcile, poisson_game_prob,
-    settle_prop,
+    gate_candidates, is_top_pick, plan_lineup_reeval, plan_reconcile,
+    poisson_game_prob, settle_prop,
 )
 from ingester.projection.runner import DEGENERACY_MIN_ROWS, is_degenerate_slate
 
@@ -32,13 +32,30 @@ class TestBuildPicks(unittest.TestCase):
             play(game_id=2, model=0.55, fair=0.50, ev=0.10),       # edge 5pt < 6pt floor
             play(game_id=3, model=0.68, fair=0.55, ev=0.25),       # edge 13pt > 12.5pt cap
             play(game_id=4, model=0.60, fair=0.50, ev=0.02),       # EV < 5%
-            play(game_id=5, market="pitcher_k", model=0.7, fair=0.5, ev=0.2),  # excluded
-            play(game_id=6, model=0.37, fair=0.30, ev=0.10),       # longshot, edge 7 < 8
+            play(game_id=5, market="pitcher_k", model=0.7, fair=0.5, ev=0.2),  # edge 20pt > cap
+            play(game_id=6, model=0.48, fair=0.38, ev=0.10),       # prob .48 < .55 floor
             {**play(game_id=7), "fairProb": None},                  # one-sided, no de-vig
-            play(game_id=8, market="hit", model=0.60, fair=0.50, ev=0.10),  # hit excluded (interim)
+            play(game_id=8, market="hit", model=0.60, fair=0.50, ev=0.10),  # hit excluded
         ]
         picks = build_picks(plays, sim=None)
         self.assertEqual([p["gameId"] for p in picks], [1])
+
+    def test_favorite_floor_excludes_underdogs(self):
+        # model_prob < 0.55 is out even with a fat edge — no longshot exception anymore.
+        underdog = play(game_id=1, model=0.50, fair=0.38, ev=0.20)   # edge .12, prob .50
+        favorite = play(game_id=2, model=0.56, fair=0.46, ev=0.10)   # edge .10, prob .56
+        self.assertEqual(build_picks([underdog], sim=None), [])
+        self.assertEqual(len(build_picks([favorite], sim=None)), 1)
+
+    def test_only_hit_is_market_excluded(self):
+        # Every priced market is eligible except 'hit'. A pitcher/batter prop within
+        # the edge band qualifies; the same-shaped 'hit' play is dropped by market.
+        within = dict(model=0.60, fair=0.50, ev=0.10)  # edge .10, inside [.06, .125]
+        for mkt in ("pitcher_walks", "pitcher_k", "bb", "tb", "hrr", "hr"):
+            self.assertEqual(
+                len(build_picks([play(game_id=1, market=mkt, **within)], sim=None)), 1,
+                f"{mkt} should be pick-eligible")
+        self.assertEqual(build_picks([play(game_id=1, market="hit", **within)], sim=None), [])
 
     def test_bar_boundaries(self):
         # Exactly-at-threshold edges: MIN_EDGE inclusive, MAX_EDGE inclusive.
@@ -85,6 +102,21 @@ class TestBuildPicks(unittest.TestCase):
         sim_with = {"totals": [{"gameId": 1, "simTotal": 8.1}], "props": {}}
         self.assertEqual(build_picks([total], sim_against), [])
         self.assertEqual(len(build_picks([total], sim_with)), 1)
+
+
+class TestTopPick(unittest.TestCase):
+    """The standout: only rank 1, and only when it clears the higher edge+prob bar."""
+
+    def test_rank_one_standout_qualifies(self):
+        self.assertTrue(is_top_pick(1, edge=0.11, model_prob=0.62))
+        self.assertTrue(is_top_pick(1, edge=0.10, model_prob=0.60))  # both boundaries inclusive
+
+    def test_only_rank_one(self):
+        self.assertFalse(is_top_pick(2, edge=0.12, model_prob=0.70))
+
+    def test_must_clear_both_higher_bars(self):
+        self.assertFalse(is_top_pick(1, edge=0.09, model_prob=0.70))  # edge below top bar
+        self.assertFalse(is_top_pick(1, edge=0.12, model_prob=0.58))  # prob below top bar
 
 
 class TestPlanReconcile(unittest.TestCase):
@@ -205,11 +237,12 @@ class TestBarRecheck(unittest.TestCase):
         # The model moving FURTHER our way (edge .30 > MAX_EDGE) must NOT fail.
         self.assertTrue(bar_recheck(0.80, 0.50, american_to_decimal(-110)))
 
-    def test_longshot_rule(self):
-        # Below MIN_MODEL_PROB with edge under LONGSHOT_EDGE → fails...
-        self.assertFalse(bar_recheck(0.36, 0.295, american_to_decimal(+250)))
-        # ...but an outsized edge keeps a longshot alive.
-        self.assertTrue(bar_recheck(0.39, 0.30, american_to_decimal(+250)))
+    def test_favorite_floor_no_longshot(self):
+        # A big edge no longer rescues an underdog: below MIN_MODEL_PROB (.55) fails
+        # regardless of edge — the longshot exception was dropped in the prop-expansion.
+        self.assertFalse(bar_recheck(0.39, 0.30, american_to_decimal(+250)))  # edge .09, prob .39
+        self.assertFalse(bar_recheck(0.54, 0.40, american_to_decimal(+120)))  # edge .14, prob .54
+        self.assertTrue(bar_recheck(0.56, 0.46, american_to_decimal(-110)))   # favorite clears
 
     def test_market_isolation_by_signature(self):
         # The recheck takes only the LOCKED fair prob and price — there is no
@@ -279,6 +312,63 @@ class TestPlanLineupReeval(unittest.TestCase):
         self.assertEqual(plan_lineup_reeval(rows, self.NOW), [])
 
 
+class _ProjConn:
+    """Fake conn for _current_model_prob's DB fallback: serves batter/pitcher
+    projection lookups. `batter` is a (p_hit_1plus, p_hr, p_bb_1plus) tuple or None;
+    `pitcher_present` toggles the pitcher_projections existence probe."""
+
+    def __init__(self, batter=None, pitcher_present=False):
+        self.batter = batter
+        self.pitcher_present = pitcher_present
+
+    def execute(self, sql, params=None):
+        if "batter_projections" in sql:
+            return _Result([self.batter] if self.batter is not None else [])
+        if "pitcher_projections" in sql:
+            return _Result([(1,)] if self.pitcher_present else [])
+        return _Result([])
+
+
+class TestCurrentModelProb(unittest.TestCase):
+    """DB fallback (empty board): OUT on a scratch, scalar for hit/hr/bb, UNKNOWN for
+    the histogram/ladder markets so a lock is never bumped off an unreproduced number."""
+
+    def pick(self, market, player_id=10):
+        return {"game_id": 1, "market": market, "side": "over",
+                "player_id": player_id, "line": 0.5}
+
+    def test_batter_scratch_is_out(self):
+        conn = _ProjConn(batter=None)
+        self.assertEqual(_current_model_prob(conn, [], self.pick("tb")), OUT)
+
+    def test_batter_scalar_markets(self):
+        conn = _ProjConn(batter=(0.62, 0.28, 0.19))  # p_hit_1plus, p_hr, p_bb_1plus
+        self.assertAlmostEqual(_current_model_prob(conn, [], self.pick("hit")), 0.62)
+        self.assertAlmostEqual(_current_model_prob(conn, [], self.pick("hr")), 0.28)
+        self.assertAlmostEqual(_current_model_prob(conn, [], self.pick("bb")), 0.19)
+
+    def test_batter_histogram_markets_unknown(self):
+        conn = _ProjConn(batter=(0.62, 0.28, 0.19))  # row present, but tb/hrr have no scalar
+        self.assertEqual(_current_model_prob(conn, [], self.pick("tb")), UNKNOWN)
+        self.assertEqual(_current_model_prob(conn, [], self.pick("hrr")), UNKNOWN)
+
+    def test_pitcher_scratch_is_out(self):
+        conn = _ProjConn(pitcher_present=False)
+        self.assertEqual(_current_model_prob(conn, [], self.pick("pitcher_walks")), OUT)
+
+    def test_pitcher_present_is_unknown(self):
+        conn = _ProjConn(pitcher_present=True)
+        self.assertEqual(_current_model_prob(conn, [], self.pick("pitcher_k")), UNKNOWN)
+
+    def test_board_hit_short_circuits_before_db(self):
+        # A live board number wins regardless of the DB path.
+        board = [play(game_id=1, market="tb", side="over", line=1.5, model=0.58,
+                      player_id=10)]
+        pick = {"game_id": 1, "market": "tb", "side": "over",
+                "player_id": 10, "line": 1.5}
+        self.assertAlmostEqual(_current_model_prob(_ProjConn(), board, pick), 0.58)
+
+
 class TestPoissonGameProbs(unittest.TestCase):
     """Parity with OddsModel: independent Poissons on a 0..30 grid."""
 
@@ -346,6 +436,21 @@ class TestGrade(unittest.TestCase):
         self.assertEqual(_grade("hr", "over", 0.5, 0, 0, 1), (1.0, True))
         self.assertEqual(_grade("hit", "over", 0.5, 0, 0, None), (None, None))
 
+    def test_new_prop_markets(self):
+        # Batter props: value vs. line, over/under.
+        self.assertEqual(_grade("tb", "over", 1.5, 0, 0, 3), (3.0, True))
+        self.assertEqual(_grade("bb", "under", 0.5, 0, 0, 0), (0.0, True))
+        self.assertEqual(_grade("hrr", "under", 2.5, 0, 0, 4), (4.0, False))
+        # Pitcher props (graded from pitcher_starts stats, passed in as prop_value).
+        self.assertEqual(_grade("pitcher_walks", "under", 2.5, 0, 0, 1), (1.0, True))
+        self.assertEqual(_grade("pitcher_hits_allowed", "over", 5.5, 0, 0, 7), (7.0, True))
+        self.assertEqual(_grade("pitcher_earned_runs", "over", 2.5, 0, 0, 1), (1.0, False))
+
+    def test_whole_number_line_pushes(self):
+        # Integer lines (e.g. K 6.0, outs 18) push on an exact hit — for either side.
+        self.assertEqual(_grade("pitcher_k", "over", 6.0, 0, 0, 6), (6.0, None))
+        self.assertEqual(_grade("pitcher_outs", "under", 18.0, 0, 0, 18), (18.0, None))
+
 
 class TestDevigForClv(unittest.TestCase):
     def test_balanced_book_is_half(self):
@@ -392,18 +497,19 @@ class _FakeConn:
 
 
 class TestAnalystGate(unittest.TestCase):
-    """gate_candidates promotes only bet/lean; pass demotes; None (gate off) promotes mechanically.
-    INTERNAL_KEY is unset in tests, so an uncached candidate never hits the network (returns None)."""
+    """gate_candidates promotes only 'bet'; 'lean' AND 'pass' demote; None (gate off) promotes
+    mechanically. INTERNAL_KEY is unset in tests, so an uncached candidate never hits the network
+    (returns None)."""
 
-    def test_pass_demotes_and_endorsed_promote(self):
+    def test_only_bet_promotes_lean_and_pass_demote(self):
         cands = [play(game_id=1), play(game_id=2), play(game_id=3)]
         conn = _FakeConn({
-            (1, "hr", "over", 10): "pass",
-            (2, "hr", "over", 10): "bet",
-            (3, "hr", "over", 10): "lean",
+            (1, "hr", "over", 10): "pass",   # demoted
+            (2, "hr", "over", 10): "bet",    # promoted
+            (3, "hr", "over", 10): "lean",   # demoted — no forced third
         })
         picks = gate_candidates(conn, "http://x", "2026-06-29", cands)
-        self.assertEqual([p["gameId"] for p in picks], [2, 3])
+        self.assertEqual([p["gameId"] for p in picks], [2])
 
     def test_gate_off_promotes_mechanically(self):
         cands = [play(game_id=g) for g in (1, 2, 3, 4)]

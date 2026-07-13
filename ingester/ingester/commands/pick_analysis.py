@@ -23,12 +23,15 @@ from zoneinfo import ZoneInfo
 
 from ingester.db import eastern_today, get_connection
 from ingester.commands.picks import (
-    LONGSHOT_EDGE,
     STRONG_EDGE,
     _bettime_quote,
 )
 
 _EASTERN = ZoneInfo("America/New_York")
+# Historical edge-bucket boundary (0.08). Was the live LONGSHOT_EDGE lever until the
+# Jul-2026 prop-expansion dropped the longshot exception; kept as a literal here so the
+# settled-record slices stay comparable across both bar regimes (see edge_bucket).
+_HIST_LONGSHOT_EDGE = 0.08
 
 # Slices with fewer picks than this get a low-sample flag (CIs are printed regardless).
 LOW_N = 30
@@ -66,12 +69,12 @@ def edge_bucket(edge: float) -> str:
     STRONG_EDGE .06 / LONGSHOT_EDGE .08 / MAX_EDGE .15) kept as literals on
     purpose: the settled record spans both regimes, and these cuts keep the
     historical slices comparable. The live bar is now MIN_EDGE .06 / MAX_EDGE
-    .125 (see commands/picks.py)."""
+    .125 with model_prob ≥ .55 and no longshot exception (see commands/picks.py)."""
     if edge < 0.04:
         return "<.04"
     if edge < STRONG_EDGE:
         return "[.04,.06)"
-    if edge < LONGSHOT_EDGE:
+    if edge < _HIST_LONGSHOT_EDGE:
         return "[.06,.08)"
     if edge <= 0.15:
         return "[.08,.15]"

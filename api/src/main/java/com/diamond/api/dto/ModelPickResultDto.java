@@ -30,6 +30,7 @@ public record ModelPickResultDto(
     Integer priceAmerican,
     String book,
     boolean strong,
+    boolean topPick,        // the single standout among the slate's picks (may be none)
     Double resultValue,
     Boolean won,
     boolean scored,
