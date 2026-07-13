@@ -126,6 +126,10 @@ services:
       AGENT_INTERNAL_KEY: ${AGENT_INTERNAL_KEY:-}
     volumes:
       - pybaseball_cache:/root/.pybaseball
+      # Persist trained artifacts (xHR model) across one-shot `run --rm` jobs, so the weekly
+      # train-xhr can feed the daily refresh-batter-xhr — without this the model is written
+      # into a throwaway container and refresh-batter-xhr finds none (batter_xhr stays empty).
+      - ingester_models:/app/models
     depends_on:
       postgres:
         condition: service_healthy
@@ -238,3 +242,4 @@ volumes:
   grafana_data:
   alertmanager_data:
   pybaseball_cache:
+  ingester_models:
