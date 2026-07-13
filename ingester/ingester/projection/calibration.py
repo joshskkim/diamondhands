@@ -53,11 +53,17 @@ class Calibrator:
         return float(min(1.0, max(0.0, np.interp(prob, _GRID, y))))
 
     def apply(self, proj):
-        """Return ``proj`` with each market probability passed through its calibration map."""
+        """Return ``proj`` with each market probability passed through its calibration map.
+
+        HIT (h1) is deliberately NOT calibrated here: a held-out backtest showed the
+        per-player clear-rate blend beats the isotonic calibrator for hit and that stacking
+        the two is worse than the blend alone, so the blend REPLACES calibration for h1
+        (applied downstream from the raw prob — see runner._served_hit_prob / prop_blend).
+        p_hit_1plus therefore stays raw through calibration; h2/hr/k are unchanged.
+        """
         pr = proj.probabilities
         new = replace(
             pr,
-            p_hit_1plus=self._cal("h1", pr.p_hit_1plus),
             p_hit_2plus=self._cal("h2", pr.p_hit_2plus),
             p_hr=self._cal("hr", pr.p_hr),
             p_k_1plus=self._cal("k", pr.p_k_1plus),

@@ -55,7 +55,9 @@ def _load_binary_outcomes(
     rows = conn.execute(
         """
         SELECT
-            bp.p_hit_1plus, bp.p_hit_2plus, bp.p_hr, bp.p_k_1plus,
+            -- Score the SERVED hit prob (clear-rate blended) — that's what picks are graded
+            -- on now; the engine leaves it NULL only for degenerate rows, so fall back to raw.
+            COALESCE(bp.p_hit_1plus_served, bp.p_hit_1plus), bp.p_hit_2plus, bp.p_hr, bp.p_k_1plus,
             CASE WHEN pgs.hits       >= 1 THEN 1 ELSE 0 END,
             CASE WHEN pgs.hits       >= 2 THEN 1 ELSE 0 END,
             CASE WHEN pgs.home_runs  >= 1 THEN 1 ELSE 0 END,

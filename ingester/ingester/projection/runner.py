@@ -23,8 +23,10 @@ from ingester.projection.batter_model import (
     project_batter,
     yrfi_probability,
 )
+from ingester.projection.clear_rates import season_hit_rates
 from ingester.projection.game_sim import GameSim, simulate_game
 from ingester.projection.opener import SeasonRole, is_likely_opener
+from ingester.projection.prop_blend import blend_market
 from ingester.projection.workload import (
     WorkloadParams,
     compute_starter_workload,
@@ -112,6 +114,26 @@ def set_calibrator(calibrator: Calibrator | None) -> None:
 def _maybe_calibrate(proj):
     """Recalibrate a projection's market probabilities if a calibrator is installed."""
     return _CALIBRATOR.apply(proj) if _CALIBRATOR is not None else proj
+
+
+# 0/1 is the "not really projected" sentinel (a 0-PA / padded lineup slot), not a real
+# probability — mirror OddsService.PROB_EPS. Such a raw prob is left with no served value
+# rather than blended, so the blend can't launder a 0 toward the league clear rate.
+_PROB_EPS = 1e-6
+
+
+def _served_hit_prob(raw_p_hit_1plus, rate_n):
+    """The served (clear-rate-blended) P(hit>=1) for one batter, or None when the raw prob
+    is the degenerate sentinel. ``rate_n`` is the batter's (season_rate, n) from
+    season_hit_rates, or None when he has no prior in-season games (blend → league rate).
+
+    This is HIT's calibration step, replacing the isotonic map (see Calibrator.apply): a
+    held-out backtest showed blend(raw) beats calibrate(raw) and beats stacking them."""
+    p = raw_p_hit_1plus
+    if p is None or p <= _PROB_EPS or p >= 1.0 - _PROB_EPS:
+        return None
+    rate, n = rate_n if rate_n is not None else (None, 0)
+    return round(blend_market("hit", 0.5, p, rate, n), 4)
 
 
 # Backtest-only: when set, the backtest path personalizes the park HR factor using
@@ -744,6 +766,7 @@ def _upsert_batter_projection(
     matchup_xwoba: float | None,
     matchup_quality: str | None,
     hr_distance_ft: float | None,
+    p_hit_1plus_served: float | None,
 ) -> None:
     conn.execute(
         """
@@ -751,6 +774,7 @@ def _upsert_batter_projection(
             game_id, player_id, opposing_pitcher_id, is_home,
             expected_pa,
             p_hit_1plus, p_hit_2plus, p_hr, p_k_1plus, p_bb_1plus,
+            p_hit_1plus_served,
             expected_hits, expected_total_bases,
             adj_park, adj_pitcher, adj_weather_hr, adj_weather_hits, adj_defense,
             pitcher_data_quality,
@@ -763,6 +787,7 @@ def _upsert_batter_projection(
             %s, %s, %s, %s,
             %s,
             %s, %s, %s, %s, %s,
+            %s,
             %s, %s,
             %s, %s, %s, %s, %s,
             %s,
@@ -776,6 +801,7 @@ def _upsert_batter_projection(
             is_home               = EXCLUDED.is_home,
             expected_pa           = EXCLUDED.expected_pa,
             p_hit_1plus           = EXCLUDED.p_hit_1plus,
+            p_hit_1plus_served    = EXCLUDED.p_hit_1plus_served,
             p_hit_2plus           = EXCLUDED.p_hit_2plus,
             p_hr                  = EXCLUDED.p_hr,
             p_k_1plus             = EXCLUDED.p_k_1plus,
@@ -806,6 +832,7 @@ def _upsert_batter_projection(
             proj.probabilities.p_hr,
             proj.probabilities.p_k_1plus,
             proj.probabilities.p_bb_1plus,
+            p_hit_1plus_served,
             round(proj.expected_hits, 3),
             round(proj.expected_total_bases, 3),
             round(proj.adj_park_hit, 3),
@@ -956,6 +983,12 @@ def _project_team_side(
         )
         return None
 
+    # Served-hit clear rates for this side's hitters — one batched, leak-free query per
+    # team-side (games strictly before the slate). Feeds _served_hit_prob below.
+    hit_clear_rates = season_hit_rates(
+        conn, [h.player_id for h in hitters], summary.game_date
+    )
+
     pitcher_throws = _load_pitcher_throws(conn, opposing_pitcher_id)
 
     splits = _load_pitcher_splits(conn, opposing_pitcher_id, season)
@@ -1078,6 +1111,9 @@ def _project_team_side(
                 as_of_date=summary.game_date, season=season, bundle=bundle, proj=proj,
             )
         proj = _maybe_calibrate(proj)
+        served_hit = _served_hit_prob(
+            proj.probabilities.p_hit_1plus, hit_clear_rates.get(hitter.player_id)
+        )
         _upsert_batter_projection(
             conn,
             game.game_id,
@@ -1091,6 +1127,7 @@ def _project_team_side(
             matchup.xwoba,
             matchup.quality,
             hr_distance_ft,
+            served_hit,
         )
         summary.batter_rows += 1
 
@@ -1669,6 +1706,7 @@ def _upsert_backtest_projection(
     proj,
     matchup_xwoba: float | None = None,
     matchup_quality: str | None = None,
+    p_hit_1plus_served: float | None = None,
 ) -> None:
     conn.execute(
         """
@@ -1676,10 +1714,11 @@ def _upsert_backtest_projection(
             backtest_run_id, game_id, player_id, as_of_date,
             expected_pa,
             p_hit_1plus, p_hit_2plus, p_hr, p_k_1plus,
+            p_hit_1plus_served,
             expected_hits, expected_total_bases,
             matchup_xwoba, matchup_quality
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (backtest_run_id, game_id, player_id) DO UPDATE SET
             as_of_date           = EXCLUDED.as_of_date,
             expected_pa          = EXCLUDED.expected_pa,
@@ -1687,6 +1726,7 @@ def _upsert_backtest_projection(
             p_hit_2plus          = EXCLUDED.p_hit_2plus,
             p_hr                 = EXCLUDED.p_hr,
             p_k_1plus            = EXCLUDED.p_k_1plus,
+            p_hit_1plus_served   = EXCLUDED.p_hit_1plus_served,
             expected_hits        = EXCLUDED.expected_hits,
             expected_total_bases = EXCLUDED.expected_total_bases,
             matchup_xwoba        = EXCLUDED.matchup_xwoba,
@@ -1702,6 +1742,7 @@ def _upsert_backtest_projection(
             proj.probabilities.p_hit_2plus,
             proj.probabilities.p_hr,
             proj.probabilities.p_k_1plus,
+            p_hit_1plus_served,
             round(proj.expected_hits, 3),
             round(proj.expected_total_bases, 3),
             matchup_xwoba,
@@ -1851,6 +1892,12 @@ def _project_team_side_backtest(
         )
         return None
 
+    # Served-hit clear rates as of the game-day being projected (leak-free — strictly
+    # before as_of_date), so the backtest scores the same served number the live path writes.
+    hit_clear_rates = season_hit_rates(
+        conn, [h.player_id for h in hitters], as_of_date
+    )
+
     pitcher_throws = _load_pitcher_throws(conn, opposing_pitcher_id)
     splits = _load_pitcher_splits_snapshot(conn, opposing_pitcher_id, season, as_of_date)
 
@@ -1967,9 +2014,12 @@ def _project_team_side_backtest(
                 as_of_date=as_of_date, season=season, bundle=bundle, proj=proj,
             )
         proj = _maybe_calibrate(proj)
+        served_hit = _served_hit_prob(
+            proj.probabilities.p_hit_1plus, hit_clear_rates.get(hitter.player_id)
+        )
         _upsert_backtest_projection(
             conn, backtest_run_id, game.game_id, hitter.player_id, as_of_date, proj,
-            matchup.xwoba, matchup.quality,
+            matchup.xwoba, matchup.quality, served_hit,
         )
         summary.batter_rows += 1
 

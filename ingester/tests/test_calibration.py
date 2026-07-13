@@ -28,13 +28,15 @@ def _proj(p_h1: float, p_h2: float, p_hr: float, p_k: float) -> BatterProjection
 
 
 class TestCalibrator(unittest.TestCase):
-    def test_applies_per_market_and_leaves_others(self) -> None:
-        identity = [i / 100 for i in range(101)]
-        # HR → always 0; H1 → identity; H2/K have no map (untouched).
-        c = Calibrator({"hr": [0.0] * 101, "h1": identity})
-        out = c.apply(_proj(0.5, 0.2, 0.3, 0.6))
-        self.assertAlmostEqual(out.probabilities.p_hr, 0.0)
-        self.assertAlmostEqual(out.probabilities.p_hit_1plus, 0.5)   # identity map
+    def test_hit_is_skipped_others_calibrated(self) -> None:
+        # HIT (h1) is deliberately NOT calibrated — the clear-rate blend owns it now (see
+        # Calibrator.apply). A doubling h1 map must leave p_hit_1plus untouched, while hr's
+        # map still applies and h2/k (no map) pass through.
+        doubling = [min(2 * (i / 100), 1.0) for i in range(101)]
+        c = Calibrator({"hr": [0.0] * 101, "h1": doubling})
+        out = c.apply(_proj(0.4, 0.2, 0.3, 0.6))
+        self.assertAlmostEqual(out.probabilities.p_hit_1plus, 0.4)   # h1 skipped → unchanged
+        self.assertAlmostEqual(out.probabilities.p_hr, 0.0)          # hr map applied
         self.assertAlmostEqual(out.probabilities.p_hit_2plus, 0.2)   # no map → unchanged
         self.assertAlmostEqual(out.probabilities.p_k_1plus, 0.6)     # no map → unchanged
 
