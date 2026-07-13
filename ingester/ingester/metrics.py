@@ -69,6 +69,38 @@ def expected_calibration_error(buckets: list[dict]) -> float:
     return sum(b["n"] * abs(b["predicted_mean"] - b["actual_rate"]) for b in buckets) / total
 
 
+def brier_decomposition(buckets: list[dict], base_rate: float) -> dict:
+    """Murphy's 3-term decomposition of the (binned) Brier score.
+
+    Reads the calibration buckets (each {n, predicted_mean, actual_rate}) and splits the
+    score into where it comes from::
+
+        brier ≈ reliability − resolution + uncertainty
+
+    - reliability  Σ nₖ(predₖ − actualₖ)² / N   calibration error — lower is better
+    - resolution   Σ nₖ(actualₖ − base)²  / N   discrimination    — higher is better
+    - uncertainty  base·(1 − base)               irreducible spread of the outcome
+
+    So a bad Brier from *miscalibration* (fix the probabilities) reads very differently from
+    one from *no discrimination* (fix the signal) — which ECE/sharpness alone can't tell
+    apart. ``brier`` is the reconstructed binned score (≈ the raw Brier up to binning). NaN
+    when there are no samples.
+    """
+    total = sum(b["n"] for b in buckets)
+    if total == 0:
+        nan = float("nan")
+        return {"reliability": nan, "resolution": nan, "uncertainty": nan, "brier": nan}
+    reliability = sum(b["n"] * (b["predicted_mean"] - b["actual_rate"]) ** 2 for b in buckets) / total
+    resolution = sum(b["n"] * (b["actual_rate"] - base_rate) ** 2 for b in buckets) / total
+    uncertainty = base_rate * (1.0 - base_rate)
+    return {
+        "reliability": reliability,
+        "resolution": resolution,
+        "uncertainty": uncertainty,
+        "brier": reliability - resolution + uncertainty,
+    }
+
+
 def log_loss(predicted: list[float], actual: list[int], eps: float = 1e-15) -> float:
     """Binary cross-entropy (a.k.a. logarithmic loss).
 
@@ -213,17 +245,24 @@ def crps_count(pmf: list[float], actual: int) -> float:
 
     For integer-valued outcomes the (discrete) CRPS equals the RPS:
         sum_k (CDF(k) - 1[actual <= k])^2
-    over the support of ``pmf`` (index k = count, pmf[k] = P(count == k)). It scores
-    the *whole* predicted count distribution (e.g. P(0), P(1), P(2)+ hits/runs) rather
-    than a binarized threshold, so it sees information Brier on P(>=1) discards.
-    Strictly proper; lower is better.
+    where index k = count and pmf[k] = P(count == k). It scores the *whole* predicted
+    count distribution (e.g. P(0), P(1), P(2)+ hits/runs) rather than a binarized
+    threshold, so it sees information Brier on P(>=1) discards. Strictly proper; lower
+    is better.
+
+    The sum runs to ``max(len(pmf)-1, actual)`` — critically, PAST the pmf's support when
+    the outcome exceeds it: beyond the support the CDF is frozen at its accumulated total
+    (1.0 for a normalized pmf), so each missing tail step contributes (1 - 0)^2 = 1. Without
+    this, a forecast whose support stops short of a large actual would be scored on a
+    truncated sum and look unfairly good next to a wider-support forecast.
     """
     if not pmf:
         return float("nan")
     cdf = 0.0
     total = 0.0
-    for k, p in enumerate(pmf):
-        cdf += p
+    for k in range(max(len(pmf) - 1, actual) + 1):
+        if k < len(pmf):
+            cdf += pmf[k]
         indicator = 1.0 if actual <= k else 0.0
         total += (cdf - indicator) ** 2
     return total

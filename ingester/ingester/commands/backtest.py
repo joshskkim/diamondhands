@@ -19,14 +19,17 @@ from ingester.db import get_connection
 from ingester.metrics import (
     average_precision,
     baseline_brier,
+    brier_decomposition,
     brier_score,
     calibration_buckets,
+    crps_count_mean,
     expected_calibration_error,
     log_loss,
     mae,
     mae_per_game,
     pearson,
     roc_auc,
+    sharpness,
     top_k_lift,
 )
 from ingester.projection.constants import LEAGUE_RUNS_PER_GAME_BASE, MODEL_VERSION
@@ -163,6 +166,14 @@ class _Outcomes:
     a_hit2: list[int]
     a_hr:   list[int]
     a_k:    list[int]
+    # Total bases: the closed-form path persists only the mean → count-regression (p_tb/a_tb).
+    # Under --sim-props the sim also captures a full TB pmf → a probabilistic score:
+    # tb_crps = [(pmf, actual)], and 2+TB as a Brier market (tb2_p / tb2_a).
+    p_tb:   list[float]  # expected_total_bases (model mean)
+    a_tb:   list[int]    # actual total bases
+    tb_crps: list[tuple[list[float], int]]
+    tb2_p:  list[float]  # P(TB >= 2) from the sim pmf
+    tb2_a:  list[int]    # 1[actual TB >= 2]
     game_hits: dict[int, tuple[float, float]]  # game_id → (exp, actual)
     n_projections: int
     n_games: int
@@ -183,6 +194,12 @@ class _Outcomes:
     hit_season: list[float | None]
     hr_season: list[float | None]
     n_season: list[int | None]
+    # Segmentation dimensions (--segment-by), aligned 1:1 to p_hit1/p_hr/p_k/a_*. Each may
+    # be None when the batter's lineup row is absent (LEFT JOIN game_lineups).
+    seg_month: list[int | None]
+    seg_home:  list[bool | None]
+    seg_slot:  list[int | None]
+    seg_hand:  list[str | None]
 
 
 def _load_outcomes(
@@ -244,7 +261,12 @@ def _load_outcomes(
             bp.sim_p_hit_1plus, bp.sim_p_hr, bp.sim_p_k_1plus,
             bbb.barrel_pct, bbb.pulled_air_pct, bbb.sweet_spot_pct, bbb.p90_ev_fbld,
             bx.xhr_per_bb,
-            {clear_rate_cols}
+            {clear_rate_cols},
+            bp.expected_total_bases, pgs.total_bases, bp.sim_tb_pmf,
+            -- Segmentation dimensions (--segment-by): month, home/away, lineup slot,
+            -- and the opposing starter's throwing hand.
+            EXTRACT(MONTH FROM g.game_date)::int,
+            gl.is_home, gl.batting_order, opp.throws
         FROM backtest_projections bp
         JOIN games g ON g.id = bp.game_id
         JOIN player_game_stats pgs
@@ -262,6 +284,12 @@ def _load_outcomes(
             ON bx.player_id = bp.player_id
             AND bx.season = EXTRACT(YEAR FROM g.game_date)::int - 1
         {clear_rate_join}
+        -- Lineup slot + side for this batter, and the opposing starter's hand.
+        LEFT JOIN game_lineups gl
+            ON gl.game_id = bp.game_id AND gl.player_id = bp.player_id
+        LEFT JOIN players opp
+            ON opp.id = CASE WHEN gl.is_home THEN g.away_probable_pitcher_id
+                             ELSE g.home_probable_pitcher_id END
         WHERE bp.backtest_run_id = %s
           AND pgs.game_id IS NOT NULL
           AND bp.p_hit_1plus IS NOT NULL
@@ -282,9 +310,11 @@ def _load_outcomes(
         n_projections=int(n_total[0]),
         n_games=int(n_total[1]),
         csv_rows=[],
+        p_tb=[], a_tb=[], tb_crps=[], tb2_p=[], tb2_a=[],
         sim_hit1=[], sim_hr=[], sim_k=[],
         hr_rankers={"barrel": [], "pulled_air": [], "sweet_spot": [], "p90_ev": [], "xhr": []},
         hit_season=[], hr_season=[], n_season=[],
+        seg_month=[], seg_home=[], seg_slot=[], seg_hand=[],
     )
 
     for row in rows:
@@ -293,7 +323,9 @@ def _load_outcomes(
          actual_hits, act_h1, act_h2, act_hr, act_k,
          sim_h1, sim_hr, sim_k,
          f_barrel, f_pull_air, f_sweet, f_p90, f_xhr,
-         cr_hit_season, cr_hr_season, cr_n_season) = row
+         cr_hit_season, cr_hr_season, cr_n_season,
+         exp_tb, act_tb, sim_tb_pmf,
+         s_month, s_home, s_slot, s_hand) = row
 
         out.p_hit1.append(float(pred_h1))
         out.p_hit2.append(float(pred_h2) if pred_h2 is not None else float(pred_h1))
@@ -315,6 +347,24 @@ def _load_outcomes(
         out.hr_season.append(float(cr_hr_season) if cr_hr_season is not None else None)
         out.n_season.append(int(cr_n_season) if cr_n_season is not None else None)
 
+        out.seg_month.append(int(s_month) if s_month is not None else None)
+        out.seg_home.append(bool(s_home) if s_home is not None else None)
+        out.seg_slot.append(int(s_slot) if s_slot is not None else None)
+        out.seg_hand.append(str(s_hand) if s_hand is not None else None)
+
+        # Total bases: scored independently on the subset where both the projection and
+        # the actual are present, so a NULL never pollutes the count MAE/correlation.
+        if exp_tb is not None and act_tb is not None:
+            out.p_tb.append(float(exp_tb))
+            out.a_tb.append(int(act_tb))
+        # Distributional TB (sim-props only): whole-pmf CRPS + a 2+TB Brier market.
+        if act_tb is not None and sim_tb_pmf is not None:
+            pmf = sim_tb_pmf if isinstance(sim_tb_pmf, list) else json.loads(sim_tb_pmf)
+            pmf = [float(x) for x in pmf]
+            out.tb_crps.append((pmf, int(act_tb)))
+            out.tb2_p.append(sum(pmf[2:]))          # P(TB >= 2)
+            out.tb2_a.append(1 if int(act_tb) >= 2 else 0)
+
         gid = int(game_id)
         eh = float(exp_hits) if exp_hits is not None else 0.0
         ah = int(actual_hits) if actual_hits is not None else 0
@@ -331,6 +381,9 @@ def _load_outcomes(
                 (d, pid, gid_csv, "hr",       float(pred_hr) if pred_hr else 0.0, int(act_hr)),
                 (d, pid, gid_csv, "k1plus",   float(pred_k)  if pred_k  else 0.0, int(act_k)),
             ])
+            if exp_tb is not None and act_tb is not None:
+                out.csv_rows.append(
+                    (d, pid, gid_csv, "total_bases", float(exp_tb), int(act_tb)))
 
     return out
 
@@ -366,6 +419,365 @@ def _load_run_totals(
     preds = [float(r[0]) for r in rows]
     actuals = [float(r[1]) for r in rows]
     return preds, actuals
+
+
+def _load_run_line_outcomes(
+    conn: psycopg.Connection, run_id: int
+) -> tuple[list[float], list[int]]:
+    """(P(home covers -1.5), actual home-cover) for --sim-props games with a final score.
+
+    Home covers -1.5 iff it wins by 2+ runs; integer margins never push a .5 line. Rows
+    without a sim cover prob (non --sim-props runs) are excluded by the NOT NULL filter.
+    """
+    rows = conn.execute(
+        """
+        SELECT bgr.p_home_cover_1_5, g.home_score, g.away_score
+        FROM backtest_game_runs bgr
+        JOIN games g ON g.id = bgr.game_id
+        WHERE bgr.backtest_run_id = %s
+          AND bgr.p_home_cover_1_5 IS NOT NULL
+          AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL
+        """,
+        (run_id,),
+    ).fetchall()
+    preds = [float(r[0]) for r in rows]
+    actuals = [1 if (int(r[1]) - int(r[2])) >= 2 else 0 for r in rows]
+    return preds, actuals
+
+
+def _vs_close_summary(
+    model: list[float], fair: list[float], actual: list[int]
+) -> dict:
+    """Summarize the model's edge vs the de-vigged closing line (the 'beat the close' read).
+
+    edge = model − fair. Splits the sample by edge sign and reports each side's realized
+    win rate vs the average market-fair prob it faced: if the model has real edge, the rows
+    it likes (edge > 0) should win MORE than the market implied, and vice versa. Returns
+    {n, mean_edge, corr_edge_actual, fav_*}. NaN-safe.
+    """
+    n = len(model)
+    if n == 0:
+        return {"n": 0, "mean_edge": float("nan"), "corr_edge_actual": float("nan"),
+                "fav_n": 0, "fav_realized": float("nan"), "fav_fair": float("nan"),
+                "dog_n": 0, "dog_realized": float("nan"), "dog_fair": float("nan")}
+    edge = [m - f for m, f in zip(model, fair)]
+    fav = [i for i in range(n) if edge[i] > 0]
+    dog = [i for i in range(n) if edge[i] <= 0]
+    def _rate(idx, xs):
+        return sum(xs[i] for i in idx) / len(idx) if idx else float("nan")
+    return {
+        "n": n,
+        "mean_edge": sum(edge) / n,
+        "corr_edge_actual": pearson(edge, [float(a) for a in actual]),
+        "fav_n": len(fav), "fav_realized": _rate(fav, actual), "fav_fair": _rate(fav, fair),
+        "dog_n": len(dog), "dog_realized": _rate(dog, actual), "dog_fair": _rate(dog, fair),
+    }
+
+
+def _print_vs_close(model: list[float], fair: list[float], actual: list[int]) -> None:
+    """Print the batter-hit edge-vs-close read (I3): does the model beat the market?"""
+    def _n(v: float, p: int = 3) -> str:
+        return f"{v:.{p}f}" if v == v else "N/A"
+
+    s = _vs_close_summary(model, fair, actual)
+    print(f"\nEdge vs closing line — batter 1+ hit ({s['n']:,} rows w/ a close):")
+    if not s["n"]:
+        print("  (no closing quotes on this run — needs stored odds_snapshots for the range)")
+        return
+    # Model log-loss vs the market's own log-loss: does the model's prob beat the close?
+    mkt_ll = log_loss(fair, actual)
+    mdl_ll = log_loss(model, actual)
+    print(f"  model log-loss={_n(mdl_ll, 4)}  vs market(close) log-loss={_n(mkt_ll, 4)}  "
+          f"(lower wins)")
+    print(f"  mean model edge (model−fair): {s['mean_edge']:+.4f}   "
+          f"corr(edge, actual): {_n(s['corr_edge_actual'])}")
+    print(f"  model-favored (edge>0): n={s['fav_n']:,}  realized={_n(s['fav_realized'])}  "
+          f"vs fair={_n(s['fav_fair'])}")
+    print(f"  market-favored (edge≤0): n={s['dog_n']:,}  realized={_n(s['dog_realized'])}  "
+          f"vs fair={_n(s['dog_fair'])}")
+    print("  (beat-the-close = model-favored rows realize ABOVE their market-fair prob)")
+
+
+def _load_vs_close_hit(
+    conn: psycopg.Connection, run_id: int
+) -> tuple[list[float], list[float], list[int]]:
+    """(model P(1+ hit), de-vigged closing fair prob, actual 1+ hit) for batter-hit rows.
+
+    The close = the last odds_snapshots pull at/before first pitch (per game+player, most
+    recent book); both over/under 0.5 come from that same pull and are de-vigged like
+    OddsService. Rows without a paired closing quote are dropped.
+    """
+    from ingester.commands.picks import _devig_two_way
+    rows = conn.execute(
+        """
+        WITH closes AS (
+            SELECT DISTINCT ON (o.game_id, o.player_id)
+                   o.game_id, o.player_id, o.bookmaker, o.captured_at,
+                   o.price_decimal AS over_dec
+            FROM odds_snapshots o
+            JOIN games g ON g.id = o.game_id
+            WHERE o.market = 'hit' AND o.side = 'over' AND o.line = 0.5
+              AND o.captured_at <= g.start_time_utc
+            ORDER BY o.game_id, o.player_id, o.captured_at DESC
+        ),
+        paired AS (
+            SELECT c.game_id, c.player_id, c.over_dec, u.price_decimal AS under_dec
+            FROM closes c
+            JOIN odds_snapshots u
+              ON u.game_id = c.game_id AND u.player_id = c.player_id
+             AND u.bookmaker = c.bookmaker AND u.captured_at = c.captured_at
+             AND u.market = 'hit' AND u.side = 'under' AND u.line = 0.5
+        )
+        SELECT bp.p_hit_1plus, p.over_dec, p.under_dec,
+               CASE WHEN pgs.hits >= 1 THEN 1 ELSE 0 END
+        FROM backtest_projections bp
+        JOIN paired p ON p.game_id = bp.game_id AND p.player_id = bp.player_id
+        JOIN player_game_stats pgs
+          ON pgs.player_id = bp.player_id AND pgs.game_id = bp.game_id
+        WHERE bp.backtest_run_id = %s AND bp.p_hit_1plus IS NOT NULL
+        """,
+        (run_id,),
+    ).fetchall()
+    model, fair, actual = [], [], []
+    for m, over_dec, under_dec, hit in rows:
+        f = _devig_two_way(float(over_dec), float(under_dec))
+        if f is not None:
+            model.append(float(m))
+            fair.append(f)
+            actual.append(int(hit))
+    return model, fair, actual
+
+
+# ---------------------------------------------------------------------------
+# T3 — run-line isotonic calibration (fit on one range, apply to another)
+# ---------------------------------------------------------------------------
+
+def _fit_runline_cal(preds: list[float], actuals: list[int], path: str) -> None:
+    """Fit an isotonic map for the run-line cover prob and save it to `path`."""
+    from ingester.projection.calibration import fit_isotonic
+    y = fit_isotonic(preds, actuals)
+    with open(path, "w") as f:
+        json.dump({"runline": y}, f)
+    print(f"[backtest] Run-line calibration map fit on {len(preds):,} games → {path}")
+
+
+def _apply_runline_cal(preds: list[float], path: str) -> list[float]:
+    """Apply a saved run-line isotonic map (101-pt grid) to `preds` via linear interp."""
+    with open(path) as f:
+        y = json.load(f)["runline"]
+    out = []
+    for p in preds:
+        p = min(1.0, max(0.0, p))
+        lo = min(int(p * 100), 99)
+        frac = p * 100 - lo
+        out.append(y[lo] + frac * (y[lo + 1] - y[lo]))
+    return out
+
+
+def _load_nrfi_outcomes(
+    conn: psycopg.Connection, run_id: int
+) -> tuple[list[float], list[int]]:
+    """(P(YRFI), actual YRFI) for games with V53 first-inning actuals.
+
+    YRFI = a run scores in the first inning by either team (home_score_1st + away_score_1st
+    > 0). p_yrfi is the closed-form served number; NRFI is its complement. Graded as YRFI so
+    the stored prob maps directly to the outcome.
+    """
+    rows = conn.execute(
+        """
+        SELECT bgr.p_yrfi, g.home_score_1st, g.away_score_1st
+        FROM backtest_game_runs bgr
+        JOIN games g ON g.id = bgr.game_id
+        WHERE bgr.backtest_run_id = %s
+          AND bgr.p_yrfi IS NOT NULL
+          AND g.home_score_1st IS NOT NULL AND g.away_score_1st IS NOT NULL
+        """,
+        (run_id,),
+    ).fetchall()
+    preds = [float(r[0]) for r in rows]
+    actuals = [1 if (int(r[1]) + int(r[2])) > 0 else 0 for r in rows]
+    return preds, actuals
+
+
+# ---------------------------------------------------------------------------
+# Pitcher props (V79): count-regression MAE + canonical-line Brier vs pitcher_starts
+# ---------------------------------------------------------------------------
+
+# Count markets: (label, projection col, pitcher_starts actual col). `runs` is the
+# model's expected runs-allowed graded against actual EARNED runs — a known small
+# approximation (the model has no unearned-run notion), flagged in the printout.
+_PITCH_COUNTS = (
+    ("outs", "expected_outs", "outs"),
+    ("K",    "expected_k",    "strikeouts"),
+    ("BB",   "expected_bb",   "walks"),
+    ("H",    "expected_h",    "hits_allowed"),
+    ("HR",   "expected_hr",   "hr_allowed"),
+    ("ER≈R", "expected_runs", "earned_runs"),
+    ("BF",   "expected_bf",   "batters_faced"),
+)
+
+# Canonical-line prop markets: (label, workload key, line, actual col). The workload
+# jsonb stores P(stat > line); we grade it as a Brier/log-loss market vs 1[actual > line].
+_PITCH_LINES = (
+    ("K>5.5",     "p_k",    "5.5",  "strikeouts"),
+    ("outs>17.5", "p_outs", "17.5", "outs"),
+    ("BB>1.5",    "p_bb",   "1.5",  "walks"),
+)
+
+
+def _load_pitcher_outcomes(
+    conn: psycopg.Connection, run_id: int
+) -> tuple[dict[str, dict[str, list[float]]], dict[str, dict[str, list]],
+           list[tuple[list[float], int]]]:
+    """Join backtest_pitcher_projections to pitcher_starts (V31) for the given run.
+
+    Returns (counts, lines, outs_crps):
+      counts[label] = {"pred": [...], "act": [...]}  for the count-regression markets
+      lines[label]  = {"p": [...], "a": [...]}       for the canonical-line Brier markets
+      outs_crps     = [(outs pmf, actual outs), ...] for the whole-distribution CRPS
+    Only rows with a matching pitcher_starts actual are included; NULLs are skipped per
+    market so a missing column never pollutes another market's score.
+    """
+    rows = conn.execute(
+        """
+        SELECT
+            bpp.expected_outs, bpp.expected_k, bpp.expected_bb, bpp.expected_h,
+            bpp.expected_hr, bpp.expected_runs, bpp.expected_bf,
+            ps.outs, ps.strikeouts, ps.walks, ps.hits_allowed, ps.hr_allowed,
+            ps.earned_runs, ps.batters_faced,
+            bpp.workload
+        FROM backtest_pitcher_projections bpp
+        JOIN pitcher_starts ps
+            ON ps.player_id = bpp.pitcher_id AND ps.game_id = bpp.game_id
+        WHERE bpp.backtest_run_id = %s
+        """,
+        (run_id,),
+    ).fetchall()
+
+    counts = {label: {"pred": [], "act": []} for label, *_ in _PITCH_COUNTS}
+    lines = {label: {"p": [], "a": []} for label, *_ in _PITCH_LINES}
+    outs_crps: list[tuple[list[float], int]] = []
+    for row in rows:
+        (e_outs, e_k, e_bb, e_h, e_hr, e_runs, e_bf,
+         a_outs, a_k, a_bb, a_h, a_hr, a_er, a_bf, workload) = row
+        preds = {"outs": e_outs, "K": e_k, "BB": e_bb, "H": e_h,
+                 "HR": e_hr, "ER≈R": e_runs, "BF": e_bf}
+        acts = {"outs": a_outs, "K": a_k, "BB": a_bb, "H": a_h,
+                "HR": a_hr, "ER≈R": a_er, "BF": a_bf}
+        for label, *_ in _PITCH_COUNTS:
+            p, a = preds[label], acts[label]
+            if p is not None and a is not None:
+                counts[label]["pred"].append(float(p))
+                counts[label]["act"].append(float(a))
+        if workload:
+            wl = workload if isinstance(workload, dict) else json.loads(workload)
+            act_by_col = {"strikeouts": a_k, "outs": a_outs, "walks": a_bb}
+            for label, wkey, lkey, acol in _PITCH_LINES:
+                p_over = (wl.get(wkey) or {}).get(lkey)
+                actual = act_by_col[acol]
+                if p_over is not None and actual is not None:
+                    lines[label]["p"].append(float(p_over))
+                    lines[label]["a"].append(1 if float(actual) > float(lkey) else 0)
+            pmf = wl.get("p_outs_pmf")
+            if pmf and a_outs is not None:
+                outs_crps.append(([float(x) for x in pmf], int(a_outs)))
+    return counts, lines, outs_crps
+
+
+def _print_pitcher_results(
+    counts: dict[str, dict[str, list[float]]],
+    lines: dict[str, dict[str, list]],
+    outs_crps: list[tuple[list[float], int]],
+) -> None:
+    """Print the pitcher-prop scorecard: count MAE/corr/bias + canonical-line Brier + CRPS."""
+    def _n(v: float, p: int = 3) -> str:
+        return f"{v:.{p}f}" if v == v else "N/A"
+
+    n_graded = len(counts["K"]["pred"]) if counts["K"]["pred"] else 0
+    print(f"\nPitcher props ({n_graded:,} graded starts vs pitcher_starts):")
+    if not n_graded:
+        print("  (no matched starts — ensure backfill-pitcher-starts covers the range)")
+        return
+    print("  Count markets — MAE vs naive mean-baseline (ER≈R grades runs-allowed vs earned):")
+    print(f"    {'market':<7}{'n':>6}{'MAE':>8}{'base':>8}{'corr':>7}{'bias':>8}")
+    for label, *_ in _PITCH_COUNTS:
+        pred, act = counts[label]["pred"], counts[label]["act"]
+        if not pred:
+            continue
+        mkt_mae = mae(pred, act)
+        mean_a = sum(act) / len(act)
+        base = mae([mean_a] * len(act), act)
+        bias = sum(pred) / len(pred) - mean_a
+        print(f"    {label:<7}{len(pred):>6,}{mkt_mae:>8.3f}{base:>8.3f}"
+              f"{_n(pearson(pred, act)):>7}{bias:>+8.3f}")
+    print("  Canonical-line props — Brier / log-loss vs base rate (from workload ladders):")
+    print(f"    {'market':<11}{'n':>6}{'Brier':>9}{'log-loss':>10}{'base-rate':>11}")
+    for label, *_ in _PITCH_LINES:
+        p, a = lines[label]["p"], lines[label]["a"]
+        if not p:
+            continue
+        base_rate = sum(a) / len(a)
+        print(f"    {label:<11}{len(p):>6,}{brier_score(p, a):>9.4f}"
+              f"{log_loss(p, a):>10.4f}{base_rate:>11.3f}")
+    if outs_crps:
+        # Whole-distribution score: CRPS over the full outs pmf vs actual outs (the only
+        # market with a stored pmf), alongside the naive "always the mean-outs point" RPS.
+        mean_o = sum(a for _, a in outs_crps) / len(outs_crps)
+        naive = [([0.0] * int(mean_o) + [1.0], a) for _, a in outs_crps]
+        print(f"  Outs distribution — CRPS vs naive point forecast ({len(outs_crps):,}):")
+        print(f"    outs CRPS={crps_count_mean(outs_crps):.4f}  "
+              f"naive(point@{mean_o:.0f})={crps_count_mean(naive):.4f}  (lower=better)")
+
+
+# ---------------------------------------------------------------------------
+# Segmentation (--segment-by): where is the batter model strong / weak?
+# ---------------------------------------------------------------------------
+
+def _segment_groups(out: _Outcomes, key: str) -> list[tuple[str, list[int]]]:
+    """(label, row-indices) groups for the chosen dimension, in a sensible order.
+
+    Rows whose segment value is NULL (no lineup row) are dropped from the breakdown.
+    ``confidence`` buckets by the model's own P(H≥1) decile — the calibration lens.
+    """
+    n = len(out.p_hit1)
+    groups: dict[str, list[int]] = {}
+    if key == "confidence":
+        for i in range(n):
+            b = min(9, int(out.p_hit1[i] * 10))
+            groups.setdefault(f"{b * 10}-{b * 10 + 10}%", []).append(i)
+        return [(lbl, groups[lbl]) for lbl in sorted(groups, key=lambda s: int(s.split("-")[0]))]
+    labelers = {
+        "month": lambda i: f"{out.seg_month[i]:02d}" if out.seg_month[i] is not None else None,
+        "home":  lambda i: (None if out.seg_home[i] is None else ("home" if out.seg_home[i] else "away")),
+        "slot":  lambda i: str(out.seg_slot[i]) if out.seg_slot[i] is not None else None,
+        "hand":  lambda i: out.seg_hand[i],
+    }
+    labeler = labelers[key]
+    for i in range(n):
+        lbl = labeler(i)
+        if lbl is not None:
+            groups.setdefault(lbl, []).append(i)
+    # slot sorts numerically; the rest lexically.
+    keyfn = (lambda s: int(s)) if key == "slot" else (lambda s: s)
+    return [(lbl, groups[lbl]) for lbl in sorted(groups, key=keyfn)]
+
+
+def _print_segmented(out: _Outcomes, key: str) -> None:
+    """Per-segment Brier for the batter markets + HR ranking (AUC), to localize strength."""
+    def _n(v: float, p: int = 4) -> str:
+        return f"{v:.{p}f}" if v == v else "N/A"
+
+    groups = _segment_groups(out, key)
+    print(f"\nSegmented by {key} (batter markets; Brier lower=better, HR-AUC higher=better):")
+    print(f"  {'group':<10}{'n':>8}{'H≥1':>9}{'HR':>9}{'K≥1':>9}{'HR-AUC':>9}")
+    for lbl, idx in groups:
+        if not idx:
+            continue
+        b_h1 = brier_score([out.p_hit1[i] for i in idx], [out.a_hit1[i] for i in idx])
+        b_hr = brier_score([out.p_hr[i] for i in idx],   [out.a_hr[i] for i in idx])
+        b_k  = brier_score([out.p_k[i] for i in idx],    [out.a_k[i] for i in idx])
+        auc  = roc_auc([out.p_hr[i] for i in idx],       [out.a_hr[i] for i in idx])
+        print(f"  {lbl:<10}{len(idx):>8,}{_n(b_h1):>9}{_n(b_hr):>9}{_n(b_k):>9}{_n(auc, 3):>9}")
 
 
 def _print_results(
@@ -674,6 +1086,13 @@ def cmd_backtest(args: argparse.Namespace) -> None:
             "k1plus":   calibration_buckets(out.p_k,    out.a_k),
         }
 
+        # Pitcher props + run line (V79) — loaded while the connection is open, printed below.
+        pitch_counts, pitch_lines, pitch_outs_crps = _load_pitcher_outcomes(conn, run_id)
+        rl_p, rl_a = _load_run_line_outcomes(conn, run_id)
+        nrfi_p, nrfi_a = _load_nrfi_outcomes(conn, run_id)
+        vc = (_load_vs_close_hit(conn, run_id)
+              if getattr(args, "vs_close", False) else ([], [], []))
+
         # Step e: persist metrics (mae_total_runs now holds the REAL run MAE).
         _update_backtest_run(
             conn, run_id,
@@ -705,6 +1124,58 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     print(f"  league-mean MAE:    {run_mae_baseline:.3f}  (always {2 * LEAGUE_RUNS_PER_GAME_BASE:.1f})")
     print(f"  corr(pred, actual): {run_corr:+.3f}")
 
+    # Run line (V79): P(home covers -1.5) vs actual, from the sim margin distribution.
+    # Only present on --sim-props runs; Brier/log-loss + ECE, plus the base cover rate.
+    if rl_p:
+        rl_base = sum(rl_a) / len(rl_a)
+        rl_ece = expected_calibration_error(calibration_buckets(rl_p, rl_a))
+        print(f"\nRun line — P(home covers -1.5) ({len(rl_p):,} sim'd games):")
+        print(f"  Brier:              {brier_score(rl_p, rl_a):.4f}  (baseline {baseline_brier(rl_a):.4f})")
+        print(f"  log-loss:           {log_loss(rl_p, rl_a):.4f}")
+        print(f"  ECE:                {rl_ece:.4f}")
+        print(f"  home-cover rate:    {rl_base:.3f}")
+        # T3: fit a calibration map from this run, and/or apply one and show the delta.
+        if getattr(args, "fit_runline_cal", None):
+            _fit_runline_cal(rl_p, rl_a, args.fit_runline_cal)
+        if getattr(args, "runline_cal", None):
+            rl_c = _apply_runline_cal(rl_p, args.runline_cal)
+            c_ece = expected_calibration_error(calibration_buckets(rl_c, rl_a))
+            print(f"  calibrated Brier:   {brier_score(rl_c, rl_a):.4f}  "
+                  f"(ECE {c_ece:.4f}) [T3 map: {args.runline_cal}]")
+
+    # NRFI (V80): P(YRFI) vs the V53 first-inning actuals. Closed-form, so always present.
+    if nrfi_p:
+        nrfi_base = sum(nrfi_a) / len(nrfi_a)
+        nrfi_ece = expected_calibration_error(calibration_buckets(nrfi_p, nrfi_a))
+        print(f"\nNRFI — P(run scores in 1st, either team) ({len(nrfi_p):,} games):")
+        print(f"  Brier:              {brier_score(nrfi_p, nrfi_a):.4f}  (baseline {baseline_brier(nrfi_a):.4f})")
+        print(f"  log-loss:           {log_loss(nrfi_p, nrfi_a):.4f}")
+        print(f"  ECE:                {nrfi_ece:.4f}")
+        print(f"  YRFI rate:          {nrfi_base:.3f}")
+
+    # Total bases (V5 stores only the expected count, so this is a count-regression read,
+    # not a probability market): MAE + correlation vs the naive "always predict the mean"
+    # baseline, plus mean bias to catch a systematically high/low TB projection.
+    if out.p_tb:
+        a_tb_f = [float(a) for a in out.a_tb]
+        tb_mae = mae(out.p_tb, a_tb_f)
+        mean_tb = sum(a_tb_f) / len(a_tb_f)
+        tb_base_mae = mae([mean_tb] * len(a_tb_f), a_tb_f)
+        tb_bias = sum(out.p_tb) / len(out.p_tb) - mean_tb
+        print(f"\nTotal bases ({len(out.p_tb):,} batter rows):")
+        print(f"  TB MAE:             {tb_mae:.3f}")
+        print(f"  mean-TB MAE:        {tb_base_mae:.3f}  (always {mean_tb:.2f})")
+        print(f"  corr(pred, actual): {pearson(out.p_tb, a_tb_f):+.3f}")
+        print(f"  mean bias:          {tb_bias:+.3f}  (pred − actual; >0 = over-projecting)")
+        # Distributional TB from the sim pmf (--sim-props only): 2+TB Brier + whole-pmf CRPS.
+        if out.tb2_p:
+            print(f"  2+TB Brier:         {brier_score(out.tb2_p, out.tb2_a):.4f}  "
+                  f"(baseline {baseline_brier(out.tb2_a):.4f}, rate {sum(out.tb2_a)/len(out.tb2_a):.3f})")
+            print(f"  TB CRPS:            {crps_count_mean(out.tb_crps):.4f}  ({len(out.tb_crps):,} sim'd)")
+
+    # Pitcher props (V79): count-regression + canonical-line Brier + outs CRPS vs pitcher_starts.
+    _print_pitcher_results(pitch_counts, pitch_lines, pitch_outs_crps)
+
     # Log-loss (sharper than Brier on rare events; lower is better).
     print("\nLog-loss (proper scoring, rewards sharp+correct):")
     print(f"  hit1plus={ll_h1:.5f}  hit2plus={ll_h2:.5f}  hr={ll_hr:.5f}  k1plus={ll_k:.5f}")
@@ -730,6 +1201,20 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         lift = top_k_lift(preds, acts, max(1, len(preds) // 10))
         print(f"  {name:<10}{_n(auc):>9}{_n(ap):>9}{_n(lift['base_rate']):>8}"
               f"{_n(lift['top_k_rate']):>13}{_n(lift['lift']):>8}")
+
+    # Calibration quality: ECE = sample-weighted |predicted - actual| across the
+    # calibration buckets (lower=better); sharpness = variance of the forecasts (higher
+    # is better, but ONLY meaningful when ECE is low — a sharp+miscalibrated model is
+    # confidently wrong). Reported together per Gneiting: maximize sharpness s.t. calibration.
+    print("\nCalibration quality — ECE/reliability lower=better, resolution higher=better;")
+    print("  Brier ≈ reliability − resolution + uncertainty (Murphy decomposition):")
+    print(f"  {'market':<10}{'ECE':>8}{'sharp':>8}{'reliab':>9}{'resol':>9}{'uncert':>9}")
+    for name, preds, acts in _disc_markets:
+        ece = expected_calibration_error(cal[name])
+        base = sum(acts) / len(acts) if acts else float("nan")
+        dec = brier_decomposition(cal[name], base)
+        print(f"  {name:<10}{_n(ece):>8}{_n(sharpness(preds)):>8}"
+              f"{_n(dec['reliability']):>9}{_n(dec['resolution']):>9}{_n(dec['uncertainty']):>9}")
 
     # HR gate: does the model out-rank prior-season HR rankers (naive batted-ball
     # features + the learned xHR)? Scored on the shared subset where EVERY ranker is
@@ -760,6 +1245,15 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     # Empirical-shrinkage blend A/B (scores the serving-layer PropBlend on hit/hr).
     if clear_rate_blend:
         _report_clear_rate_blend(out)
+
+    # Segmentation breakdown (--segment-by): localize where the model is strong/weak.
+    segment_by = getattr(args, "segment_by", None)
+    if segment_by:
+        _print_segmented(out, segment_by)
+
+    # Edge vs closing line (--vs-close): the model-beats-market read (I3).
+    if getattr(args, "vs_close", False):
+        _print_vs_close(*vc)
 
     # Step g: optional CSV.
     if want_csv and out.csv_rows:

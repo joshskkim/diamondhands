@@ -85,6 +85,12 @@ PITCHER_PROP_MARKETS = {
     "pitcher_hits_allowed", "pitcher_earned_runs",
 }
 EXCLUDED_MARKETS = {"hit"}
+# T4 (K-lean): the backtest shows K is the model's strongest, best-calibrated edge, so
+# nudge K-family markets up the candidate ranking. OFF by default (0.0 = no change); an
+# additive score bonus applied only to `pitcher_k`. A/B via forward CLV, not the backtest
+# (pick selection is not exercised by the backtest harness).
+K_LEAN_MARKETS = {"pitcher_k"}
+K_MARKET_SCORE_BONUS: float = float(os.environ.get("DIAMOND_K_MARKET_SCORE_BONUS", "0.0"))
 HIT_RATE_VETO_MIN_N = 15  # season sample needed before the traffic light can veto
 # Per-market veto bands: (no OVER below, no UNDER above). Market-specific because
 # clear-rate scales differ wildly — the hit bands applied to HR would veto every
@@ -182,6 +188,8 @@ def _scored_candidates(plays: list[dict], sim: dict | None,
             continue
         corroborated = _sim_corroborates(p, sim)
         score = edge + 0.5 * p["evPct"] + (0.02 if corroborated else 0.0)
+        if K_MARKET_SCORE_BONUS and p["market"] in K_LEAN_MARKETS:
+            score += K_MARKET_SCORE_BONUS
         strong = edge >= STRONG_EDGE and p["modelProb"] >= 0.5
         candidates.append((score, p, edge, strong))
     candidates.sort(key=lambda c: -c[0])
