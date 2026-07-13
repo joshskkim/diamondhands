@@ -23,6 +23,7 @@ Pure functions only; ingester.commands wiring and the eval harness live elsewher
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from scipy.stats import binom
@@ -35,11 +36,14 @@ WORKLOAD_RECENCY_DECAY: float = 0.9
 WORKLOAD_WINDOW: int = 10
 # Phantom league-average starts mixed into a thin history (EB regression).
 WORKLOAD_PRIOR_STARTS: float = 3.0
-# Per-BF strikeout rate: phantom league BF for the EB blend.
-K_RATE_PRIOR_BF: float = 100.0
+# Per-BF strikeout rate: phantom league BF for the EB blend. Env-overridable (T2 A/B) —
+# LOWER = more per-pitcher weight (less regression to league); sweep on a held-out range.
+K_RATE_PRIOR_BF: float = float(os.environ.get("DIAMOND_K_RATE_PRIOR_BF", "100.0"))
 # Per-BF walk rate: phantom league BF for the EB blend. Walks are rarer and noisier per
 # start than Ks, so a slightly heavier prior keeps a thin sample closer to league.
-BB_RATE_PRIOR_BF: float = 120.0
+# Env-overridable (T2): the smoke test showed pitcher-BB carries ~no edge — sweep this
+# DOWN to test whether more per-pitcher walk-rate weight recovers signal out-of-sample.
+BB_RATE_PRIOR_BF: float = float(os.environ.get("DIAMOND_BB_RATE_PRIOR_BF", "120.0"))
 # Physical bounds on a start's outs.
 MAX_OUTS: int = 27
 
@@ -209,6 +213,17 @@ def walk_forward_residuals(
             residuals.append(o - mu)
             history.insert(0, o)
     return residuals
+
+
+def outs_pmf_list(mu: float, params: WorkloadParams) -> list[float]:
+    """The outs distribution as a 0-indexed pmf list (index = outs recorded), for CRPS.
+
+    Wraps :func:`outs_distribution` (a {outs: prob} dict) into the dense list
+    ``crps_count`` expects, padding gaps with 0. Length = highest out count with mass + 1.
+    """
+    dist = outs_distribution(mu, params)
+    hi = max(dist) if dist else 0
+    return [round(dist.get(k, 0.0), 5) for k in range(hi + 1)]
 
 
 def compute_starter_workload(

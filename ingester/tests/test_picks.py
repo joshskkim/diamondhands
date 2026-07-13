@@ -646,3 +646,25 @@ class TestBookQuote(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestKLeanLever(unittest.TestCase):
+    """T4: DIAMOND_K_MARKET_SCORE_BONUS nudges pitcher_k up the ranking; OFF = no change."""
+
+    def _two_plays(self):
+        # Non-K play has the higher raw score (edge .12 vs .10); different games so both survive.
+        hr = play(game_id=1, market="hr", model=0.62, fair=0.50, ev=0.10)
+        pk = play(game_id=2, market="pitcher_k", model=0.60, fair=0.50, ev=0.10)
+        return [hr, pk]
+
+    def test_off_by_default_keeps_edge_order(self):
+        from unittest import mock
+        with mock.patch("ingester.commands.picks.K_MARKET_SCORE_BONUS", 0.0):
+            picks = build_picks(self._two_plays(), sim=None)
+        self.assertEqual([p["market"] for p in picks], ["hr", "pitcher_k"])
+
+    def test_bonus_promotes_pitcher_k(self):
+        from unittest import mock
+        with mock.patch("ingester.commands.picks.K_MARKET_SCORE_BONUS", 0.05):
+            picks = build_picks(self._two_plays(), sim=None)
+        self.assertEqual(picks[0]["market"], "pitcher_k")
