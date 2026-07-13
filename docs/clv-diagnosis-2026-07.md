@@ -119,3 +119,50 @@ consistent with stored CLV being artifact-dominated noise.
 4. **The real model signal to chase next** is the hit-family upper-bucket overconfidence
    (shrink 0.65–0.75 predictions toward observed ~0.58–0.63) — that's a calibration fix,
    measurable on /api/accuracy without any betting-market dependency.
+
+---
+
+## 2026-07-10 — candidate-pool cutover (segment CLV on this date)
+
+`/api/odds/best` changed shape. Any CLV series that spans this date mixes two different
+candidate pools and must be segmented on it.
+
+**What changed.** `OddsService.buildProps` previously priced only `hit` and `hr`; every
+other prop market returned a null `modelProb`, and `addPlay` drops quotes without one. So
+`bb`, `tb`, `hrr`, `pitcher_k`, `pitcher_outs`, `pitcher_hits_allowed` and
+`pitcher_earned_runs` were invisible to `record-picks`. All nine markets now price, from
+the projection sources that already existed (`batter_projections.p_bb_1plus`,
+`game_sim_batter_props` tb/hrr histograms, `pitcher_projections.workload` K/outs ladders,
+`game_sim_pitcher_props` hits/ER histograms). Separately, batter probabilities are now
+regressed toward the player's demonstrated clear rate (`PropBlend`), matching what
+`/api/props/board` has always displayed — so the `modelProb` at which a `hit` pick is
+selected and re-evaluated moved.
+
+**Two consequences for the picks pipeline** (`picks.py:531` reads this endpoint; its
+`_current_model_prob` re-evaluates locked picks against `modelProb`):
+
+1. The 3-picks-per-slate budget is now contested by seven more markets.
+2. `hit`/`hr` picks are selected at a blended probability, not the raw model's.
+
+**Measured on the 2026-07-02 slate** (200 plays): `bb` contributed 76 plays and the
+pitcher markets 17, none of which could have been picked before. A `pitcher_outs` play
+topped the board.
+
+**Watch this.** Blending compresses edges, and only batter markets blend — pitcher props
+keep their raw (wider) spread because no pitcher clear rates exist. Mean model−fair edge
+on that slate:
+
+| market | n | mean edge | blended |
+|---|---|---|---|
+| pitcher_outs | 8 | +0.153 | no |
+| total | 7 | +0.125 | no |
+| pitcher_k | 9 | +0.118 | no |
+| run_line | 6 | +0.114 | no |
+| moneyline | 8 | +0.103 | no |
+| hit | 82 | +0.073 | **yes** |
+| bb | 76 | +0.058 | **yes** |
+
+Since the board ranks by `edge = modelProb − fairProb`, this systematically advantages the
+unblended markets: pitcher props took 5 of the top 20 slots and `bb` took none. If the
+board turns out to be dominated by pitcher props, the fix is to either blend them (needs
+pitcher clear rates, which `ClearRateRepository` does not compute) or rank within-market.

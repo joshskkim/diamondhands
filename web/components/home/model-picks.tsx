@@ -165,9 +165,11 @@ function PickCard({
     <div
       className={cn(
         'rounded-xl border px-5 py-4 flex flex-col gap-3',
-        rank === 1
-          ? 'bg-gradient-to-br from-cyan-500/10 to-[#0e1015] border-cyan-400/30'
-          : 'bg-[#0e1015] border-white/10',
+        pick.topPick
+          ? 'bg-gradient-to-br from-amber-400/15 to-[#0e1015] border-amber-300/40'
+          : rank === 1
+            ? 'bg-gradient-to-br from-cyan-500/10 to-[#0e1015] border-cyan-400/30'
+            : 'bg-[#0e1015] border-white/10',
       )}
     >
       <div className="flex items-center gap-2">
@@ -175,12 +177,12 @@ function PickCard({
         <span
           className={cn(
             'text-[10px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded border',
-            pick.strong
-              ? 'text-cyan-300 border-cyan-400/40 bg-cyan-500/10'
-              : 'text-zinc-400 border-white/15 bg-white/5',
+            pick.topPick
+              ? 'text-amber-300 border-amber-300/50 bg-amber-400/10'
+              : 'text-cyan-300 border-cyan-400/40 bg-cyan-500/10',
           )}
         >
-          {pick.strong ? 'Strong' : 'Lean'}
+          {pick.topPick ? 'Top Pick' : 'Strong'}
         </span>
         <AnalystChip verdict={pick.debateVerdict} confidence={pick.debateConfidence} />
         {outcome && <OutcomeBadge outcome={outcome} />}

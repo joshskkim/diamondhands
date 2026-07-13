@@ -25,7 +25,8 @@ public class ModelPicksRepository {
     private static final String PICKS_SQL = """
         SELECT mp.slate_date, mp.rank, mp.game_id, mp.market, mp.side, mp.line, mp.player_id,
                mp.player_name, mp.matchup, mp.model_prob, mp.fair_prob, mp.edge, mp.ev_pct,
-               mp.price_american, mp.book, mp.strong, mp.result_value, mp.won, mp.scored_at, mp.active,
+               mp.price_american, mp.book, mp.strong, mp.top_pick,
+               mp.result_value, mp.won, mp.scored_at, mp.active,
                to_char(mp.first_shown_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS first_shown_at,
                to_char(mp.bumped_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS bumped_at,
                mp.bump_reason,
@@ -68,6 +69,7 @@ public class ModelPicksRepository {
             nullableInt(rs, "price_american"),
             rs.getString("book"),
             rs.getBoolean("strong"),
+            rs.getBoolean("top_pick"),
             dbl(rs, "result_value"),
             (Boolean) rs.getObject("won"),
             rs.getObject("scored_at") != null,

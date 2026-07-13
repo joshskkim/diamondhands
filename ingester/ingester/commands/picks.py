@@ -47,25 +47,44 @@ from ingester.projection.constants import DEAD_GAME_STATUSES, MODEL_VERSION
 #     [.10,.125) went 15-9; same lesson as the earlier 0.25 → 0.15 cut (the
 #     0/3 day's misses were 18–21pt "edges"): past a point, model−market
 #     disagreement is model error, not free money.
-#   · 'hit' excluded — backtests show H≥1 has near-zero skill signal, so
-#     model−market gaps there are mostly noise. HR (where the model has a
-#     validated edge) and game markets stay.
+#   · every priced market is eligible EXCEPT 'hit' (1+ hit) — backtests show H≥1
+#     has near-zero skill signal, so model−market gaps there are mostly noise. The
+#     game markets, HR, and the batter/pitcher prop lines (bb/tb/hrr, pitcher
+#     K/outs/walks/hits/ER) all price with a model number and now settle correctly.
 #   · HR props must not contradict the hit-rate traffic light (season clear
-#     rate, n≥15): no overs on red, no unders on green.
+#     rate, n≥15): no overs on red, no unders on green. (Only hit/hr have veto
+#     bands; other markets never veto — see HIT_RATE_VETO_BANDS.)
 MIN_EDGE = 0.06
 MAX_EDGE = 0.125
 MIN_EV = 0.05
-MIN_MODEL_PROB = 0.40
-LONGSHOT_EDGE = 0.08
+# Jul 2026 (post prop-expansion): with the whole priced board eligible, the bar tightens
+# to favorite-side value only — 0.40 → 0.55, and the longshot exception is dropped. A pick
+# now must be more likely than not AND a clear favorite; underdog "value" no longer counts.
+# The 3 recorded picks should read as near-locks, not coin-flips with an edge.
+MIN_MODEL_PROB = 0.55
 STRONG_EDGE = 0.06
 MAX_PICKS = 3
+# The single "top pick" — a standout among the 3. Only the rank-1 pick earns it, and only
+# when it also clears a higher edge AND probability bar (on top of the Analyst 'bet' every
+# recorded pick already has). Some slates have picks but no top pick; that's intended.
+TOP_PICK_MIN_EDGE = 0.10
+TOP_PICK_MIN_PROB = 0.60
 # Hard per-slate budget: every model_picks row ever recorded for the slate counts
 # (active, lineup-bumped, frozen — all of it). A lineup bump does NOT refund a row.
 PICK_BUDGET = 3
 # The Analyst gate (V64) debates the wider candidate set (one per game) before promotion, so a
 # vetoed top pick can be replaced by the next-best and the veto annotates Best Lines.
 CANDIDATE_LIMIT = 6
-EXCLUDED_MARKETS = {"pitcher_k", "pitcher_outs", "hit"}
+# Market families. Every priced market is pick-eligible EXCEPT `hit` (1+ hit): backtests
+# show H≥1 has near-zero skill signal, so model−market gaps there are mostly noise. The
+# family sets drive grading (which stat/table settles the pick) and lineup re-eval.
+GAME_MARKETS = {"moneyline", "run_line", "total"}
+BATTER_PROP_MARKETS = {"hit", "hr", "bb", "tb", "hrr"}
+PITCHER_PROP_MARKETS = {
+    "pitcher_k", "pitcher_outs", "pitcher_walks",
+    "pitcher_hits_allowed", "pitcher_earned_runs",
+}
+EXCLUDED_MARKETS = {"hit"}
 HIT_RATE_VETO_MIN_N = 15  # season sample needed before the traffic light can veto
 # Per-market veto bands: (no OVER below, no UNDER above). Market-specific because
 # clear-rate scales differ wildly — the hit bands applied to HR would veto every
@@ -155,7 +174,7 @@ def _scored_candidates(plays: list[dict], sim: dict | None,
             continue
         if p["evPct"] < MIN_EV:
             continue
-        if p["modelProb"] < MIN_MODEL_PROB and edge < LONGSHOT_EDGE:
+        if p["modelProb"] < MIN_MODEL_PROB:  # favorite-side only — no longshot exception
             continue
         if _sim_totals_veto(p, sim):
             continue
@@ -193,6 +212,14 @@ def build_candidates(plays: list[dict], sim: dict | None, hit_rates: dict | None
                      limit: int = CANDIDATE_LIMIT) -> list[dict]:
     """The wider candidate set (one per game) the Analyst gate debates before promotion."""
     return _take_one_per_game(_scored_candidates(plays, sim, hit_rates), limit)
+
+
+def is_top_pick(rank: int, edge: float, model_prob: float) -> bool:
+    """The standout: only the rank-1 pick, and only when it clears the higher edge AND
+    probability bar. Every recorded pick already carries an Analyst 'bet' (or a gate-off
+    mechanical promote), so this is the extra cut that separates a top pick from the rest.
+    A slate can have picks with no top pick — that is the intended, honest outcome."""
+    return rank == 1 and edge >= TOP_PICK_MIN_EDGE and model_prob >= TOP_PICK_MIN_PROB
 
 
 def _active_slate(api: str) -> date:
@@ -298,8 +325,15 @@ def _current_model_prob(conn, plays: list[dict], pick: dict) -> float | str:
     Tries the already-fetched /api/odds/best plays first (same game/market/side/player
     AND the locked line — a moved line prices a different event), then falls back to
     the projection tables directly (the pick may have dropped off the priced board).
-    Returns OUT when a prop's player is absent from the re-projected lineup (the
-    scratch case) and UNKNOWN when no usable model number exists this tick.
+    Returns OUT when a prop's player is absent from the re-projected lineup/rotation
+    (the scratch case) and UNKNOWN when no usable model number exists this tick.
+
+    The board path covers every market. The DB fallback only re-derives the scalar
+    occurrence markets (hit/hr/bb — a single projection column); histogram/ladder
+    markets (tb, hrr, all pitcher props) return UNKNOWN rather than reproduce the
+    server's histProb/PropBlend math here, so we never bump a lock on a number that
+    could drift from the board. OUT detection still applies to them: a missing
+    projection row is a scratch regardless of market.
     """
     for p in plays:
         if (p["gameId"] == pick["game_id"] and p["market"] == pick["market"]
@@ -309,16 +343,29 @@ def _current_model_prob(conn, plays: list[dict], pick: dict) -> float | str:
             prob = _sane(p.get("modelProb"))
             if prob is not None:
                 return prob
-    if pick["market"] in ("hit", "hr"):
-        col = "p_hr" if pick["market"] == "hr" else "p_hit_1plus"
+    # Scalar-occurrence prop column index per market; absent => histogram/ladder (no cheap scalar).
+    _SCALAR_PROP_IDX = {"hit": 0, "hr": 1, "bb": 2}
+    if pick["market"] in BATTER_PROP_MARKETS:
         row = conn.execute(
-            f"SELECT {col} FROM batter_projections WHERE game_id = %s AND player_id = %s",
+            "SELECT p_hit_1plus, p_hr, p_bb_1plus FROM batter_projections "
+            "WHERE game_id = %s AND player_id = %s",
             (pick["game_id"], pick["player_id"]),
         ).fetchone()
         if row is None:
             return OUT  # not in the (re)projected lineup — the scratch case
-        prob = _sane(float(row[0]) if row[0] is not None else None)
+        idx = _SCALAR_PROP_IDX.get(pick["market"])
+        if idx is None:
+            return UNKNOWN  # tb/hrr histogram — retry via the board, don't recompute here
+        prob = _sane(float(row[idx]) if row[idx] is not None else None)
         return prob if prob is not None else UNKNOWN
+    if pick["market"] in PITCHER_PROP_MARKETS:
+        row = conn.execute(
+            "SELECT 1 FROM pitcher_projections WHERE game_id = %s AND pitcher_id = %s",
+            (pick["game_id"], pick["player_id"]),
+        ).fetchone()
+        if row is None:
+            return OUT  # not the projected starter — scratched/rotation change
+        return UNKNOWN  # ladder/histogram — retry via the board, don't recompute here
     row = conn.execute(
         "SELECT expected_home_runs, expected_away_runs FROM game_projections "
         "WHERE game_id = %s",
@@ -351,7 +398,7 @@ def bar_recheck(model_prob_now: float, locked_fair_prob: float,
     ev = model_prob_now * locked_price_decimal - 1.0
     if edge < MIN_EDGE or ev < MIN_EV:
         return False
-    return model_prob_now >= MIN_MODEL_PROB or edge >= LONGSHOT_EDGE
+    return model_prob_now >= MIN_MODEL_PROB  # favorite-side only — no longshot exception
 
 
 def plan_lineup_reeval(rows: list[dict], now: datetime) -> list[tuple]:
@@ -505,15 +552,17 @@ def _debate_and_store(conn, api: str, slate, cand: dict) -> str | None:
 
 
 def gate_candidates(conn, api: str, slate, candidates: list[dict]) -> list[dict]:
-    """Promote up to MAX_PICKS candidates the Analyst endorses, debating in score order.
-    verdict bet/lean (or None when the gate is off/unavailable) → promoted; 'pass' → demoted
-    (left in pick_verdicts only, surfaced on Best Lines). Cached verdicts are reused."""
+    """Promote up to MAX_PICKS candidates the Analyst fully endorses, debating in score order.
+    Only a 'bet' verdict promotes — 'lean' and 'pass' are BOTH demoted (left in pick_verdicts,
+    surfaced on Best Lines): we record conviction picks only, never a forced three. None (the
+    gate is off / AI unavailable / errored) still promotes mechanically so the board degrades
+    gracefully. Cached verdicts are reused."""
     picks: list[dict] = []
     for cand in candidates:
         verdict = _cached_verdict(conn, slate, cand)
         if verdict is None:
             verdict = _debate_and_store(conn, api, slate, cand)
-        if verdict is None or verdict in ("bet", "lean"):
+        if verdict is None or verdict == "bet":
             picks.append(cand)
         if len(picks) == MAX_PICKS:
             break
@@ -650,9 +699,9 @@ def cmd_record_picks(args: argparse.Namespace) -> None:
                         INSERT INTO model_picks (
                             slate_date, rank, game_id, market, side, line, player_id,
                             player_name, matchup, model_prob, fair_prob, edge, ev_pct,
-                            price_american, book, strong, model_version, recorded_at,
-                            first_shown_at, active, lineup_hash
-                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                            price_american, book, strong, top_pick, model_version,
+                            recorded_at, first_shown_at, active, lineup_hash
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
                                   %s,%s,true,%s)
                         """,
                         (
@@ -660,6 +709,7 @@ def cmd_record_picks(args: argparse.Namespace) -> None:
                             p.get("playerId"), p.get("playerName"), p.get("matchup"),
                             p["modelProb"], p["fairProb"], p["edge"], p["evPct"],
                             p["priceAmerican"], p.get("bestBook"), p["strong"],
+                            is_top_pick(rank, p["edge"], p["modelProb"]),
                             MODEL_VERSION, now, now,
                             current_hashes.get(p["gameId"]) or _lineup_hash(conn, p["gameId"]),
                         ),
@@ -744,7 +794,9 @@ def _book_quote(
     key ("fanduel") but model_picks.book is observed title-cased ("FanDuel"); LOWER() on
     both bridges them so CLV doesn't silently capture nothing on a case mismatch.
     """
-    scope = "prop" if market in ("hit", "hr") else "game"
+    # odds_snapshots stores every player prop as scope='prop' (player_id set) and
+    # game markets as scope='game' (player_id NULL); any non-game market is a prop.
+    scope = "game" if market in GAME_MARKETS else "prop"
     cmp = "<=" if inclusive else "<"
     # player_id must match for props (multiple players share a market/line/book); it is
     # NULL for game markets, where IS NOT DISTINCT FROM matches the NULL snapshot rows.
@@ -813,10 +865,11 @@ def settle_prop(prop_val, scores_present: bool, game_stats_landed: bool) -> str:
 
     Scores only persist once the game is final (mlb_api gates backfill-scores on
     abstractGameState == 'Final'), so scores_present doubles as the finality check.
-    A final game whose player_game_stats have landed but hold no row for our player
-    means he didn't play — VOID, matching how books settle a DNP prop. Locking picks
-    off predicted lineups makes this path routine (a predicted starter can sit), so
-    it must not strand the pick as pending forever.
+    A final game whose stat rows have landed (player_game_stats for batter props,
+    pitcher_starts for pitcher props) but hold no row for our player means he didn't
+    play — VOID, matching how books settle a DNP prop. Locking picks off predicted
+    lineups makes this path routine (a predicted starter can sit / a starter can be
+    scratched), so it must not strand the pick as pending forever.
     """
     if not scores_present:
         return "pending"
@@ -842,9 +895,11 @@ def _grade(market: str, side: str, line: float | None,
         if line is None or margin + line == 0:
             return float(margin), None
         return float(margin), margin + line > 0
-    if market in ("hit", "hr"):
+    if market not in GAME_MARKETS:  # any player prop: value vs. line, push on a tie
         if prop_value is None or line is None:
             return None, None
+        if float(prop_value) == line:
+            return float(prop_value), None  # exact whole-number line (e.g. K 6.0) pushes
         won = prop_value > line if side == "over" else prop_value < line
         return float(prop_value), won
     return None, None
@@ -860,15 +915,32 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
             """
             SELECT mp.id, mp.rank, mp.game_id, mp.market, mp.side, mp.line,
                    mp.player_id, g.home_score, g.away_score, g.detailed_status,
-                   CASE mp.market WHEN 'hit' THEN pgs.hits WHEN 'hr' THEN pgs.home_runs END,
+                   -- batter props settle from player_game_stats, pitcher props from
+                   -- pitcher_starts (which alone carries walks/hits/ER allowed + outs).
+                   CASE mp.market
+                       WHEN 'hit'  THEN pgs.hits
+                       WHEN 'hr'   THEN pgs.home_runs
+                       WHEN 'bb'   THEN pgs.walks
+                       WHEN 'tb'   THEN pgs.total_bases
+                       WHEN 'hrr'  THEN pgs.hits + pgs.runs + pgs.rbi
+                       WHEN 'pitcher_k'            THEN ps.strikeouts
+                       WHEN 'pitcher_outs'         THEN ps.outs
+                       WHEN 'pitcher_walks'        THEN ps.walks
+                       WHEN 'pitcher_hits_allowed' THEN ps.hits_allowed
+                       WHEN 'pitcher_earned_runs'  THEN ps.earned_runs
+                   END,
                    COALESCE(mp.first_shown_at, mp.recorded_at) AS locked_at,
                    mp.book, g.start_time_utc,
                    EXISTS (SELECT 1 FROM player_game_stats x
-                           WHERE x.game_id = mp.game_id) AS game_stats_landed
+                           WHERE x.game_id = mp.game_id) AS batter_stats_landed,
+                   EXISTS (SELECT 1 FROM pitcher_starts x
+                           WHERE x.game_id = mp.game_id) AS pitcher_starts_landed
             FROM model_picks mp
             JOIN games g ON g.id = mp.game_id
             LEFT JOIN player_game_stats pgs
                    ON pgs.player_id = mp.player_id AND pgs.game_id = mp.game_id
+            LEFT JOIN pitcher_starts ps
+                   ON ps.player_id = mp.player_id AND ps.game_id = mp.game_id
             WHERE mp.slate_date = %s AND mp.scored_at IS NULL
             ORDER BY mp.rank NULLS LAST, mp.first_shown_at
             """,
@@ -879,7 +951,8 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
         record: list[str] = []
         for (pick_id, rank, game_id, market, side, line, player_id,
              home, away, detailed_status, prop_val,
-             locked_at, book, start_time, game_stats_landed) in rows:
+             locked_at, book, start_time,
+             batter_stats_landed, pitcher_starts_landed) in rows:
             tag = f"#{rank}" if rank is not None else "(earlier)"
             if detailed_status in DEAD_GAME_STATUSES:
                 # The game won't be played — settle the pick as voided (no win/loss)
@@ -897,9 +970,14 @@ def cmd_score_picks(args: argparse.Namespace) -> None:
             if home is None or away is None:
                 pending += 1
                 continue  # final score not ingested yet (run backfill-scores first)
-            if market in ("hit", "hr") and player_id is not None:
+            if market not in GAME_MARKETS and player_id is not None:
+                # Void a prop whose player never appeared: for pitcher props "landed"
+                # means the game's starts have been ingested (a scratched/relieved
+                # starter has no pitcher_starts row); for batter props, its box lines.
+                landed = (pitcher_starts_landed if market in PITCHER_PROP_MARKETS
+                          else batter_stats_landed)
                 fate = settle_prop(prop_val, scores_present=True,
-                                   game_stats_landed=bool(game_stats_landed))
+                                   game_stats_landed=bool(landed))
                 if fate == "pending":
                     pending += 1
                     continue  # player stats not ingested yet — retried next run
