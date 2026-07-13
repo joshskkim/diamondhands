@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import math
+from unittest import mock
+
 import pytest
 
 from ingester.commands.backtest import (
@@ -9,12 +11,22 @@ from ingester.commands.backtest import (
     baseline_brier,
     calibration_buckets,
     mae_per_game,
+    _load_pitcher_outcomes,
+    _load_run_line_outcomes,
+    _load_nrfi_outcomes,
+    _segment_groups,
+    _vs_close_summary,
+    _apply_runline_cal,
+    _Outcomes,
 )
 from ingester.metrics import (
     average_precision,
+    brier_decomposition,
     crps_count,
     crps_count_mean,
     log_loss,
+    mae,
+    pearson,
     roc_auc,
     sharpness,
     top_k_lift,
@@ -181,6 +193,33 @@ class TestMaePerGame:
 
 
 # ---------------------------------------------------------------------------
+# mae / pearson  (load-bearing for the total-bases count-regression score)
+# ---------------------------------------------------------------------------
+
+class TestMae:
+    def test_empty_returns_nan(self):
+        assert math.isnan(mae([], []))
+
+    def test_paired_absolute_error(self):
+        # |1.5-1|=0.5, |2-3|=1, |4-4|=0 → mean = 1.5/3 = 0.5
+        assert mae([1.5, 2.0, 4.0], [1.0, 3.0, 4.0]) == pytest.approx(0.5)
+
+
+class TestPearson:
+    def test_too_few_points_is_nan(self):
+        assert math.isnan(pearson([1.0], [1.0]))
+
+    def test_zero_variance_is_nan(self):
+        assert math.isnan(pearson([2.0, 2.0, 2.0], [1.0, 3.0, 5.0]))
+
+    def test_perfect_positive_correlation(self):
+        assert pearson([1.0, 2.0, 3.0], [2.0, 4.0, 6.0]) == pytest.approx(1.0)
+
+    def test_perfect_negative_correlation(self):
+        assert pearson([1.0, 2.0, 3.0], [6.0, 4.0, 2.0]) == pytest.approx(-1.0)
+
+
+# ---------------------------------------------------------------------------
 # log_loss
 # ---------------------------------------------------------------------------
 
@@ -249,6 +288,16 @@ class TestCrpsCount:
     def test_spread_distribution(self):
         # pmf [0.5,0.5], actual 0: k0 cdf .5 ind1 → .25; k1 cdf 1 ind1 → 0  => 0.25
         assert crps_count([0.5, 0.5], 0) == pytest.approx(0.25)
+
+    def test_actual_beyond_support_counts_the_tail(self):
+        # Point mass at 2 (pmf len 3), actual 5: without the tail extension this would
+        # truncate to 0; correct CRPS = |5 - 2| = 3 (one unit per missing step 2→5).
+        assert crps_count([0.0, 0.0, 1.0], 5) == pytest.approx(3.0)
+
+    def test_point_mass_equals_absolute_error(self):
+        # A degenerate point forecast's CRPS is exactly |actual - point|, both directions.
+        assert crps_count([0.0] * 16 + [1.0], 20) == pytest.approx(4.0)   # actual above
+        assert crps_count([0.0] * 16 + [1.0], 13) == pytest.approx(3.0)   # actual below
 
     def test_mean_over_forecasts(self):
         f = [([0.0, 0.0, 1.0], 2), ([1.0, 0.0, 0.0], 2)]  # 0.0 and 2.0
@@ -411,3 +460,234 @@ class TestSingleBatterIntegration:
         # expected_hits = 0.7, actual_hits = 1 → error = 0.3
         game_hits = {1: (0.7, 1)}
         assert mae_per_game(game_hits) == pytest.approx(0.3, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# _load_pitcher_outcomes  (join parsing: NULL-skip per market + workload ladders)
+# ---------------------------------------------------------------------------
+
+def _fake_conn(rows):
+    """A conn whose execute(...).fetchall() returns the given canned rows."""
+    conn = mock.Mock()
+    conn.execute.return_value = mock.Mock(fetchall=lambda: rows)
+    return conn
+
+
+# Column order matches the _load_pitcher_outcomes SELECT:
+# e_outs, e_k, e_bb, e_h, e_hr, e_runs, e_bf, a_outs, a_k, a_bb, a_h, a_hr, a_er, a_bf, workload
+class TestLoadPitcherOutcomes:
+    def test_counts_and_lines_populated(self):
+        wl = {"p_k": {"5.5": 0.6}, "p_outs": {"17.5": 0.4}, "p_bb": {"1.5": 0.3},
+              "p_outs_pmf": [0.0] * 15 + [1.0]}  # all mass on 15 outs
+        # actual K=7 (>5.5 → over), outs=15 (<17.5 → under), walks=2 (>1.5 → over)
+        row = (18.0, 6.0, 2.0, 5.0, 1.0, 3.0, 24.0,
+               15, 7, 2, 6, 1, 3, 25, wl)
+        counts, lines, outs_crps = _load_pitcher_outcomes(_fake_conn([row]), run_id=1)
+        assert counts["K"] == {"pred": [6.0], "act": [7.0]}
+        assert counts["outs"] == {"pred": [18.0], "act": [15.0]}
+        assert lines["K>5.5"] == {"p": [0.6], "a": [1]}       # 7 > 5.5
+        assert lines["outs>17.5"] == {"p": [0.4], "a": [0]}   # 15 !> 17.5
+        assert lines["BB>1.5"] == {"p": [0.3], "a": [1]}      # 2 > 1.5
+        # pmf all-mass-on-15, actual outs 15 → CRPS 0.
+        assert len(outs_crps) == 1
+        assert crps_count_mean(outs_crps) == pytest.approx(0.0)
+
+    def test_null_projection_skips_only_that_market(self):
+        # expected_bb is NULL → BB count skipped, others still recorded.
+        row = (18.0, 6.0, None, 5.0, 1.0, 3.0, 24.0,
+               15, 7, 2, 6, 1, 3, 25, None)
+        counts, lines, outs_crps = _load_pitcher_outcomes(_fake_conn([row]), run_id=1)
+        assert counts["BB"] == {"pred": [], "act": []}
+        assert counts["K"] == {"pred": [6.0], "act": [7.0]}
+        # workload NULL → no canonical-line rows and no CRPS forecast.
+        assert lines["K>5.5"] == {"p": [], "a": []}
+        assert outs_crps == []
+
+    def test_missing_line_key_in_workload_is_skipped(self):
+        # workload present but lacks the 5.5 K key and the pmf → line + CRPS stay empty.
+        row = (18.0, 6.0, 2.0, 5.0, 1.0, 3.0, 24.0,
+               15, 7, 2, 6, 1, 3, 25, {"p_k": {"4.5": 0.7}})
+        _counts, lines, outs_crps = _load_pitcher_outcomes(_fake_conn([row]), run_id=1)
+        assert lines["K>5.5"] == {"p": [], "a": []}
+        assert outs_crps == []
+
+
+# ---------------------------------------------------------------------------
+# _load_run_line_outcomes  (margin → home-covers-(-1.5) indicator)
+# ---------------------------------------------------------------------------
+
+class TestLoadRunLineOutcomes:
+    def test_cover_indicator_from_margin(self):
+        # rows: (p_home_cover_1_5, home_score, away_score)
+        rows = [
+            (0.55, 5, 2),  # margin +3 → home covers -1.5 → 1
+            (0.40, 3, 2),  # margin +1 → home does NOT cover -1.5 → 0
+            (0.30, 1, 4),  # home loses → 0
+            (0.60, 4, 2),  # margin +2 → exactly covers -1.5 → 1
+        ]
+        preds, acts = _load_run_line_outcomes(_fake_conn(rows), run_id=1)
+        assert preds == [0.55, 0.40, 0.30, 0.60]
+        assert acts == [1, 0, 0, 1]
+
+    def test_empty(self):
+        preds, acts = _load_run_line_outcomes(_fake_conn([]), run_id=1)
+        assert preds == [] and acts == []
+
+
+# ---------------------------------------------------------------------------
+# _segment_groups  (bucketing / NULL-skip / ordering for --segment-by)
+# ---------------------------------------------------------------------------
+
+def _mk_outcomes(**overrides):
+    """Build an _Outcomes with empty defaults, overriding only the fields under test."""
+    base = dict(
+        p_hit1=[], p_hit2=[], p_hr=[], p_k=[],
+        a_hit1=[], a_hit2=[], a_hr=[], a_k=[],
+        p_tb=[], a_tb=[], tb_crps=[], tb2_p=[], tb2_a=[],
+        game_hits={}, n_projections=0, n_games=0, csv_rows=[],
+        sim_hit1=[], sim_hr=[], sim_k=[], hr_rankers={},
+        hit_season=[], hr_season=[], n_season=[],
+        seg_month=[], seg_home=[], seg_slot=[], seg_hand=[],
+    )
+    base.update(overrides)
+    return _Outcomes(**base)
+
+
+class TestSegmentGroups:
+    def test_confidence_buckets_by_hit1_decile(self):
+        out = _mk_outcomes(p_hit1=[0.05, 0.15, 0.18, 0.95])
+        groups = dict(_segment_groups(out, "confidence"))
+        assert groups["0-10%"] == [0]
+        assert groups["10-20%"] == [1, 2]
+        assert groups["90-100%"] == [3]
+
+    def test_slot_sorts_numerically_and_skips_null(self):
+        out = _mk_outcomes(p_hit1=[0.1, 0.1, 0.1, 0.1],
+                           seg_slot=[9, 1, None, 2])
+        labels = [lbl for lbl, _ in _segment_groups(out, "slot")]
+        assert labels == ["1", "2", "9"]  # numeric order, None dropped
+
+    def test_home_labels(self):
+        out = _mk_outcomes(p_hit1=[0.1, 0.1, 0.1],
+                           seg_home=[True, False, None])
+        groups = dict(_segment_groups(out, "home"))
+        assert groups == {"home": [0], "away": [1]}
+
+    def test_hand_groups(self):
+        out = _mk_outcomes(p_hit1=[0.1, 0.1, 0.1],
+                           seg_hand=["R", "L", "R"])
+        groups = dict(_segment_groups(out, "hand"))
+        assert groups == {"L": [1], "R": [0, 2]}
+
+
+# ---------------------------------------------------------------------------
+# brier_decomposition  (Murphy: brier ≈ reliability − resolution + uncertainty)
+# ---------------------------------------------------------------------------
+
+class TestBrierDecomposition:
+    def test_empty_is_nan(self):
+        d = brier_decomposition([], 0.3)
+        assert all(math.isnan(v) for v in d.values())
+
+    def test_reconstructs_binned_brier(self):
+        # Two bins; reconstruct the binned Brier from calibration buckets and check the
+        # identity against a direct computation using each bin's mean forecast.
+        buckets = [
+            {"n": 100, "predicted_mean": 0.10, "actual_rate": 0.12},
+            {"n": 300, "predicted_mean": 0.40, "actual_rate": 0.35},
+        ]
+        base = (100 * 0.12 + 300 * 0.35) / 400
+        d = brier_decomposition(buckets, base)
+        # binned Brier = Σ nₖ[(fₖ−oₖ)² + oₖ(1−oₖ)] / N   (within-bin Bernoulli variance)
+        binned = sum(
+            b["n"] * ((b["predicted_mean"] - b["actual_rate"]) ** 2
+                      + b["actual_rate"] * (1 - b["actual_rate"]))
+            for b in buckets
+        ) / 400
+        assert d["brier"] == pytest.approx(binned, rel=1e-9)
+        assert d["uncertainty"] == pytest.approx(base * (1 - base))
+        assert d["reliability"] >= 0 and d["resolution"] >= 0
+
+    def test_perfect_calibration_zero_reliability(self):
+        buckets = [
+            {"n": 50, "predicted_mean": 0.2, "actual_rate": 0.2},
+            {"n": 50, "predicted_mean": 0.8, "actual_rate": 0.8},
+        ]
+        d = brier_decomposition(buckets, 0.5)
+        assert d["reliability"] == pytest.approx(0.0)          # pred == actual in every bin
+        # resolution = Σ nₖ(oₖ−base)²/N = (0.09+0.09)/2 = 0.09; uncertainty = 0.25.
+        assert d["resolution"] == pytest.approx(0.09)
+        assert d["uncertainty"] == pytest.approx(0.25)
+
+
+# ---------------------------------------------------------------------------
+# _load_nrfi_outcomes  (first-inning run → YRFI indicator)
+# ---------------------------------------------------------------------------
+
+class TestLoadNrfiOutcomes:
+    def test_yrfi_indicator_from_first_inning(self):
+        # rows: (p_yrfi, home_score_1st, away_score_1st)
+        rows = [
+            (0.55, 1, 0),  # a run scored → YRFI 1
+            (0.40, 0, 0),  # NRFI → 0
+            (0.60, 0, 2),  # away scored → 1
+        ]
+        preds, acts = _load_nrfi_outcomes(_fake_conn(rows), run_id=1)
+        assert preds == [0.55, 0.40, 0.60]
+        assert acts == [1, 0, 1]
+
+    def test_empty(self):
+        preds, acts = _load_nrfi_outcomes(_fake_conn([]), run_id=1)
+        assert preds == [] and acts == []
+
+
+# ---------------------------------------------------------------------------
+# _vs_close_summary  (edge vs closing line: model-beats-market split)
+# ---------------------------------------------------------------------------
+
+class TestVsCloseSummary:
+    def test_empty_is_nan(self):
+        s = _vs_close_summary([], [], [])
+        assert s["n"] == 0 and math.isnan(s["mean_edge"])
+
+    def test_favored_and_dog_split(self):
+        # rows: model, fair, actual. edges: +0.1, -0.1, +0.2, -0.2
+        model = [0.6, 0.4, 0.7, 0.3]
+        fair = [0.5, 0.5, 0.5, 0.5]
+        actual = [1, 0, 1, 0]
+        s = _vs_close_summary(model, fair, actual)
+        assert s["n"] == 4
+        assert s["mean_edge"] == pytest.approx(0.0)
+        assert s["fav_n"] == 2 and s["dog_n"] == 2
+        assert s["fav_realized"] == pytest.approx(1.0)
+        assert s["fav_fair"] == pytest.approx(0.5)
+        assert s["dog_realized"] == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# _apply_runline_cal  (T3: isotonic map applied via 101-pt linear interp)
+# ---------------------------------------------------------------------------
+
+class TestApplyRunlineCal:
+    def _write_map(self, tmp_path, y):
+        import json
+        p = tmp_path / "rl_cal.json"
+        p.write_text(json.dumps({"runline": y}))
+        return str(p)
+
+    def test_identity_map_returns_input(self, tmp_path):
+        y = [i / 100.0 for i in range(101)]  # grid → grid = identity
+        path = self._write_map(tmp_path, y)
+        out = _apply_runline_cal([0.0, 0.25, 0.5, 0.999], path)
+        assert out == pytest.approx([0.0, 0.25, 0.5, 0.999], abs=1e-9)
+
+    def test_constant_map_collapses(self, tmp_path):
+        y = [0.5] * 101  # every prob maps to 0.5
+        path = self._write_map(tmp_path, y)
+        assert _apply_runline_cal([0.1, 0.9], path) == pytest.approx([0.5, 0.5])
+
+    def test_interpolates_between_grid_points(self, tmp_path):
+        y = [i / 100.0 for i in range(101)]
+        path = self._write_map(tmp_path, y)
+        # 0.005 lands between grid[0]=0.0 and grid[1]=0.01 → identity gives 0.005
+        assert _apply_runline_cal([0.005], path)[0] == pytest.approx(0.005, abs=1e-9)

@@ -31,6 +31,7 @@ from ingester.projection.workload import (
     WorkloadParams,
     compute_starter_workload,
     fit_bf_given_outs,
+    outs_pmf_list,
     walk_forward_residuals,
 )
 from ingester.projection.constants import (
@@ -1764,16 +1765,21 @@ def _update_backtest_sim_props(
     for prop, player_id in zip(props, player_ids):
         if player_id is None:
             continue
+        # Normalize the TB histogram (counts over n_sims) to a pmf for distributional grading.
+        tb_total = sum(prop.tb_hist)
+        tb_pmf = [round(c / tb_total, 5) for c in prop.tb_hist] if tb_total else None
         conn.execute(
             """
             UPDATE backtest_projections
-               SET sim_p_hit_1plus = %s, sim_p_hr = %s, sim_p_k_1plus = %s
+               SET sim_p_hit_1plus = %s, sim_p_hr = %s, sim_p_k_1plus = %s,
+                   sim_tb_pmf = %s::jsonb
              WHERE backtest_run_id = %s AND game_id = %s AND player_id = %s
             """,
             (
                 round(prop.p_hit_1plus, 3),
                 round(prop.p_hr, 3),
                 round(prop.p_k_1plus, 3),
+                json.dumps(tb_pmf) if tb_pmf is not None else None,
                 backtest_run_id, game_id, player_id,
             ),
         )
@@ -2044,6 +2050,83 @@ def _project_team_side_backtest(
     )
 
 
+def _upsert_backtest_pitcher_projection(
+    conn: psycopg.Connection,
+    backtest_run_id: int,
+    game_id: int,
+    pitcher_id: int,
+    is_home: bool,
+    line,
+    workload: dict | None,
+) -> None:
+    """Persist a backtested starter's projected line into backtest_pitcher_projections."""
+    conn.execute(
+        """
+        INSERT INTO backtest_pitcher_projections (
+            backtest_run_id, game_id, pitcher_id, is_home, expected_bf, expected_outs,
+            expected_ip, expected_k, expected_h, expected_hr, expected_bb, expected_runs,
+            workload
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+        ON CONFLICT (backtest_run_id, game_id, pitcher_id) DO UPDATE SET
+            is_home       = EXCLUDED.is_home,
+            expected_bf   = EXCLUDED.expected_bf,
+            expected_outs = EXCLUDED.expected_outs,
+            expected_ip   = EXCLUDED.expected_ip,
+            expected_k    = EXCLUDED.expected_k,
+            expected_h    = EXCLUDED.expected_h,
+            expected_hr   = EXCLUDED.expected_hr,
+            expected_bb   = EXCLUDED.expected_bb,
+            expected_runs = EXCLUDED.expected_runs,
+            workload      = EXCLUDED.workload
+        """,
+        (
+            backtest_run_id, game_id, pitcher_id, is_home,
+            round(line.expected_bf, 2), round(line.expected_outs, 2), round(line.expected_ip, 2),
+            round(line.expected_k, 2), round(line.expected_h, 2), round(line.expected_hr, 2),
+            round(line.expected_bb, 2), round(line.expected_runs, 2),
+            json.dumps(workload) if workload is not None else None,
+        ),
+    )
+
+
+def _persist_backtest_pitcher(
+    conn: psycopg.Connection,
+    backtest_run_id: int,
+    game_id: int,
+    season: int,
+    as_of_date: date,
+    pitcher_id: int | None,
+    is_home_pitcher: bool,
+    opposing_starters: list,
+    wl_params: WorkloadParams | None,
+) -> None:
+    """Project + persist the backtested starter's line for post-hoc pitcher-prop grading.
+
+    Leak-free: the line aggregates the opposing lineup's snapshot projections, and the
+    workload model reads only starts STRICTLY BEFORE the as-of snapshot. Mirrors the live
+    _project_team_side opener skip so a reliever-as-opener never gets a phantom starter line.
+    """
+    if pitcher_id is None:
+        return
+    outs_hist, kbf_hist, bbbf_hist = _load_pitcher_start_history(conn, pitcher_id, as_of_date)
+    role = _load_pitcher_season_role(conn, pitcher_id, season)
+    if is_likely_opener(outs_hist, role)[0]:
+        return
+    workload = (
+        compute_starter_workload(outs_hist, kbf_hist, wl_params, bbbf_hist)
+        if wl_params is not None else None
+    )
+    # Attach the full outs pmf (backtest-only extra key) so the harness can score the whole
+    # outs distribution with CRPS, not just the outs>17.5 line. Live workload is untouched.
+    if workload is not None:
+        workload["p_outs_pmf"] = outs_pmf_list(workload["mu_outs"], wl_params)
+    _upsert_backtest_pitcher_projection(
+        conn, backtest_run_id, game_id, pitcher_id, is_home_pitcher,
+        pitcher_line_from_lineup(opposing_starters), workload,
+    )
+
+
 def _project_game_backtest(
     conn: psycopg.Connection,
     game: SlateGame,
@@ -2052,6 +2135,7 @@ def _project_game_backtest(
     backtest_run_id: int,
     summary: ProjectSummary,
     bundle=None,
+    wl_params: WorkloadParams | None = None,
 ) -> bool:
     reason = _game_ready_backtest(game)
     if reason:
@@ -2083,9 +2167,24 @@ def _project_game_backtest(
         summary.skip_reasons.append(f"game {game.game_id}: incomplete team projection")
         return False
 
+    # Pitcher-prop grading: the AWAY starter faces the home lineup (home.starter_projs),
+    # the HOME starter faces the away lineup. Persist each projected line + workload
+    # ladders so the harness can grade K/outs/BB/hits/HR/ER vs pitcher_starts post-hoc.
+    _persist_backtest_pitcher(
+        conn, backtest_run_id, game.game_id, season, as_of_date,
+        pitcher_id=game.away_probable_pitcher_id, is_home_pitcher=False,
+        opposing_starters=home.starter_projs, wl_params=wl_params)
+    _persist_backtest_pitcher(
+        conn, backtest_run_id, game.game_id, season, as_of_date,
+        pitcher_id=game.home_probable_pitcher_id, is_home_pitcher=True,
+        opposing_starters=away.starter_projs, wl_params=wl_params)
+
     # Optional Monte-Carlo per-batter prop capture for sim-blend weight fitting. Leak-free:
     # snapshot-projected lineups, NO bullpen leg (bullpen_skill is a full-season aggregate
     # that would leak the future into a historical game). Same seed scheme as live.
+    # Run-line cover prob comes from the sim's full-game margin distribution, so it's only
+    # available on --sim-props runs (NULL otherwise → run-line grading skips those rows).
+    p_home_cover_1_5: float | None = None
     if _BACKTEST_SIM_PROPS:
         sim = simulate_game(
             home.starter_projs,
@@ -2097,17 +2196,35 @@ def _project_game_backtest(
             conn, backtest_run_id, game.game_id, sim.home_props, home.starter_player_ids)
         _update_backtest_sim_props(
             conn, backtest_run_id, game.game_id, sim.away_props, away.starter_player_ids)
+        p_home_cover_1_5 = round(sim.p_home_cover_1_5, 3)
 
-    # Persist the predicted game total so the harness can score run accuracy vs the
-    # final score (backtest_game_runs). Per-batter rows already went to backtest_projections.
+    # Closed-form first-inning run prob — the SAME number the served NRFI market uses —
+    # so the harness can grade NRFI vs the V53 first-inning actuals. Leak-free (team runs only).
+    p_yrfi, _ = yrfi_probability(home.expected_runs, away.expected_runs)
+
+    # Persist the predicted game total + the home/away split so the harness can score run
+    # accuracy, the run line, AND NRFI vs the final score. Per-batter rows already went to
+    # backtest_projections.
     conn.execute(
         """
-        INSERT INTO backtest_game_runs (backtest_run_id, game_id, expected_total_runs)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (backtest_run_id, game_id)
-            DO UPDATE SET expected_total_runs = EXCLUDED.expected_total_runs
+        INSERT INTO backtest_game_runs (
+            backtest_run_id, game_id, expected_total_runs,
+            home_expected_runs, away_expected_runs, p_home_cover_1_5, p_yrfi
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (backtest_run_id, game_id) DO UPDATE SET
+            expected_total_runs = EXCLUDED.expected_total_runs,
+            home_expected_runs  = EXCLUDED.home_expected_runs,
+            away_expected_runs  = EXCLUDED.away_expected_runs,
+            p_home_cover_1_5    = EXCLUDED.p_home_cover_1_5,
+            p_yrfi              = EXCLUDED.p_yrfi
         """,
-        (backtest_run_id, game.game_id, round(home.expected_runs + away.expected_runs, 2)),
+        (
+            backtest_run_id, game.game_id,
+            round(home.expected_runs + away.expected_runs, 2),
+            round(home.expected_runs, 2), round(away.expected_runs, 2),
+            p_home_cover_1_5, round(p_yrfi, 3),
+        ),
     )
     return True
 
@@ -2141,8 +2258,15 @@ def run_backtest_projections(
         log.info("no games on slate for %s", game_date)
         return summary
 
+    # Workload context for the starter-prop lines, loaded once per game-day and leak-free
+    # (pitcher_starts STRICTLY BEFORE the as-of snapshot). None pre-2023 → NULL workload.
+    wl_params = _load_workload_params(conn, as_of_date)
+
     for game in games:
-        if _project_game_backtest(conn, game, season, as_of_date, backtest_run_id, summary, bundle=bundle):
+        if _project_game_backtest(
+            conn, game, season, as_of_date, backtest_run_id, summary,
+            bundle=bundle, wl_params=wl_params,
+        ):
             summary.games_projected += 1
         else:
             summary.games_skipped += 1

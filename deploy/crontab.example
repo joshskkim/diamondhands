@@ -18,6 +18,11 @@
 # board renders every pitcher pick as a bogus 100% under. Run once after first deploy:
 #   ./deploy/run-ingester.sh backfill-games --start 2023-03-01 --end <today>
 #   ./deploy/run-ingester.sh backfill-pitcher-starts --start 2023-03-01
+# MINIMUM to revive the Marcel priors + xHR: ONE prior season (e.g. 2025) suffices —
+# `backfill-stats --season 2025` (the Marcel input) + the 2025 batted-ball refreshes.
+# 2023/24 are OPTIONAL: they only buy a sturdier 3-year Marcel + the historical snapshot
+# dataset for the blend/ensemble research. Backfill 2025, A/B whether the 1-year prior helps,
+# and expand only if it does (eval-first — don't pay for 3 seasons of ingest until 1 proves out).
 #
 # ONE-TIME point-in-time snapshot backfill (NOT forward-only — computed from existing
 # player_game_stats history, so build it all now to seed the leak-free blend/ensemble
@@ -27,6 +32,14 @@
 #   ./deploy/run-ingester.sh refresh-skill-snapshots --season 2024 --start 2024-03-20 --end 2024-10-01
 #   ./deploy/run-ingester.sh refresh-skill-snapshots --season 2025 --start 2025-03-18 --end 2025-10-01
 #   # refresh-pitch-snapshots likewise, where the pitch Statcast cache covers the range.
+#
+# ONE-TIME seed of the projection priors + learned xHR (AFTER the history backfill above).
+# The daily/weekly crons below keep them fresh, but a fresh box needs the first pass now so
+# the LIVE model's Marcel prior + xHR HR-ranker aren't inert (their tables sit EMPTY until
+# these run — the exact state that made the prior lever a no-op in prod, 2026-07). xHR's
+# daily apply needs the model, so train it here once:
+#   ./deploy/run-ingester.sh refresh-priors --season <yr> && ./deploy/run-ingester.sh refresh-pitcher-priors --season <yr>
+#   ./deploy/run-ingester.sh refresh-batted-ball-events && ./deploy/run-ingester.sh train-xhr && ./deploy/run-ingester.sh refresh-batter-xhr
 CRON_TZ=America/New_York   # no-op on stock Ubuntu cron; see TIMEZONE note above — set the host TZ
 DIAMOND_DIR=/opt/diamond
 # Optional offsite backup target (rclone remote:bucket). When set, backup.sh mirrors each
@@ -73,6 +86,21 @@ DIAMOND_DIR=/opt/diamond
 # daily run — so today's projections use fresh inputs. They aggregate from the Statcast
 # cache (no big re-download), so each is quick.
 30 8 * * *       /opt/diamond/deploy/run-ingester.sh refresh-pitch-aggregations && /opt/diamond/deploy/run-ingester.sh refresh-batted-ball && /opt/diamond/deploy/run-ingester.sh refresh-bat-tracking
+
+# Learned xHR daily refresh (8:35am ET, after the 8:30 batted-ball aggregates). refresh-
+# batted-ball-events banks the raw balls-in-play; refresh-batter-xhr re-scores them with the
+# weekly-trained model (models/xhr_gbm.pkl) into batter_xhr. These were UNSCHEDULED, so
+# batted_ball_events + batter_xhr sat EMPTY and the xHR HR-ranker was inert in prod (2026-07).
+# Needs history + a trained model (seed both via the one-time backfill on a fresh box).
+35 8 * * *       /opt/diamond/deploy/run-ingester.sh refresh-batted-ball-events && /opt/diamond/deploy/run-ingester.sh refresh-batter-xhr
+
+# Marcel projection priors (batter + pitcher true-talent) + weekly xHR model retrain
+# (Mon 8:15am ET, after the 7am skill snapshots, before the 9am daily run). These feed the
+# LIVE model's prior; they were UNSCHEDULED, so batter_projection_prior / pitcher_projection_prior
+# sat EMPTY and the prior lever was a no-op in prod. Multi-season aggregates → weekly is enough.
+# NOTE: refresh-priors/-pitcher-priors default --season to a HARDCODED year, so pass it
+# dynamically (\% escaped for cron) to stay correct across season rollovers.
+15 8 * * 1       /opt/diamond/deploy/run-ingester.sh refresh-priors --season $(date +\%Y) && /opt/diamond/deploy/run-ingester.sh refresh-pitcher-priors --season $(date +\%Y) && /opt/diamond/deploy/run-ingester.sh train-xhr
 
 # Diamond Analyst eval cadence (9:35am ET, after the 9am daily grades the prior slate). Runs
 # the golden suite through the live agent — faithfulness + tool-trajectory — and aggregates the

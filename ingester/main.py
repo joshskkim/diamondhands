@@ -526,6 +526,29 @@ def build_parser() -> argparse.ArgumentParser:
              "score the raw model vs the clear-rate-blended prob (leak-free as-of-date "
              "clear rates). Scoring-time only — projections unchanged",
     )
+    p_backtest.add_argument(
+        "--fit-runline-cal", default=None, dest="fit_runline_cal", metavar="PATH",
+        help="Fit an isotonic calibration map for the run-line cover prob from THIS run's "
+             "(pred, actual) and save it to PATH. Fit on H1, apply on H2 with --runline-cal (T3).",
+    )
+    p_backtest.add_argument(
+        "--runline-cal", default=None, dest="runline_cal", metavar="PATH",
+        help="Apply a saved run-line isotonic map (from --fit-runline-cal) before scoring the "
+             "run line, and report raw vs calibrated Brier/ECE (T3, out-of-sample when fit elsewhere).",
+    )
+    p_backtest.add_argument(
+        "--vs-close", action="store_true", default=False, dest="vs_close",
+        help="Score the model's batter-hit prob against the de-vigged CLOSING line "
+             "(odds_snapshots) — the 'edge vs market' read that bridges backtest and CLV. "
+             "Coverage is limited to games with stored closing odds",
+    )
+    p_backtest.add_argument(
+        "--segment-by", choices=["month", "slot", "home", "hand", "confidence"],
+        default=None, dest="segment_by",
+        help="Break the batter-market scores down by segment to see where the model is "
+             "strong/weak: month, lineup slot, home/away, opposing-pitcher hand, or "
+             "predicted-confidence bucket",
+    )
 
     p_accuracy = sub.add_parser(
         "compute-accuracy",
