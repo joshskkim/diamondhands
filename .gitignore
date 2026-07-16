@@ -12,3 +12,7 @@ __pycache__/
 .claude/*
 !.claude/skills/
 *.sqlite3
+# Database dumps / backups — never commit (may hold real prod data). NB: not *.sql,
+# which would swallow the tracked db/migrations/V*.sql files.
+*.dump
+*.sql.gz
