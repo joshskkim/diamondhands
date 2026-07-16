@@ -196,7 +196,10 @@ HR_BARREL_BLEND_W: float = float(os.environ.get("DIAMOND_HR_BARREL_W", "0.6"))
 # ML live); must clear an OOS (H2) HR-AUC lift vs LHP without hurting vs RHP before
 # raising off zero.
 XHR_W: float = float(os.environ.get("DIAMOND_XHR_W", "0.0"))
-LEAGUE_XHR_PER_BB: float = float(os.environ.get("DIAMOND_LEAGUE_XHR_PER_BB", "0.035"))
+# Mean model xHR/batted-ball (refresh-batter-xhr's league print; ~HR/BB base rate).
+# The scale denominator so a league-average hitter's xhr_scale ≈ 1.0; a wrong value
+# just rebalances xHR vs ISO in the power blend (measured 0.0475 on 2025).
+LEAGUE_XHR_PER_BB: float = float(os.environ.get("DIAMOND_LEAGUE_XHR_PER_BB", "0.0475"))
 
 # Pitcher-side barrel-allowed HR blend (Lever 1) — the symmetric pitcher version of
 # HR_BARREL_BLEND_W. The pitcher.hr multiplier normally rides realized hr_per_pa
