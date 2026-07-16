@@ -127,6 +127,11 @@ jobs:
             else
               echo "IMAGE_TAG=${IMAGE_TAG}" >> .env
             fi
+            # Preflight: catch a DB_PASSWORD that drifted from the live postgres volume BEFORE
+            # `up -d` lets flyway fail auth cryptically and block the app tier (the 2026-07-02
+            # outage). set -e aborts here while the old stack is still serving. No-op on a fresh
+            # box (postgres not yet running).
+            ./deploy/check-db-password.sh
             docker compose -f compose.prod.yml pull
             docker compose -f compose.prod.yml up -d   # flyway migrates before api starts
             # Reclaim disk. A bare `prune -f` only drops *dangling* images, but every deploy
