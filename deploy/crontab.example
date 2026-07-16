@@ -111,3 +111,13 @@ DIAMOND_DIR=/opt/diamond
 
 # Nightly database backup.
 30 3 * * *       /opt/diamond/deploy/backup.sh
+
+# Docker image/build-cache prune (safety net). CD already prunes on every deploy, but a box that
+# fills up BETWEEN deploys has no other cleanup and can hit 100% → Postgres crash-loop (2026-07-04).
+# `until=168h` keeps the last few days for rollback. Runs after the nightly backup.
+15 4 * * *       /opt/diamond/deploy/prune-docker.sh
+
+# Timezone drift check (daily, before the 9am daily run). Host cron fires in local time and ignores
+# CRON_TZ, so a box that drifts off America/New_York silently shifts every evening job ~4-5h. Loud
+# on mismatch (stderr → cron MAILTO, plus a Discord alert if DISCORD_WEBHOOK_URL is set in .env).
+45 8 * * *       /opt/diamond/deploy/check-timezone.sh
