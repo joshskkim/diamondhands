@@ -14,7 +14,7 @@ from ingester.statcast import batted_ball_events, pull_statcast_chunks
 
 _COLS = [
     "season", "player_id", "game_pk", "park", "launch_speed", "launch_angle",
-    "spray_deg", "bb_type", "estimated_woba", "hit_distance", "is_hr",
+    "spray_deg", "bb_type", "estimated_woba", "hit_distance", "is_hr", "p_throws",
 ]
 
 

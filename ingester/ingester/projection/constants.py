@@ -183,6 +183,21 @@ CHASE_SD: float = 0.0568
 # input (leak-free, like the bat-speed anchor); 0 = pure-ISO (pre-v2.9 behaviour).
 HR_BARREL_BLEND_W: float = float(os.environ.get("DIAMOND_HR_BARREL_W", "0.6"))
 
+# xHR HR-power weight (the Phase-2 "wire xHR into the base rate" lever; V82) — the fix
+# for the midseason eval's vs-LHP HR discrimination gap (HR-AUC 0.546 vs LHP / 0.603 vs
+# RHP). base_rates_from_blend blends the HR power term between barrel (weight 1-XHR_W)
+# and the learned xHR signal (weight XHR_W), where the xHR is measured VS THE OPPOSING
+# STARTER'S THROWING HAND (xhr_vs_l / xhr_vs_r) so a hitter's projected power finally
+# differs by matchup. xHR is the learned-model true-power signal (models/xhr_gbm.pkl),
+# a strictly richer, matchup-aware barrel. XHR_W=0 → today's pure-barrel basis
+# (unchanged); =1 → pure xHR; in between → a blend. LEAGUE_XHR_PER_BB is the scale
+# denominator (mean model xHR/BB, matching refresh-batter-xhr's league print).
+# DEFAULT 0.0 — a dormant, eval-gated lever (the "scar rule": never serve unvalidated
+# ML live); must clear an OOS (H2) HR-AUC lift vs LHP without hurting vs RHP before
+# raising off zero.
+XHR_W: float = float(os.environ.get("DIAMOND_XHR_W", "0.0"))
+LEAGUE_XHR_PER_BB: float = float(os.environ.get("DIAMOND_LEAGUE_XHR_PER_BB", "0.035"))
+
 # Pitcher-side barrel-allowed HR blend (Lever 1) — the symmetric pitcher version of
 # HR_BARREL_BLEND_W. The pitcher.hr multiplier normally rides realized hr_per_pa
 # allowed; when a prior-season barrel-allowed rate is present, blend the

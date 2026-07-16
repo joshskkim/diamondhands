@@ -27,6 +27,7 @@ from ingester.projection.constants import (
     LEAGUE_K_PER_PA,
     LEAGUE_PA_PER_GAME,
     LEAGUE_RUNS_PER_GAME_BASE,
+    LEAGUE_XHR_PER_BB,
     LEAGUE_XWOBA,
     LW_DOUBLE,
     LW_HOMERUN,
@@ -39,6 +40,7 @@ from ingester.projection.constants import (
     PROB_DECIMAL_PLACES,
     SHRINKAGE_ALPHA,
     STARTER_PA_SHARE,
+    XHR_W,
 )
 from ingester.projection.park_adj import ParkAdjustments
 from ingester.projection.pitcher_adj import PitcherAdjustments
@@ -59,6 +61,12 @@ class BatterSkillInput:
     # v2.11: season walk rate (regressed in refresh-skills). Season-only — no L30
     # walk column is computed. Defaults to the league rate when absent.
     bb_rate: float = LEAGUE_BB_PER_PA
+    # V82: prior-season xHR-per-BB (learned-model true HR power) — overall + split by
+    # the OPPOSING pitcher's throwing hand. Blended into the HR power term by DIAMOND_XHR_W;
+    # None → the barrel/ISO basis is used (weight-0 / no-xHR behaviour).
+    xhr_per_bb: float | None = None
+    xhr_vs_l: float | None = None
+    xhr_vs_r: float | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +79,10 @@ class SkillBlends:
     barrel_rate: float | None = None
     # v2.11: walk rate, carried through from skill (season-only, no L30 blend).
     bb_rate: float = LEAGUE_BB_PER_PA
+    # V82: hand-split xHR power, carried through from skill (season-constant prior).
+    xhr_per_bb: float | None = None
+    xhr_vs_l: float | None = None
+    xhr_vs_r: float | None = None
 
 
 @dataclass(frozen=True)
@@ -149,24 +161,53 @@ def blend_batter_skills(skill: BatterSkillInput) -> SkillBlends:
         weight_l30=w_l30,
         barrel_rate=skill.barrel_rate,
         bb_rate=skill.bb_rate,
+        xhr_per_bb=skill.xhr_per_bb,
+        xhr_vs_l=skill.xhr_vs_l,
+        xhr_vs_r=skill.xhr_vs_r,
     )
 
 
-def base_rates_from_blend(blends: SkillBlends) -> BaseRates:
-    """Hit rate from xwOBA; HR rate from a barrel+ISO blend (v2.9).
+def _select_hand_xhr(blends: SkillBlends, opp_pitcher_throws: str | None) -> float | None:
+    """The xHR power to use vs the opposing starter's hand (V82).
 
-    ISO alone conflates doubles/triples power with true HR power; barrel rate is the
-    canonical HR predictor (see HR_BARREL_BLEND_W). When a prior-season barrel rate
-    is present, the HR scale blends barrel and ISO; otherwise it falls back to the
-    pre-v2.9 pure-ISO basis.
+    xhr_vs_l / xhr_vs_r are keyed on the pitcher's throwing hand directly (the corpus
+    is grouped by p_throws), so selection is purely by that hand — no switch-hitter
+    effective-side correction. Falls back to the overall xhr_per_bb when the hand is
+    unknown or that hand's split is absent (thin/unseen). None when no xHR at all.
+    """
+    if opp_pitcher_throws == "L" and blends.xhr_vs_l is not None:
+        return blends.xhr_vs_l
+    if opp_pitcher_throws == "R" and blends.xhr_vs_r is not None:
+        return blends.xhr_vs_r
+    return blends.xhr_per_bb
+
+
+def base_rates_from_blend(
+    blends: SkillBlends, opp_pitcher_throws: str | None = None
+) -> BaseRates:
+    """Hit rate from xwOBA; HR rate from a power+ISO blend.
+
+    ISO alone conflates doubles/triples power with true HR power, so the HR scale is
+    ``(1-HR_BARREL_BLEND_W)·iso_scale + HR_BARREL_BLEND_W·power_scale``. The power term
+    is normally barrel rate — the canonical HR predictor. When DIAMOND_XHR_W > 0 and a
+    prior-season xHR is present, the power term is blended toward the learned xHR
+    measured vs the opposing starter's throwing hand — a strictly richer, matchup-aware
+    signal (fixes the vs-LHP HR discrimination gap). XHR_W=0 reproduces the pure-barrel
+    basis exactly; =1 is pure xHR. Absent barrel and xHR, the HR scale is pure ISO.
     """
     hit_scale = blends.xwoba / LEAGUE_XWOBA if LEAGUE_XWOBA > 0 else 1.0
     iso_scale = blends.iso / LEAGUE_ISO if LEAGUE_ISO > 0 else 1.0
+    # Barrel is the default power basis; when absent, the power term is ISO itself
+    # (so the blend below collapses to pure ISO — the pre-v2.9 HR basis).
     if blends.barrel_rate is not None and LEAGUE_BARREL_RATE > 0:
-        barrel_scale = blends.barrel_rate / LEAGUE_BARREL_RATE
-        hr_scale = (1.0 - HR_BARREL_BLEND_W) * iso_scale + HR_BARREL_BLEND_W * barrel_scale
+        power_scale = blends.barrel_rate / LEAGUE_BARREL_RATE
     else:
-        hr_scale = iso_scale
+        power_scale = iso_scale
+    hand_xhr = _select_hand_xhr(blends, opp_pitcher_throws)
+    if XHR_W > 0.0 and hand_xhr is not None and LEAGUE_XHR_PER_BB > 0:
+        xhr_scale = hand_xhr / LEAGUE_XHR_PER_BB
+        power_scale = (1.0 - XHR_W) * power_scale + XHR_W * xhr_scale
+    hr_scale = (1.0 - HR_BARREL_BLEND_W) * iso_scale + HR_BARREL_BLEND_W * power_scale
     return BaseRates(
         hit_per_pa=LEAGUE_HIT_PER_PA * hit_scale,
         hr_per_pa=LEAGUE_HR_PER_PA * hr_scale,
@@ -291,6 +332,7 @@ def project_batter(
     matchup_k_rate: float | None = None,
     matchup_iso: float | None = None,
     defense_hit_mult: float = 1.0,
+    opp_pitcher_throws: str | None = None,
 ) -> BatterProjection:
     """
     Compute full batter projection from blended skill and environment adjustments.
@@ -312,8 +354,12 @@ def project_batter(
             barrel_rate=blends.barrel_rate,
             # Walk rate has no pitch-mix matchup analogue — carry the skill blend.
             bb_rate=blends.bb_rate,
+            # xHR has no pitch-mix analogue either — carry the hand-split prior.
+            xhr_per_bb=blends.xhr_per_bb,
+            xhr_vs_l=blends.xhr_vs_l,
+            xhr_vs_r=blends.xhr_vs_r,
         )
-    base = base_rates_from_blend(blends)
+    base = base_rates_from_blend(blends, opp_pitcher_throws)
     adjusted = adjusted_rates_from_factors(
         base, pitcher, park, adj_weather_hit, adj_weather_hr
     )

@@ -208,6 +208,44 @@ worked and produced trustworthy reads (I2 also fixed a `crps_count` tail-truncat
 
 Known-dead levers stay OFF (chase-K, pitcher-whiff→K, pitcher-barrel→HR, platoon, park-hit-geo).
 
+### Follow-up build (in flight) — hand-split xHR (the LHP-specific HR feature)
+
+The prescribed "LHP-specific HR feature" is built on `feat/hr-xhr-hand-split` (V82): the learned
+xHR signal (`models/xhr_gbm.pkl`) is split by the opposing pitcher's throwing hand — `batted_ball_events`
+gains `p_throws`, `refresh-batter-xhr` emits `xhr_vs_l/r` (each EB-regressed toward the batter's own
+overall xHR), and `base_rates_from_blend` uses the hand-appropriate xHR in place of the flat barrel
+term, weighted by `DIAMOND_XHR_W` (the Phase-2 "wire xHR into the base rate" lever, blend barrel↔xHR;
+the 60% overall power weight `HR_BARREL_BLEND_W` is unchanged). This also finally wires xHR — previously
+inert (V72) — into the base HR rate. Shipped **at `DIAMOND_XHR_W=0`** (pure-barrel, byte-identical); the
+ship decision is the H1-fit / H2-validate A/B with `--segment-by hand` (results land in the RESULTS
+section above once the box run completes). Unit-tested across w∈{0, 0.25, 1}.
+
+**Box runbook (V82 gate — must run on the box: needs `xhr_gbm.pkl`, full seasons + daily snapshots).**
+The A/B requires a fresh Statcast re-extraction because `p_throws` is a new column — the pre-existing
+`batted_ball_events` rows have it NULL, so xHR would fall back to hand-blind. Steps (cd ingester):
+```bash
+# 0. Migrate (V82 adds p_throws + the xhr_vs_l/r columns).
+uv run python main.py migrate            # or the flyway step in your deploy flow
+
+# 1. Re-extract the corpus WITH p_throws, then re-score hand-split xHR (prior seasons for the backtest).
+for S in 2024 2025; do
+  uv run python main.py refresh-batted-ball-events --season $S   # now writes p_throws
+  uv run python main.py refresh-batter-xhr        --season $S    # writes xhr_vs_l/r  (needs models/xhr_gbm.pkl)
+done
+
+# 2. Rebuild the point-in-time snapshots so batter_skill_snapshots carries xhr_per_bb/xhr_vs_l/r.
+uv run python main.py refresh-skill-snapshots --season 2025 --start 2025-04-01 --end 2025-09-30 \
+    --interval weekly --force-rebuild
+
+# 3. A/B: pure-barrel (w=0) vs pure-xHR (w=1), segmented by opposing-pitcher hand.
+DIAMOND_XHR_W=0 uv run python main.py backtest --start 2025-04-01 --end 2025-09-30 --segment-by hand
+DIAMOND_XHR_W=1 uv run python main.py backtest --start 2025-04-01 --end 2025-09-30 --segment-by hand
+# (fit w on H1 = Apr–May, validate on H2 = Jun–Jul before trusting any lift; sweep w∈{0.3,0.5,0.7} if w=1 over-shoots.)
+```
+**Ship rule:** raise `DIAMOND_XHR_W` off 0 only if HR-AUC **vs LHP** rises out-of-sample (H2) toward the
+~0.60 vs-RHP level **without** vs-RHP HR-AUC or overall HR Brier regressing. Otherwise it stays a dormant
+lever at 0 — an honest kill, consistent with the "aggregate xHR ties barrel" finding it descends from.
+
 ## Local smoke test — 2026-06-22 → 07-12 (LOW FIDELITY, not the verdict)
 
 Ran end-to-end on the local dev DB, which holds only ~3 weeks of 2026 games and **3 weekly

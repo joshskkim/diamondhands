@@ -49,6 +49,7 @@ INSERT INTO batter_skill_snapshots (
     player_id, as_of_date, season, plate_appearances,
     xwoba, woba, k_rate, bb_rate, iso, babip,
     barrel_rate, hard_hit_rate,
+    xhr_per_bb, xhr_vs_l, xhr_vs_r,
     xwoba_l30, k_rate_l30, iso_l30, pa_l30,
     computed_at
 )
@@ -56,6 +57,7 @@ VALUES (
     %(player_id)s, %(as_of_date)s, %(season)s, %(plate_appearances)s,
     %(xwoba)s, %(woba)s, %(k_rate)s, %(bb_rate)s, %(iso)s, %(babip)s,
     %(barrel_rate)s, %(hard_hit_rate)s,
+    %(xhr_per_bb)s, %(xhr_vs_l)s, %(xhr_vs_r)s,
     %(xwoba_l30)s, %(k_rate_l30)s, %(iso_l30)s, %(pa_l30)s,
     NOW()
 )
@@ -69,6 +71,9 @@ ON CONFLICT (player_id, as_of_date) DO UPDATE SET
     iso               = EXCLUDED.iso,
     babip             = EXCLUDED.babip,
     barrel_rate       = EXCLUDED.barrel_rate,
+    xhr_per_bb        = EXCLUDED.xhr_per_bb,
+    xhr_vs_l          = EXCLUDED.xhr_vs_l,
+    xhr_vs_r          = EXCLUDED.xhr_vs_r,
     xwoba_l30         = EXCLUDED.xwoba_l30,
     k_rate_l30        = EXCLUDED.k_rate_l30,
     iso_l30           = EXCLUDED.iso_l30,

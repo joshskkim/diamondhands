@@ -9,11 +9,12 @@ from ingester.statcast import batted_ball_events
 
 
 def _row(batter, events="field_out", ev=95.0, la=25.0, hc_x=125.42, hc_y=100.0,
-         bb_type="fly_ball", home_team="NYY", game_pk=1, ew=0.30, dist=350):
+         bb_type="fly_ball", home_team="NYY", game_pk=1, ew=0.30, dist=350, p_throws="R"):
     return {
         "batter": batter, "events": events, "launch_speed": ev, "launch_angle": la,
         "hc_x": hc_x, "hc_y": hc_y, "bb_type": bb_type, "home_team": home_team,
         "game_pk": game_pk, "estimated_woba_using_speedangle": ew, "hit_distance_sc": dist,
+        "p_throws": p_throws,
     }
 
 
@@ -99,3 +100,23 @@ class TestBattedBallEvents:
         rows = batted_ball_events([df1, df2], 2025)
         assert len(rows) == 3
         assert sum(1 for r in rows if r["is_hr"]) == 1
+
+    def test_p_throws_captured_and_filtered_to_lr(self):
+        # p_throws (opposing pitcher hand) feeds the hand-split xHR; only L/R kept.
+        df = pd.DataFrame([
+            _row(1, p_throws="L"),
+            _row(2, p_throws="R"),
+            _row(3, p_throws=None),   # missing hand → null, row still kept
+        ])
+        rows = batted_ball_events([df], 2025)
+        by_id = {r["player_id"]: r for r in rows}
+        assert by_id[1]["p_throws"] == "L"
+        assert by_id[2]["p_throws"] == "R"
+        assert by_id[3]["p_throws"] is None
+
+    def test_p_throws_column_absent_is_null(self):
+        # A chunk missing the column entirely must not crash → p_throws null.
+        row = _row(1)
+        del row["p_throws"]
+        rows = batted_ball_events([pd.DataFrame([row])], 2025)
+        assert rows[0]["p_throws"] is None

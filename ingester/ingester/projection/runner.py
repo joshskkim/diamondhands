@@ -489,7 +489,7 @@ def _load_batter_skill(
     row = conn.execute(
         """
         SELECT xwoba, xwoba_l30, k_rate, k_rate_l30, iso, iso_l30, pa_l30,
-               barrel_rate, bb_rate
+               barrel_rate, bb_rate, xhr_per_bb, xhr_vs_l, xhr_vs_r
         FROM batter_skill
         WHERE player_id = %s
         """,
@@ -510,6 +510,9 @@ def _load_batter_skill(
         pa_l30=int(row[6] or 0),
         barrel_rate=float(row[7]) if row[7] is not None else None,
         bb_rate=float(row[8]) if row[8] is not None else LEAGUE_BB_PER_PA,
+        xhr_per_bb=float(row[9]) if row[9] is not None else None,
+        xhr_vs_l=float(row[10]) if row[10] is not None else None,
+        xhr_vs_r=float(row[11]) if row[11] is not None else None,
     )
 
 
@@ -1104,6 +1107,7 @@ def _project_team_side(
             matchup_k_rate=matchup.k_rate,
             matchup_iso=matchup.iso,
             defense_hit_mult=defense_mult,
+            opp_pitcher_throws=pitcher_throws,
         )
         if bundle is not None:
             proj = _xgb_apply(
@@ -1635,7 +1639,8 @@ def _load_batter_skill_snapshot(
     """Read the most recent batter_skill_snapshot with as_of_date <= as_of_date."""
     row = conn.execute(
         """
-        SELECT xwoba, xwoba_l30, k_rate, k_rate_l30, iso, iso_l30, pa_l30, barrel_rate
+        SELECT xwoba, xwoba_l30, k_rate, k_rate_l30, iso, iso_l30, pa_l30, barrel_rate,
+               xhr_per_bb, xhr_vs_l, xhr_vs_r
         FROM batter_skill_snapshots
         WHERE player_id = %s AND as_of_date <= %s
         ORDER BY as_of_date DESC
@@ -1657,6 +1662,9 @@ def _load_batter_skill_snapshot(
         iso_l30=float(row[5]) if row[5] is not None else iso,
         pa_l30=int(row[6] or 0),
         barrel_rate=float(row[7]) if row[7] is not None else None,
+        xhr_per_bb=float(row[8]) if row[8] is not None else None,
+        xhr_vs_l=float(row[9]) if row[9] is not None else None,
+        xhr_vs_r=float(row[10]) if row[10] is not None else None,
     )
 
 
@@ -2009,6 +2017,7 @@ def _project_team_side_backtest(
             matchup_k_rate=matchup.k_rate,
             matchup_iso=matchup.iso,
             defense_hit_mult=defense_mult,
+            opp_pitcher_throws=pitcher_throws,
         )
         if bundle is not None:
             # Replace the four market probabilities (blended with mechanistic when

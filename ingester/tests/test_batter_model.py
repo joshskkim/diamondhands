@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import unittest
+from unittest import mock
 
 from scipy.stats import binom
 
@@ -345,6 +346,87 @@ class TestExpectedTeamRuns(unittest.TestCase):
         starter_only = expected_team_runs(starters)
         blended = expected_team_runs(starters, weak_pen)
         self.assertLess(blended, starter_only)
+
+
+class TestXhrHandSplit(unittest.TestCase):
+    """xHR HR-power weight lever (DIAMOND_XHR_W) — blends barrel↔hand-split xHR."""
+
+    KW = dict(xwoba=0.32, k_rate=0.22, iso=LEAGUE_ISO, weight_l30=0.0)
+
+    def _blends(self, **extra) -> SkillBlends:
+        return SkillBlends(**self.KW, **extra)
+
+    def test_w_zero_ignores_xhr_and_uses_barrel(self) -> None:
+        """Default (XHR_W=0): xHR present but the barrel path is unchanged."""
+        from ingester.projection.constants import HR_BARREL_BLEND_W, LEAGUE_BARREL_RATE
+        blends = self._blends(barrel_rate=0.13, xhr_per_bb=0.09,
+                              xhr_vs_l=0.09, xhr_vs_r=0.05)
+        barrel_scale = (1 - HR_BARREL_BLEND_W) * 1.0 + HR_BARREL_BLEND_W * (0.13 / LEAGUE_BARREL_RATE)
+        # Both hands identical (xHR ignored) and equal to the barrel-only result.
+        for hand in ("L", "R", None):
+            base = base_rates_from_blend(blends, hand)
+            self.assertAlmostEqual(base.hr_per_pa, LEAGUE_HR_PER_PA * barrel_scale)
+
+    def test_w_one_differs_by_opposing_hand(self) -> None:
+        from ingester.projection.constants import HR_BARREL_BLEND_W
+        from ingester.projection.constants import LEAGUE_XHR_PER_BB as LG
+        blends = self._blends(barrel_rate=0.13, xhr_per_bb=0.07,
+                              xhr_vs_l=0.10, xhr_vs_r=0.04)
+        with mock.patch("ingester.projection.batter_model.XHR_W", 1.0):
+            hr_l = base_rates_from_blend(blends, "L").hr_per_pa
+            hr_r = base_rates_from_blend(blends, "R").hr_per_pa
+        exp_l = LEAGUE_HR_PER_PA * ((1 - HR_BARREL_BLEND_W) + HR_BARREL_BLEND_W * (0.10 / LG))
+        exp_r = LEAGUE_HR_PER_PA * ((1 - HR_BARREL_BLEND_W) + HR_BARREL_BLEND_W * (0.04 / LG))
+        self.assertAlmostEqual(hr_l, exp_l)
+        self.assertAlmostEqual(hr_r, exp_r)
+        self.assertGreater(hr_l, hr_r)  # more power vs LHP → higher HR vs a lefty
+
+    def test_partial_weight_blends_barrel_and_xhr(self) -> None:
+        """0 < XHR_W < 1 sits strictly between the pure-barrel and pure-xHR power."""
+        from ingester.projection.constants import HR_BARREL_BLEND_W, LEAGUE_BARREL_RATE
+        from ingester.projection.constants import LEAGUE_XHR_PER_BB as LG
+        blends = self._blends(barrel_rate=0.13, xhr_per_bb=0.05, xhr_vs_l=0.05, xhr_vs_r=0.05)
+        barrel_scale = 0.13 / LEAGUE_BARREL_RATE
+        xhr_scale = 0.05 / LG
+        power = 0.75 * barrel_scale + 0.25 * xhr_scale
+        exp = LEAGUE_HR_PER_PA * ((1 - HR_BARREL_BLEND_W) + HR_BARREL_BLEND_W * power)
+        with mock.patch("ingester.projection.batter_model.XHR_W", 0.25):
+            hr = base_rates_from_blend(blends, "L").hr_per_pa
+        self.assertAlmostEqual(hr, exp)
+
+    def test_on_falls_back_to_barrel_when_no_xhr(self) -> None:
+        from ingester.projection.constants import HR_BARREL_BLEND_W, LEAGUE_BARREL_RATE
+        blends = self._blends(barrel_rate=0.13)  # xHR all None
+        with mock.patch("ingester.projection.batter_model.XHR_W", 1.0):
+            hr = base_rates_from_blend(blends, "L").hr_per_pa
+        barrel_scale = (1 - HR_BARREL_BLEND_W) * 1.0 + HR_BARREL_BLEND_W * (0.13 / LEAGUE_BARREL_RATE)
+        self.assertAlmostEqual(hr, LEAGUE_HR_PER_PA * barrel_scale)
+
+    def test_on_hand_split_absent_uses_overall_xhr(self) -> None:
+        """Facing an LHP with no vs-L split → the overall xHR is used, not barrel."""
+        from ingester.projection.constants import HR_BARREL_BLEND_W
+        from ingester.projection.constants import LEAGUE_XHR_PER_BB as LG
+        blends = self._blends(barrel_rate=0.13, xhr_per_bb=0.06, xhr_vs_r=0.04)  # vs_l None
+        with mock.patch("ingester.projection.batter_model.XHR_W", 1.0):
+            hr = base_rates_from_blend(blends, "L").hr_per_pa
+        exp = LEAGUE_HR_PER_PA * ((1 - HR_BARREL_BLEND_W) + HR_BARREL_BLEND_W * (0.06 / LG))
+        self.assertAlmostEqual(hr, exp)
+
+    def test_project_batter_threads_opposing_hand(self) -> None:
+        """The opp_pitcher_throws arg reaches the HR scale end to end."""
+        skill = BatterSkillInput(
+            xwoba=0.32, xwoba_l30=0.32, k_rate=0.22, k_rate_l30=0.22,
+            iso=LEAGUE_ISO, iso_l30=LEAGUE_ISO, pa_l30=0,
+            barrel_rate=0.10, xhr_per_bb=0.07, xhr_vs_l=0.11, xhr_vs_r=0.03,
+        )
+        neutral_pitch = PitcherAdjustments(hit=1.0, hr=1.0, k=1.0, bb=1.0)
+        neutral_park = ParkAdjustments(hit=1.0, hr=1.0)
+        with mock.patch("ingester.projection.batter_model.XHR_W", 1.0):
+            vs_l = project_batter(skill, neutral_pitch, neutral_park, 1.0, 1.0,
+                                  opp_pitcher_throws="L")
+            vs_r = project_batter(skill, neutral_pitch, neutral_park, 1.0, 1.0,
+                                  opp_pitcher_throws="R")
+        self.assertGreater(vs_l.probabilities.p_hr, vs_r.probabilities.p_hr)
 
 
 if __name__ == "__main__":
