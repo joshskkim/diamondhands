@@ -220,31 +220,51 @@ inert (V72) — into the base HR rate. Shipped **at `DIAMOND_XHR_W=0`** (pure-ba
 ship decision is the H1-fit / H2-validate A/B with `--segment-by hand` (results land in the RESULTS
 section above once the box run completes). Unit-tested across w∈{0, 0.25, 1}.
 
-**Box runbook (V82 gate — must run on the box: needs `xhr_gbm.pkl`, full seasons + daily snapshots).**
-The A/B requires a fresh Statcast re-extraction because `p_throws` is a new column — the pre-existing
-`batted_ball_events` rows have it NULL, so xHR would fall back to hand-blind. Steps (cd ingester):
+**Box runbook (V82 gate — as actually run 2026-07-16).** The eval window is the **2026** season (the box's
+weekly snapshots), whose prior-season xHR input is **2025** — so only 2025 needs re-extracting. A fresh
+Statcast pull is required because `p_throws` is a new column (existing rows have it NULL → hand-blind
+fallback). The `xhr-eval` `IMAGE_TAG` isolates this from the deployed image/cron. Steps (on the box):
 ```bash
-# 0. Migrate (V82 adds p_throws + the xhr_vs_l/r columns).
-uv run python main.py migrate            # or the flyway step in your deploy flow
+git checkout feat/hr-xhr-hand-split
+docker compose -f compose.prod.yml run --rm flyway                       # apply V82
+IMAGE_TAG=xhr-eval docker compose -f compose.prod.yml build ingester      # image with the new code
+ING="IMAGE_TAG=xhr-eval docker compose -f compose.prod.yml run --rm"
 
-# 1. Re-extract the corpus WITH p_throws, then re-score hand-split xHR (prior seasons for the backtest).
-for S in 2024 2025; do
-  uv run python main.py refresh-batted-ball-events --season $S   # now writes p_throws
-  uv run python main.py refresh-batter-xhr        --season $S    # writes xhr_vs_l/r  (needs models/xhr_gbm.pkl)
-done
+# 1. Re-extract 2025 WITH p_throws → train the GBM → score hand-split xHR.
+$ING ingester refresh-batted-ball-events --season 2025    # writes p_throws (~131k rows)
+$ING ingester train-xhr                                   # trains on 2025 → models/xhr_gbm.pkl
+$ING ingester refresh-batter-xhr --season 2025            # writes xhr_vs_l/r  (League xHR/BB → LEAGUE_XHR_PER_BB)
 
-# 2. Rebuild the point-in-time snapshots so batter_skill_snapshots carries xhr_per_bb/xhr_vs_l/r.
-uv run python main.py refresh-skill-snapshots --season 2025 --start 2025-04-01 --end 2025-09-30 \
-    --interval weekly --force-rebuild
+# 2. Fill the xHR columns on the existing 2026 snapshots (prior-season-constant; no --force-rebuild).
+docker compose -f compose.prod.yml exec -T postgres psql -U diamond -d diamond -c \
+  "UPDATE batter_skill_snapshots s SET xhr_per_bb=x.xhr_per_bb, xhr_vs_l=x.xhr_vs_l, xhr_vs_r=x.xhr_vs_r \
+   FROM batter_xhr x WHERE x.season=2025 AND s.season=2026 AND s.player_id=x.player_id"
 
 # 3. A/B: pure-barrel (w=0) vs pure-xHR (w=1), segmented by opposing-pitcher hand.
-DIAMOND_XHR_W=0 uv run python main.py backtest --start 2025-04-01 --end 2025-09-30 --segment-by hand
-DIAMOND_XHR_W=1 uv run python main.py backtest --start 2025-04-01 --end 2025-09-30 --segment-by hand
-# (fit w on H1 = Apr–May, validate on H2 = Jun–Jul before trusting any lift; sweep w∈{0.3,0.5,0.7} if w=1 over-shoots.)
+$ING -e DIAMOND_XHR_W=0 ingester backtest --start 2026-04-01 --end 2026-07-12 --segment-by hand
+$ING -e DIAMOND_XHR_W=1 ingester backtest --start 2026-04-01 --end 2026-07-12 --segment-by hand
+# Firm-up TODO: rerun H1 (Apr–May) fit / H2 (Jun–Jul) validate + sweep w∈{0.3,0.5,0.7}.  Restore: git checkout main.
 ```
 **Ship rule:** raise `DIAMOND_XHR_W` off 0 only if HR-AUC **vs LHP** rises out-of-sample (H2) toward the
 ~0.60 vs-RHP level **without** vs-RHP HR-AUC or overall HR Brier regressing. Otherwise it stays a dormant
 lever at 0 — an honest kill, consistent with the "aggregate xHR ties barrel" finding it descends from.
+
+**A/B result (2026-07-16, box run on the full 2026-04-01→07-12 window, `--segment-by hand`).** First-ever
+xHR pipeline run on the box (train-xhr AUC 0.9915 / ECE 0.0037 OOT on 2026; 492 batters scored;
+League xHR/BB=0.0475). `w=0` reproduced the eval gap exactly (L 0.546 / R 0.603).
+
+| segment | HR-AUC w=0 | HR-AUC w=1 | HR-Brier w=0 | HR-Brier w=1 |
+|---|---|---|---|---|
+| **L (vs LHP)** | 0.546 | **0.559** (+0.013) | 0.1045 | **0.1038** |
+| R (vs RHP) | 0.603 | 0.602 (flat) | 0.1117 | 0.1119 |
+| overall HR | AUC 0.587 / LL 0.37479 | AUC 0.590 / LL 0.37450 | — | — |
+
+**Verdict: promising candidate, NOT shipped.** The lift lands in exactly the predicted shape — vs-LHP HR
+discrimination up, vs-RHP flat, HR Brier neutral-to-better — so it clears the "up vs L, no harm vs R" bar.
+But **+0.013 AUC on n=1,752 L-rows is ~within one standard error** (not conclusive), and this is the full
+window, not a strict H1/H2 split. Stays **OFF (`XHR_W=0`)**. To firm up before ever raising: rerun as
+H1-fit / H2-validate + sweep `w∈{0.3,0.5,0.7}`, or let more 2026 data accrue and re-run. Wiring, migration
+(V82), model, and data are all in place on the box, so the follow-up is just the two backtests.
 
 ## Local smoke test — 2026-06-22 → 07-12 (LOW FIDELITY, not the verdict)
 
