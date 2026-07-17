@@ -98,6 +98,36 @@ def _load_barrel_rates(conn: psycopg.Connection, prior_season: int) -> dict[int,
     return out
 
 
+def _load_xhr(
+    conn: psycopg.Connection, prior_season: int
+) -> dict[int, tuple[float | None, float | None, float | None]]:
+    """Prior-season xHR-per-BB per batter — overall + hand-split (vs LHP / vs RHP).
+
+    The learned-model true-power signal that base_rates_from_blend blends toward the
+    barrel term by the DIAMOND_XHR_W weight. Already EB-regressed in
+    refresh-batter-xhr (each hand toward the batter's own overall rate), so it's
+    passed through as-is. Strictly prior-season, so leak-free for both the backtest
+    (2024 → 2025) and live (2025 → 2026). Empty until batter_xhr is populated for the
+    prior season → callers leave xHR NULL and the model falls back to the barrel/ISO
+    basis. Returns {player_id: (xhr_per_bb, xhr_vs_l, xhr_vs_r)}.
+    """
+    rows = conn.execute(
+        "SELECT player_id, xhr_per_bb, xhr_vs_l, xhr_vs_r "
+        "FROM batter_xhr WHERE season = %s",
+        (prior_season,),
+    ).fetchall()
+    out: dict[int, tuple[float | None, float | None, float | None]] = {}
+    for pid, xhr, xhr_l, xhr_r in rows:
+        if xhr is None:
+            continue
+        out[int(pid)] = (
+            float(xhr),
+            float(xhr_l) if xhr_l is not None else None,
+            float(xhr_r) if xhr_r is not None else None,
+        )
+    return out
+
+
 def barrel_coverage_warning(
     season: int, n_batters: int, n_with_barrel: int
 ) -> str | None:
@@ -308,6 +338,7 @@ def compute_batter_skill_rows(
     _barrel_warn = barrel_coverage_warning(season, len(season_rows), len(barrel_rates))
     if _barrel_warn:
         print(_barrel_warn)
+    xhr_rates = _load_xhr(conn, season - 1)  # prior-season hand-split HR-power signal
 
     rows: list[dict] = []
     for r in season_rows:
@@ -363,6 +394,9 @@ def compute_batter_skill_rows(
             "iso": iso,
             "babip": babip,
             "barrel_rate": barrel_rates.get(pid),
+            "xhr_per_bb": (xhr_rates.get(pid) or (None, None, None))[0],
+            "xhr_vs_l": (xhr_rates.get(pid) or (None, None, None))[1],
+            "xhr_vs_r": (xhr_rates.get(pid) or (None, None, None))[2],
             "hard_hit_rate": None,
             "xwoba_l30": xwoba_l30,
             "k_rate_l30": k_rate_l30,
@@ -505,6 +539,7 @@ def _aggregate_batter_skill(
                 INSERT INTO batter_skill (
                     player_id, season, plate_appearances,
                     xwoba, woba, k_rate, bb_rate, iso, babip, barrel_rate,
+                    xhr_per_bb, xhr_vs_l, xhr_vs_r,
                     xwoba_l30, k_rate_l30, iso_l30, pa_l30,
                     updated_at
                 )
@@ -512,6 +547,7 @@ def _aggregate_batter_skill(
                     %(player_id)s, %(season)s, %(plate_appearances)s,
                     %(xwoba)s, %(woba)s, %(k_rate)s, %(bb_rate)s,
                     %(iso)s, %(babip)s, %(barrel_rate)s,
+                    %(xhr_per_bb)s, %(xhr_vs_l)s, %(xhr_vs_r)s,
                     %(xwoba_l30)s, %(k_rate_l30)s, %(iso_l30)s, %(pa_l30)s,
                     NOW()
                 )
@@ -525,6 +561,9 @@ def _aggregate_batter_skill(
                         iso               = EXCLUDED.iso,
                         babip             = EXCLUDED.babip,
                         barrel_rate       = EXCLUDED.barrel_rate,
+                        xhr_per_bb        = EXCLUDED.xhr_per_bb,
+                        xhr_vs_l          = EXCLUDED.xhr_vs_l,
+                        xhr_vs_r          = EXCLUDED.xhr_vs_r,
                         xwoba_l30         = EXCLUDED.xwoba_l30,
                         k_rate_l30        = EXCLUDED.k_rate_l30,
                         iso_l30           = EXCLUDED.iso_l30,

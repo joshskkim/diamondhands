@@ -735,7 +735,7 @@ def batted_ball_events(chunks: list[pd.DataFrame], season: int) -> list[dict]:
     """
     cols = ["batter", "launch_speed", "launch_angle", "hc_x", "hc_y", "bb_type",
             "estimated_woba_using_speedangle", "hit_distance_sc", "events",
-            "home_team", "game_pk"]
+            "home_team", "game_pk", "p_throws"]
     out: list[dict] = []
     for df in chunks:
         if df is None or df.empty:
@@ -769,6 +769,8 @@ def batted_ball_events(chunks: list[pd.DataFrame], season: int) -> list[dict]:
             "estimated_woba": _to_float64(sub["estimated_woba_using_speedangle"]).round(4),
             "hit_distance": pd.to_numeric(sub["hit_distance_sc"], errors="coerce").round().astype("Int64"),
             "is_hr": sub["events"].astype("string").eq("home_run").fillna(False),
+            # Opposing pitcher's throwing hand, for hand-split xHR (L/R; NULL if absent).
+            "p_throws": sub["p_throws"].astype("string").where(sub["p_throws"].isin(["L", "R"])),
         })
         # NaN / pandas-NA → None so the rows are directly insertable.
         res = res.astype(object).where(pd.notna(res), None)
